@@ -1,0 +1,39 @@
+# Core technology tags
+- python
+- mongodb
+- orm
+- async
+- pydantic
+- motor
+- asyncio
+- type-hints
+
+# Feature tags
+- database
+- nosql
+- caching
+- validation
+- security
+- testing
+- cli
+- documentation
+
+# Development tags
+- open-source
+- hacktoberfest
+- good-first-issue
+- help-wanted
+- prototype
+- work-in-progress
+
+# Integration tags
+- redis
+- docker
+- devcontainer
+- vscode
+
+# Community tags
+- beginner-friendly
+- community-driven
+- looking-for-contributors
+- sponsor-needed
