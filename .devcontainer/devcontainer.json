@@ -1,0 +1,40 @@
+{
+    "name": "EarnORM Development",
+    "dockerComposeFile": "docker-compose.yml",
+    "service": "app",
+    "workspaceFolder": "/workspace",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "ms-python.black-formatter",
+                "ms-python.isort",
+                "ms-python.flake8",
+                "ms-azuretools.vscode-docker",
+                "editorconfig.editorconfig",
+                "yzhang.markdown-all-in-one",
+                "davidanson.vscode-markdownlint",
+                "eamodio.gitlens",
+                "github.vscode-pull-request-github"
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": "/usr/local/bin/python",
+                "python.analysis.typeCheckingMode": "strict",
+                "editor.formatOnSave": true,
+                "editor.codeActionsOnSave": {
+                    "source.organizeImports": true
+                },
+                "[python]": {
+                    "editor.defaultFormatter": "ms-python.black-formatter"
+                }
+            }
+        }
+    },
+    "forwardPorts": [
+        27017,
+        6379
+    ],
+    "postCreateCommand": "poetry install && pre-commit install",
+    "remoteUser": "root"
+}

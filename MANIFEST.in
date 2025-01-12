@@ -1,0 +1,32 @@
+# Include license and readme
+include LICENSE
+include README.md
+include CONTRIBUTING.md
+
+# Include configuration files
+include pyproject.toml
+include setup.cfg
+include .editorconfig
+
+# Include documentation
+recursive-include docs *
+recursive-exclude docs/_build *
+
+# Include examples
+recursive-include examples *
+
+# Include tests
+recursive-include tests *
+
+# Exclude development files
+recursive-exclude * __pycache__
+recursive-exclude * *.py[cod]
+recursive-exclude * *.so
+recursive-exclude * .DS_Store
+recursive-exclude * .env
+recursive-exclude * .venv
+recursive-exclude * *.egg-info
+recursive-exclude * .git*
+recursive-exclude * .pytest_cache
+recursive-exclude * .coverage
+recursive-exclude * htmlcov 
