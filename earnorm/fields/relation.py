@@ -1,214 +1,692 @@
 """Relation field types for EarnORM."""
 
-from typing import Any, List, Optional, Type, Union
+from typing import Any, Dict, Generic, List, Optional, Self, Type, TypeVar, Union, cast
 
 from bson import ObjectId
 
-from ..base.model import BaseModel
-from .base import Field
+from earnorm.base.model import BaseModel
+from earnorm.fields.base import Field
+
+M = TypeVar("M", bound="BaseModel")
+T = TypeVar("T")
 
 
-class Many2one(Field):
-    """Many-to-one relation field."""
+class BaseRelationField(Field[M], Generic[M]):
+    """Base class for relation fields."""
 
     def __init__(
         self,
-        *,
-        string: str,
-        relation_model: Union[str, Type[BaseModel]],
+        referenced_model: Type[M],
         required: bool = False,
-        ondelete: str = "set null",
+        unique: bool = False,
+        default: Optional[Union[M, List[M]]] = None,
         **kwargs: Any,
     ) -> None:
-        """Initialize many-to-one field.
+        """Initialize relation field.
 
         Args:
-            string: Field label
-            relation_model: Related model class or name
-            required: Whether relation is required
-            ondelete: What to do when related record is deleted
-            **kwargs: Additional field options
+            referenced_model: The model class that this field references
+            required: Whether this field is required
+            unique: Whether this field should be unique
+            default: Default value for this field
+            **kwargs: Additional arguments passed to Field constructor
         """
-        self.relation_model = relation_model
-        self.ondelete = ondelete
-        super().__init__(string=string, required=required, **kwargs)
+        self.referenced_model = referenced_model
+        super().__init__(required=required, unique=unique, default=default, **kwargs)
 
-    def validate(self, value: Any) -> Optional[str]:
-        """Validate relation value.
+    def __get__(
+        self, instance: Optional[BaseModel], owner: Type[BaseModel]
+    ) -> Union[Self, Optional[M]]:
+        """Get field value."""
+        if instance is None:
+            return self
+        return instance.data.get(self.name)
+
+    def __set__(
+        self,
+        instance: Optional[BaseModel],
+        value: Optional[Union[str, ObjectId, Dict[str, Any], M]],
+    ) -> None:
+        """Set field value."""
+        if instance is None:
+            return
+        instance.data[self.name] = value
+
+    def __delete__(self, instance: Optional[BaseModel]) -> None:
+        """Delete field value."""
+        if instance is None:
+            return
+        instance.data.pop(self.name, None)
+
+    async def async_convert(
+        self, value: Optional[Union[str, ObjectId, Dict[str, Any], M]]
+    ) -> Optional[M]:
+        """Convert value to model instance asynchronously.
 
         Args:
-            value: Value to validate
+            value: Value to convert
 
         Returns:
-            Optional[str]: Validated relation ID
-
-        Raises:
-            ValueError: If validation fails
+            Converted value as model instance or None
         """
         if value is None:
-            if self.required:
-                raise ValueError(f"{self.string} is required")
             return None
+        if isinstance(value, self.referenced_model):
+            return value
+        if isinstance(value, (str, ObjectId)):
+            record = await self.referenced_model.find_one({"_id": ObjectId(str(value))})
+            if record:
+                return cast(M, record)
+            return None
+        if isinstance(value, dict):
+            return self.referenced_model(**value)
+        raise ValueError(f"Cannot convert {value} to {self.referenced_model}")
 
-        if isinstance(value, str):
-            try:
-                ObjectId(value)
-                return value
-            except Exception:
-                raise ValueError(f"{self.string} must be a valid ObjectId")
 
+class ReferenceField(Field[M], Generic[M]):
+    """Reference field for model relations."""
+
+    def __init__(
+        self,
+        referenced_model: Type[M],
+        *,
+        required: bool = False,
+        default: Any = None,
+        index: bool = False,
+        unique: bool = False,
+        lazy: bool = False,
+    ) -> None:
+        """Initialize field."""
+        super().__init__(
+            required=required,
+            default=default,
+            index=index,
+            unique=unique,
+        )
+        self._referenced_model: Type[M] = referenced_model
+        self.lazy = lazy
+
+    @property
+    def referenced_model(self) -> Type[M]:
+        """Get referenced model."""
+        if not self._referenced_model:
+            raise ValueError("Referenced model not set")
+        return self._referenced_model
+
+    @property
+    def collection(self) -> str:
+        """Get collection name."""
+        return getattr(self.referenced_model, "collection", "")
+
+    def convert(self, value: Any) -> Optional[M]:
+        """Convert value to model instance."""
+        if value is None:
+            return None
+        if isinstance(value, ObjectId):
+            if self.lazy:
+                return self.referenced_model(
+                    _collection=self.collection,
+                    id=value,
+                    _abstract=False,
+                    _indexes=[],
+                )
+            return None  # Async operation not supported in sync convert
+        if isinstance(value, self.referenced_model):
+            return value
+        if isinstance(value, dict):
+            return self.referenced_model(
+                _collection=self.collection,
+                _abstract=False,
+                _indexes=[],
+                **value,
+            )
+        return self.referenced_model(
+            _collection=self.collection,
+            id=ObjectId(str(value)),
+            _abstract=False,
+            _indexes=[],
+        )
+
+    async def async_convert(
+        self, value: Optional[Union[str, ObjectId, Dict[str, Any], M]]
+    ) -> Optional[M]:
+        """Convert value to model instance asynchronously.
+
+        Args:
+            value: Value to convert
+
+        Returns:
+            Converted value as model instance or None
+        """
+        if value is None:
+            return None
+        if isinstance(value, self.referenced_model):
+            return value
+        if isinstance(value, (str, ObjectId)):
+            record = await self.referenced_model.find_one({"_id": ObjectId(str(value))})
+            if record:
+                return cast(M, record)
+            return None
+        if isinstance(value, dict):
+            return self.referenced_model(**value)
+        raise ValueError(f"Cannot convert {value} to {self.referenced_model}")
+
+    def to_dict(self, value: Optional[M]) -> Optional[str]:
+        """Convert reference to dict representation."""
+        if value is None:
+            return None
+        return str(value.id)
+
+    def to_mongo(self, value: Optional[M]) -> Optional[ObjectId]:
+        """Convert Python model instance to MongoDB ObjectId."""
+        if value is None:
+            return None
+        if isinstance(value, ObjectId):
+            return value
+        if isinstance(value, self.referenced_model):
+            return ObjectId(str(value.id)) if value.id else None
         if isinstance(value, dict) and "_id" in value:
-            return str(value["_id"])
+            id_value: Any = value["_id"]
+            if isinstance(id_value, ObjectId):
+                return id_value
+            return ObjectId(str(id_value))
+        return ObjectId(str(value))
 
-        raise ValueError(f"{self.string} must be a relation ID or document")
+    def from_mongo(self, value: Any) -> Optional[M]:
+        """Convert MongoDB ObjectId to Python model instance."""
+        if value is None:
+            return None
+        if isinstance(value, self.referenced_model):
+            return value
+        if isinstance(value, dict):
+            return self.referenced_model(
+                _collection=self.collection,
+                _abstract=False,
+                _indexes=[],
+                **value,
+            )
+        if isinstance(value, ObjectId):
+            if self.lazy:
+                return self.referenced_model(
+                    _collection=self.collection,
+                    id=value,
+                    _abstract=False,
+                    _indexes=[],
+                )
+            return None  # Async operation not supported in sync convert
+        return self.referenced_model(
+            _collection=self.collection,
+            id=ObjectId(str(value)),
+            _abstract=False,
+            _indexes=[],
+        )
 
-    def to_mongo(self, value: Optional[str]) -> Optional[ObjectId]:
-        """Convert value to MongoDB format.
 
-        Args:
-            value: Value to convert
-
-        Returns:
-            Optional[ObjectId]: MongoDB ObjectId
-        """
-        return ObjectId(value) if value else None
-
-    def from_mongo(self, value: Optional[ObjectId]) -> Optional[str]:
-        """Convert value from MongoDB format.
-
-        Args:
-            value: Value to convert
-
-        Returns:
-            Optional[str]: String ID
-        """
-        return str(value) if value else None
-
-
-class One2many(Field):
-    """One-to-many relation field."""
+class Many2oneField(ReferenceField[M], Generic[M]):
+    """Many2one field for model relations."""
 
     def __init__(
         self,
+        referenced_model: Type[M],
         *,
-        string: str,
-        relation_model: Union[str, Type[BaseModel]],
+        required: bool = False,
+        default: Any = None,
+        index: bool = False,
+        unique: bool = False,
+        ondelete: str = "set null",
+        lazy: bool = False,
+    ) -> None:
+        """Initialize field."""
+        super().__init__(
+            referenced_model,
+            required=required,
+            default=default,
+            index=index,
+            unique=unique,
+            lazy=lazy,
+        )
+        self.ondelete = ondelete
+
+
+class One2manyField(Field[List[M]], Generic[M]):
+    """One2many field for model relations."""
+
+    def __init__(
+        self,
+        referenced_model: Type[M],
         inverse_field: str,
-        **kwargs: Any,
+        *,
+        required: bool = False,
+        default: Any = None,
+        lazy: bool = False,
     ) -> None:
-        """Initialize one-to-many field.
-
-        Args:
-            string: Field label
-            relation_model: Related model class or name
-            inverse_field: Name of inverse Many2one field
-            **kwargs: Additional field options
-        """
-        self.relation_model = relation_model
+        """Initialize field."""
+        super().__init__(
+            required=required,
+            default=default,
+        )
+        self._referenced_model: Type[M] = referenced_model
         self.inverse_field = inverse_field
-        super().__init__(string=string, **kwargs)
+        self.lazy = lazy
 
-    def validate(self, value: Any) -> List[str]:
-        """Validate relation value.
+    @property
+    def referenced_model(self) -> Type[M]:
+        """Get referenced model."""
+        if not self._referenced_model:
+            raise ValueError("Referenced model not set")
+        return self._referenced_model
 
-        Args:
-            value: Value to validate
+    @property
+    def collection(self) -> str:
+        """Get collection name."""
+        return getattr(self.referenced_model, "collection", "")
 
-        Returns:
-            List[str]: List of relation IDs
-
-        Raises:
-            ValueError: If validation fails
-        """
-        if not value:
+    def convert(
+        self, value: Optional[Union[List[Union[str, ObjectId, Dict[str, Any], M]], M]]
+    ) -> List[M]:
+        """Convert value to list of referenced records."""
+        if value is None:
             return []
+        values: List[Union[str, ObjectId, Dict[str, Any], M]] = (
+            [value] if not isinstance(value, (list, tuple)) else list(value)
+        )
 
-        if not isinstance(value, (list, tuple)):
-            raise ValueError(f"{self.string} must be a list of IDs")
-
-        ids = []
-        for item in value:
-            if isinstance(item, str):
-                try:
-                    ObjectId(item)
-                    ids.append(item)
-                except Exception:
-                    raise ValueError(f"{self.string} contains invalid ID: {item}")
-            elif isinstance(item, dict) and "_id" in item:
-                ids.append(str(item["_id"]))
+        records: List[M] = []
+        for item in values:
+            record: Optional[M] = None
+            if isinstance(item, ObjectId):
+                if self.lazy:
+                    record = self.referenced_model(
+                        _collection=self.collection,
+                        id=item,
+                        _abstract=False,
+                        _indexes=[],
+                    )
+            elif isinstance(item, self.referenced_model):
+                record = item
+            elif isinstance(item, dict):
+                record = self.referenced_model(
+                    _collection=self.collection,
+                    _abstract=False,
+                    _indexes=[],
+                    **item,
+                )
             else:
-                raise ValueError(f"{self.string} contains invalid item: {item}")
+                try:
+                    item_id = ObjectId(str(item))
+                    if self.lazy:
+                        record = self.referenced_model(
+                            _collection=self.collection,
+                            id=item_id,
+                            _abstract=False,
+                            _indexes=[],
+                        )
+                except (TypeError, ValueError):
+                    continue
+            if record is not None:
+                records.append(record)
+        return records
 
-        return ids
+    async def async_convert(self, value: Any) -> List[M]:
+        """Convert value to list of referenced records asynchronously."""
+        if value is None:
+            return []
+        if not isinstance(value, (list, tuple)):
+            value = [value]
+
+        records: List[M] = []
+        for item in cast(List[Any], value):
+            if isinstance(item, ObjectId):
+                if self.lazy:
+                    records.append(
+                        self.referenced_model(
+                            _collection=self.collection,
+                            id=item,
+                            _abstract=False,
+                            _indexes=[],
+                        )
+                    )
+                else:
+                    record = await self.referenced_model.find_one({"_id": item})
+                    if record:
+                        records.append(cast(M, record))
+            elif isinstance(item, self.referenced_model):
+                records.append(item)
+            elif isinstance(item, dict):
+                records.append(
+                    self.referenced_model(
+                        _collection=self.collection,
+                        _abstract=False,
+                        _indexes=[],
+                        **item,
+                    )
+                )
+            else:
+                try:
+                    item_id = ObjectId(str(item))
+                    if self.lazy:
+                        records.append(
+                            self.referenced_model(
+                                _collection=self.collection,
+                                id=item_id,
+                                _abstract=False,
+                                _indexes=[],
+                            )
+                        )
+                    else:
+                        record = await self.referenced_model.find_one({"_id": item_id})
+                        if record:
+                            records.append(record)  # type: ignore
+                except (TypeError, ValueError):
+                    continue
+        return records
+
+    def to_dict(self, value: Optional[List[M]]) -> Optional[List[str]]:
+        """Convert references to dict representation."""
+        if value is None:
+            return None
+        return [str(record.id) for record in value]
+
+    def to_mongo(self, value: Optional[List[M]]) -> Optional[List[ObjectId]]:
+        """Convert Python model instances to MongoDB ObjectIds."""
+        if value is None:
+            return None
+        result: List[ObjectId] = []
+        for item in value:
+            if isinstance(item, ObjectId):
+                result.append(item)
+            elif isinstance(item, self.referenced_model):
+                if item.id:  # Check if id exists
+                    result.append(ObjectId(str(item.id)))
+            elif isinstance(item, dict) and "_id" in item:
+                id_value: Any = item["_id"]
+                if isinstance(id_value, ObjectId):
+                    result.append(id_value)
+                else:
+                    result.append(ObjectId(str(id_value)))
+            else:
+                result.append(ObjectId(str(item)))
+        return result
+
+    def from_mongo(self, value: Any) -> List[M]:
+        """Convert MongoDB ObjectIds to Python model instances."""
+        if value is None:
+            return []
+        if not isinstance(value, (list, tuple)):
+            value = [value]
+
+        records: List[M] = []
+        for item in cast(List[Any], value):
+            if isinstance(item, self.referenced_model):
+                records.append(item)
+            elif isinstance(item, dict):
+                records.append(
+                    self.referenced_model(
+                        _collection=self.collection,
+                        _abstract=False,
+                        _indexes=[],
+                        **item,
+                    )
+                )
+            elif isinstance(item, ObjectId):
+                if self.lazy:
+                    records.append(
+                        self.referenced_model(
+                            _collection=self.collection,
+                            id=item,
+                            _abstract=False,
+                            _indexes=[],
+                        )
+                    )
+            else:
+                try:
+                    item_id = ObjectId(str(item))
+                    if self.lazy:
+                        records.append(
+                            self.referenced_model(
+                                _collection=self.collection,
+                                id=item_id,
+                                _abstract=False,
+                                _indexes=[],
+                            )
+                        )
+                except (TypeError, ValueError):
+                    continue
+        return records
 
 
-class Many2many(Field):
-    """Many-to-many relation field."""
+class Many2manyField(Field[List[M]], Generic[M]):
+    """Many2many field for model relations."""
 
     def __init__(
         self,
+        referenced_model: Type[M],
         *,
-        string: str,
-        relation_model: Union[str, Type[BaseModel]],
-        relation_table: Optional[str] = None,
-        **kwargs: Any,
+        required: bool = False,
+        default: Any = None,
+        lazy: bool = False,
+        relation: Optional[str] = None,
+        column1: Optional[str] = None,
+        column2: Optional[str] = None,
     ) -> None:
-        """Initialize many-to-many field.
+        """Initialize field."""
+        super().__init__(
+            required=required,
+            default=default,
+        )
+        self._referenced_model: Type[M] = referenced_model
+        self.lazy = lazy
+        self.relation = relation
+        self.column1 = column1
+        self.column2 = column2
 
-        Args:
-            string: Field label
-            relation_model: Related model class or name
-            relation_table: Optional custom relation table name
-            **kwargs: Additional field options
-        """
-        self.relation_model = relation_model
-        self.relation_table = relation_table
-        super().__init__(string=string, **kwargs)
+    @property
+    def referenced_model(self) -> Type[M]:
+        """Get referenced model."""
+        if not self._referenced_model:
+            raise ValueError("Referenced model not set")
+        return self._referenced_model
 
-    def validate(self, value: Any) -> List[str]:
-        """Validate relation value.
+    @property
+    def collection(self) -> str:
+        """Get collection name."""
+        return getattr(self.referenced_model, "collection", "")
 
-        Args:
-            value: Value to validate
+    def get_relation_name(self) -> str:
+        """Get name of relation collection."""
+        if self.relation:
+            return self.relation
+        if not self.model_cls or not self.referenced_model:
+            raise ValueError("Model class or referenced model not set")
+        model_collection = getattr(self.model_cls, "collection", "")
+        ref_collection = self.collection
+        return f"{model_collection}_{self.name}_{ref_collection}"
 
-        Returns:
-            List[str]: List of relation IDs
+    def get_columns(self) -> tuple[str, str]:
+        """Get names of relation columns."""
+        if self.column1 and self.column2:
+            return self.column1, self.column2
+        if not self.model_cls or not self.referenced_model:
+            raise ValueError("Model class or referenced model not set")
+        model_collection = getattr(self.model_cls, "collection", "")
+        ref_collection = self.collection
+        return (
+            f"{model_collection}_id",
+            f"{ref_collection}_id",
+        )
 
-        Raises:
-            ValueError: If validation fails
-        """
-        if not value:
+    def convert(
+        self, value: Optional[Union[List[Union[str, ObjectId, Dict[str, Any], M]], M]]
+    ) -> List[M]:
+        """Convert value to list of referenced records."""
+        if value is None:
             return []
+        values: List[Union[str, ObjectId, Dict[str, Any], M]] = (
+            [value] if not isinstance(value, (list, tuple)) else list(value)
+        )
 
-        if not isinstance(value, (list, tuple)):
-            raise ValueError(f"{self.string} must be a list of IDs")
-
-        ids = []
-        for item in value:
-            if isinstance(item, str):
-                try:
-                    ObjectId(item)
-                    ids.append(item)
-                except Exception:
-                    raise ValueError(f"{self.string} contains invalid ID: {item}")
-            elif isinstance(item, dict) and "_id" in item:
-                ids.append(str(item["_id"]))
+        records: List[M] = []
+        for item in values:
+            record: Optional[M] = None
+            if isinstance(item, ObjectId):
+                if self.lazy:
+                    record = self.referenced_model(
+                        _collection=self.collection,
+                        id=item,
+                        _abstract=False,
+                        _indexes=[],
+                    )
+            elif isinstance(item, self.referenced_model):
+                record = item
+            elif isinstance(item, dict):
+                record = self.referenced_model(
+                    _collection=self.collection,
+                    _abstract=False,
+                    _indexes=[],
+                    **item,
+                )
             else:
-                raise ValueError(f"{self.string} contains invalid item: {item}")
+                try:
+                    item_id = ObjectId(str(item))
+                    if self.lazy:
+                        record = self.referenced_model(
+                            _collection=self.collection,
+                            id=item_id,
+                            _abstract=False,
+                            _indexes=[],
+                        )
+                except (TypeError, ValueError):
+                    continue
+            if record is not None:
+                records.append(record)
+        return records
 
-        return ids
+    async def async_convert(
+        self, value: Optional[Union[List[Union[str, ObjectId, Dict[str, Any], M]], M]]
+    ) -> List[M]:
+        """Convert value to list of referenced records asynchronously."""
+        if value is None:
+            return []
+        values: List[Union[str, ObjectId, Dict[str, Any], M]] = (
+            [value] if not isinstance(value, (list, tuple)) else list(value)
+        )
 
-    def get_relation_table(self, model_name: str) -> str:
-        """Get name of relation table.
+        records: List[M] = []
+        for item in values:
+            if isinstance(item, ObjectId):
+                if self.lazy:
+                    records.append(
+                        self.referenced_model(
+                            _collection=self.collection,
+                            id=item,
+                            _abstract=False,
+                            _indexes=[],
+                        )
+                    )
+                else:
+                    record = await self.referenced_model.find_one({"_id": item})
+                    if record:
+                        records.append(cast(M, record))
+            elif isinstance(item, self.referenced_model):
+                records.append(item)
+            elif isinstance(item, dict):
+                records.append(
+                    self.referenced_model(
+                        _collection=self.collection,
+                        _abstract=False,
+                        _indexes=[],
+                        **item,
+                    )
+                )
+            else:
+                try:
+                    item_id = ObjectId(str(item))
+                    if self.lazy:
+                        records.append(
+                            self.referenced_model(
+                                _collection=self.collection,
+                                id=item_id,
+                                _abstract=False,
+                                _indexes=[],
+                            )
+                        )
+                    else:
+                        record = await self.referenced_model.find_one({"_id": item_id})
+                        if record:
+                            records.append(cast(M, record))
+                except (TypeError, ValueError):
+                    continue
+        return records
 
-        Args:
-            model_name: Name of model containing this field
+    def to_dict(self, value: Optional[List[M]]) -> Optional[List[str]]:
+        """Convert references to dict representation."""
+        if value is None:
+            return None
+        return [str(record.id) for record in value]
 
-        Returns:
-            str: Relation table name
-        """
-        if self.relation_table:
-            return self.relation_table
+    def to_mongo(self, value: Optional[List[M]]) -> Optional[List[ObjectId]]:
+        """Convert Python model instances to MongoDB ObjectIds."""
+        if value is None:
+            return None
+        result: List[ObjectId] = []
+        for item in value:
+            if isinstance(item, ObjectId):
+                result.append(item)
+            elif isinstance(item, self.referenced_model):
+                if item.id:  # Check if id exists
+                    result.append(ObjectId(str(item.id)))
+            elif isinstance(item, dict) and "_id" in item:
+                id_value: Any = item["_id"]
+                if isinstance(id_value, ObjectId):
+                    result.append(id_value)
+                else:
+                    result.append(ObjectId(str(id_value)))
+            else:
+                result.append(ObjectId(str(item)))
+        return result
 
-        names = sorted([model_name, self.relation_model])
-        return f"{names[0]}_{names[1]}_rel"
+    def from_mongo(self, value: Any) -> List[M]:
+        """Convert MongoDB ObjectIds to Python model instances."""
+        if value is None:
+            return []
+        if not isinstance(value, (list, tuple)):
+            value = [value]
+
+        records: List[M] = []
+        for item in cast(List[Any], value):
+            if isinstance(item, self.referenced_model):
+                records.append(item)
+            elif isinstance(item, dict):
+                records.append(
+                    self.referenced_model(
+                        _collection=self.collection,
+                        _abstract=False,
+                        _indexes=[],
+                        **item,
+                    )
+                )
+            elif isinstance(item, ObjectId):
+                if self.lazy:
+                    records.append(
+                        self.referenced_model(
+                            _collection=self.collection,
+                            id=item,
+                            _abstract=False,
+                            _indexes=[],
+                        )
+                    )
+            else:
+                try:
+                    item_id = ObjectId(str(item))
+                    if self.lazy:
+                        records.append(
+                            self.referenced_model(
+                                _collection=self.collection,
+                                id=item_id,
+                                _abstract=False,
+                                _indexes=[],
+                            )
+                        )
+                except (TypeError, ValueError):
+                    continue
+        return records

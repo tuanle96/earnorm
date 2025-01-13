@@ -1,41 +1,38 @@
-"""Field types for EarnORM models."""
+"""Field types for EarnORM."""
 
-from ..base.core.fields import (
+from earnorm.fields.base import (
     BooleanField,
-    DateTimeField,
     DictField,
     Field,
     FloatField,
     IntegerField,
     ListField,
-    Many2manyField,
-    Many2oneField,
     ObjectIdField,
-    One2manyField,
-    ReferenceField,
     StringField,
 )
-from .char import CharField, EmailField, PasswordField, PhoneField
+from earnorm.fields.char import CharField, EmailField, PasswordField, PhoneField
+from earnorm.fields.relation import (
+    Many2manyField,
+    Many2oneField,
+    One2manyField,
+    ReferenceField,
+)
 
 __all__ = [
-    # Base fields
     "Field",
     "StringField",
     "IntegerField",
     "FloatField",
     "BooleanField",
-    "DateTimeField",
     "ObjectIdField",
     "ListField",
     "DictField",
-    "ReferenceField",
-    # Relation fields
-    "Many2oneField",
-    "One2manyField",
-    "Many2manyField",
-    # Enhanced char fields
     "CharField",
     "EmailField",
     "PhoneField",
     "PasswordField",
+    "ReferenceField",
+    "Many2oneField",
+    "One2manyField",
+    "Many2manyField",
 ]

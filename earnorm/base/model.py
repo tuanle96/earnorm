@@ -5,18 +5,22 @@ from typing import (
     Callable,
     Coroutine,
     Dict,
+    Iterator,
     List,
     Optional,
     Protocol,
     Sequence,
+    Tuple,
     TypeVar,
+    Union,
     runtime_checkable,
 )
 
 from bson import ObjectId
-from motor.motor_asyncio import AsyncIOMotorCollection
+from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
+from pymongo.cursor import Cursor
 
-from earnorm.base.core.registry import env
+from earnorm.base.registry import Registry
 
 # Type aliases
 IndexDict = Dict[str, Any]
@@ -27,6 +31,15 @@ AuditConfig = Dict[str, Any]
 CacheConfig = Dict[str, Any]
 MetricsConfig = Dict[str, Any]
 JsonEncoders = Dict[type, Callable[[Any], str]]
+DomainTuple = Tuple[str, str, Any]
+DomainOperator = Union[str, DomainTuple]  # Can be '|', '&' or a condition tuple
+Domain = Sequence[DomainOperator]  # Use Sequence instead of List for covariance
+MongoQuery = Dict[str, Any]
+SortSpec = List[Tuple[str, int]]
+Collection = AsyncIOMotorCollection[Dict[str, Any]]
+Database = AsyncIOMotorDatabase[Dict[str, Any]]
+MongoCursor = Cursor[Dict[str, Any]]
+SearchDomain = List[Tuple[str, str, Any]]
 
 # Type variables
 ModelT = TypeVar("ModelT", bound="BaseModel")
@@ -35,6 +48,9 @@ ModelT = TypeVar("ModelT", bound="BaseModel")
 ValidatorFunc = Callable[[ModelT], Coroutine[Any, Any, None]]
 ConstraintFunc = Callable[[ModelT], Coroutine[Any, Any, None]]
 
+# Registry instance
+env = Registry()
+
 
 @runtime_checkable
 class BaseModel(Protocol):
@@ -42,6 +58,7 @@ class BaseModel(Protocol):
 
     Attributes:
         _collection: MongoDB collection name
+        _name: Odoo-style model name
         _abstract: Whether this is an abstract model
         _data: Model data dictionary
         _indexes: Collection indexes configuration
@@ -56,10 +73,12 @@ class BaseModel(Protocol):
         _json_encoders: Custom JSON encoders
     """
 
+    # Class attributes
     _collection: str
+    _name: str  # Odoo-style model name
     _abstract: bool = False
     _data: Dict[str, Any]
-    _indexes: IndexDict
+    _indexes: Union[IndexDict, List[Dict[str, Any]]]
     _validators: List[ValidatorFunc[Any]]
     _constraints: List[ConstraintFunc[Any]]
     _acl: AclDict
@@ -69,6 +88,7 @@ class BaseModel(Protocol):
     _cache: CacheConfig
     _metrics: MetricsConfig
     _json_encoders: JsonEncoders
+    env: Registry
 
     def __init__(self, **data: Any) -> None:
         """Initialize model instance.
@@ -84,6 +104,21 @@ class BaseModel(Protocol):
     def id(self) -> Optional[str]:
         """Get document ID."""
         return str(self._data.get("_id")) if self._data.get("_id") else None
+
+    @property
+    def collection(self) -> str:
+        """Get collection name."""
+        return self._collection
+
+    @property
+    def ids(self) -> List[str]:
+        """Get list of IDs."""
+        return [str(record.id) for record in self]
+
+    @property
+    def data(self) -> Dict[str, Any]:
+        """Get model data."""
+        return self._data
 
     async def validate(self) -> None:
         """Validate model data.
@@ -113,12 +148,14 @@ class BaseModel(Protocol):
 
         # Insert or update
         if self.id:
-            await collection.update_one(
+            update_result = await collection.update_one(
                 {"_id": ObjectId(self.id)}, {"$set": self._data}
             )
+            if not update_result.modified_count:
+                raise ValueError("Document not found")
         else:
-            result = await collection.insert_one(self._data)
-            self._data["_id"] = result.inserted_id
+            insert_result = await collection.insert_one(self._data)
+            self._data["_id"] = insert_result.inserted_id
 
     async def delete(self) -> None:
         """Delete model from database."""
@@ -126,7 +163,9 @@ class BaseModel(Protocol):
             return
 
         collection = await self._get_collection()
-        await collection.delete_one({"_id": ObjectId(self.id)})
+        result = await collection.delete_one({"_id": ObjectId(self.id)})
+        if not result.deleted_count:
+            raise ValueError("Document not found")
 
     @classmethod
     async def find_one(cls, filter_: Dict[str, Any]) -> Optional["BaseModel"]:
@@ -159,15 +198,112 @@ class BaseModel(Protocol):
         return [cls(**data) async for data in cursor]
 
     @classmethod
-    async def _get_collection(cls) -> AsyncIOMotorCollection:
+    def _domain_to_query(
+        cls, domain: Sequence[Union[str, Tuple[str, str, Any]]]
+    ) -> MongoQuery:
+        """Convert domain to MongoDB query.
+
+        Args:
+            domain: Search domain
+
+        Returns:
+            MongoDB query dict
+        """
+        query: MongoQuery = {}
+
+        for item in domain:
+            if isinstance(item, str):
+                continue  # Skip operators
+
+            field, op, value = item  # type: ignore
+            if op == "=":
+                query[field] = value
+            elif op == "!=":
+                query[field] = {"$ne": value}
+            elif op == ">":
+                query[field] = {"$gt": value}
+            elif op == ">=":
+                query[field] = {"$gte": value}
+            elif op == "<":
+                query[field] = {"$lt": value}
+            elif op == "<=":
+                query[field] = {"$lte": value}
+            elif op == "in":
+                query[field] = {"$in": value}
+            elif op == "not in":
+                query[field] = {"$nin": value}
+            elif op == "like":
+                query[field] = {"$regex": str(value).replace("%", ".*")}
+            elif op == "ilike":
+                query[field] = {
+                    "$regex": str(value).replace("%", ".*"),
+                    "$options": "i",
+                }
+
+        return query
+
+    @classmethod
+    def _parse_order(cls, order: str) -> SortSpec:
+        """Parse order string to MongoDB sort specification.
+
+        Args:
+            order: Order string (e.g. "name asc, date desc")
+
+        Returns:
+            List of (field, direction) tuples
+        """
+        sort: SortSpec = []
+        for item in order.split(","):
+            field, direction = item.strip().split(" ")
+            sort.append((field, 1 if direction.lower() == "asc" else -1))
+        return sort
+
+    @classmethod
+    def get_indexes(cls) -> List[Dict[str, Any]]:
+        """Get model indexes.
+
+        Returns:
+            List of index specifications
+        """
+        if hasattr(cls, "_indexes"):
+            indexes = cls._indexes
+            if isinstance(indexes, dict):
+                return [indexes]
+            return list(indexes)  # Convert to list to ensure type compatibility
+        return []
+
+    @classmethod
+    async def _get_collection(cls) -> Collection:
         """Get MongoDB collection.
 
         Returns:
             AsyncIOMotorCollection instance
+
+        Raises:
+            ValueError: If model is abstract
+            RuntimeError: If database is not initialized
         """
         if cls._abstract:
             raise ValueError("Cannot access collection of abstract model")
-        return await env.get_collection(cls._collection)
+
+        db = await cls._get_db()
+        return db[cls._collection]
+
+    @classmethod
+    async def _get_db(cls) -> Database:
+        """Get MongoDB database.
+
+        Returns:
+            AsyncIOMotorDatabase instance
+
+        Raises:
+            RuntimeError: If database is not initialized
+        """
+        if not hasattr(cls.env, "db") or cls.env.db is None:
+            raise RuntimeError("Database not initialized")
+
+        db = cls.env.db
+        return db  # type: ignore
 
     async def write(self, values: Dict[str, Any]) -> None:
         """Update model with values.
@@ -198,7 +334,7 @@ class BaseModel(Protocol):
     @classmethod
     async def search(
         cls,
-        domain: List[tuple],
+        domain: SearchDomain,
         offset: int = 0,
         limit: Optional[int] = None,
         order: Optional[str] = None,
@@ -218,7 +354,7 @@ class BaseModel(Protocol):
         query = cls._domain_to_query(domain)
 
         # Build find options
-        options = {}
+        options: Dict[str, Any] = {}
         if offset:
             options["skip"] = offset
         if limit:
@@ -232,7 +368,7 @@ class BaseModel(Protocol):
         return [cls(**data) async for data in cursor]
 
     @classmethod
-    async def search_count(cls, domain: List[tuple]) -> int:
+    async def search_count(cls, domain: SearchDomain) -> int:
         """Count records matching domain.
 
         Args:
@@ -245,63 +381,35 @@ class BaseModel(Protocol):
         collection = await cls._get_collection()
         return await collection.count_documents(query)
 
-    @classmethod
-    def _domain_to_query(cls, domain: List[tuple]) -> Dict:
-        """Convert domain to MongoDB query.
-
-        Args:
-            domain: Search domain
-
-        Returns:
-            MongoDB query dict
-        """
-        query = {}
-        current_op = "$and"
-
-        for item in domain:
-            if item == "|":
-                current_op = "$or"
-                continue
-            if item == "&":
-                current_op = "$and"
-                continue
-
-            field, op, value = item
-            if op == "=":
-                query[field] = value
-            elif op == "!=":
-                query[field] = {"$ne": value}
-            elif op == ">":
-                query[field] = {"$gt": value}
-            elif op == ">=":
-                query[field] = {"$gte": value}
-            elif op == "<":
-                query[field] = {"$lt": value}
-            elif op == "<=":
-                query[field] = {"$lte": value}
-            elif op == "in":
-                query[field] = {"$in": value}
-            elif op == "not in":
-                query[field] = {"$nin": value}
-            elif op == "like":
-                query[field] = {"$regex": value.replace("%", ".*")}
-            elif op == "ilike":
-                query[field] = {"$regex": value.replace("%", ".*"), "$options": "i"}
-
-        return query
+    @property
+    def collection_name(self) -> str:
+        """Get collection name."""
+        return self._collection
 
     @classmethod
-    def _parse_order(cls, order: str) -> List[tuple]:
-        """Parse order string to MongoDB sort specification.
-
-        Args:
-            order: Order string (e.g. "name asc, date desc")
+    def get_collection_name(cls) -> str:
+        """Get collection name for model.
 
         Returns:
-            List of (field, direction) tuples
+            Collection name
         """
-        sort = []
-        for item in order.split(","):
-            field, direction = item.strip().split(" ")
-            sort.append((field, 1 if direction.lower() == "asc" else -1))
-        return sort
+        return cls._collection
+
+    @property
+    def is_abstract(self) -> bool:
+        """Check if model is abstract."""
+        return self._abstract
+
+    @classmethod
+    def is_abstract_model(cls) -> bool:
+        """Check if model is abstract."""
+        return cls._abstract
+
+    @classmethod
+    def get_name(cls) -> str:
+        """Get model name (Odoo-style)."""
+        return cls._name
+
+    def __iter__(self) -> Iterator["BaseModel"]:
+        """Make model iterable."""
+        yield self

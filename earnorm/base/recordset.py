@@ -9,17 +9,20 @@ from typing import (
     List,
     Optional,
     Sequence,
+    Tuple,
+    Type,
     TypeVar,
     Union,
+    cast,
 )
 
-from earnorm.base.model import BaseModel
-from earnorm.base.registry import registry
+from earnorm.base.model import BaseModel, env
+from earnorm.base.registry import Registry
 
-T = TypeVar("T", bound=BaseModel)
+M = TypeVar("M", bound=BaseModel)
 
 
-class RecordSet(Generic[T]):
+class RecordSet(Generic[M]):
     """RecordSet for batch operations.
 
     A RecordSet represents a collection of records from a specific model.
@@ -41,18 +44,20 @@ class RecordSet(Generic[T]):
         ```
     """
 
-    def __init__(self, model: T, records: Optional[Sequence[T]] = None) -> None:
+    def __init__(
+        self, model_cls: Type[M], records: Optional[Sequence[M]] = None
+    ) -> None:
         """Initialize RecordSet.
 
         Args:
-            model: Model class
+            model_cls: Model class
             records: Optional sequence of records
         """
-        self._model = model
-        self._records: List[T] = list(records) if records else []
-        self._collection = model.get_collection()
+        self._model_cls = model_cls
+        self._records: List[M] = list(records) if records else []
+        self._collection = model_cls.get_collection_name()
 
-    def __getitem__(self, index: Union[int, slice]) -> Union[T, "RecordSet[T]"]:
+    def __getitem__(self, index: Union[int, slice]) -> Union[M, "RecordSet[M]"]:
         """Get record or slice of records.
 
         Args:
@@ -62,14 +67,14 @@ class RecordSet(Generic[T]):
             Single record or new RecordSet with sliced records
         """
         if isinstance(index, slice):
-            return RecordSet(self._model, self._records[index])
+            return RecordSet(self._model_cls, self._records[index])
         return self._records[index]
 
     def __len__(self) -> int:
         """Get number of records."""
         return len(self._records)
 
-    def __iter__(self) -> Iterator[T]:
+    def __iter__(self) -> Iterator[M]:
         """Iterate over records."""
         return iter(self._records)
 
@@ -78,7 +83,7 @@ class RecordSet(Generic[T]):
         """Get list of record IDs."""
         return [str(record.id) for record in self._records]
 
-    async def create(self, values: Dict[str, Any]) -> "RecordSet[T]":
+    async def create(self, values: Dict[str, Any]) -> "RecordSet[M]":
         """Create new record.
 
         Args:
@@ -87,9 +92,9 @@ class RecordSet(Generic[T]):
         Returns:
             New RecordSet with created record
         """
-        record = self._model(**values)
+        record = self._model_cls(**values)
         await record.save()
-        return RecordSet(self._model, [record])
+        return RecordSet(self._model_cls, [record])
 
     async def write(self, values: Dict[str, Any]) -> bool:
         """Update records with values.
@@ -117,12 +122,21 @@ class RecordSet(Generic[T]):
         self._records.clear()
         return True
 
-    async def search(self, domain: List[tuple], **kwargs) -> "RecordSet[T]":
+    async def search(
+        self,
+        domain: List[Tuple[str, str, Any]],
+        *,
+        offset: int = 0,
+        limit: Optional[int] = None,
+        order: Optional[str] = None,
+    ) -> "RecordSet[M]":
         """Search records matching domain.
 
         Args:
             domain: Search domain
-            **kwargs: Additional search options
+            offset: Number of records to skip
+            limit: Maximum number of records to return
+            order: Sort order
 
         Returns:
             RecordSet with matching records
@@ -130,11 +144,20 @@ class RecordSet(Generic[T]):
         # Convert domain to MongoDB query
         query = self._domain_to_query(domain)
 
-        # Get records from database
-        records = await self._model.find(query, **kwargs)
-        return RecordSet(self._model, records)
+        # Build find options
+        options: Dict[str, Any] = {}
+        if offset:
+            options["skip"] = offset
+        if limit:
+            options["limit"] = limit
+        if order:
+            options["sort"] = self._parse_order(order)
 
-    def filtered(self, func: Callable[[T], bool]) -> "RecordSet[T]":
+        # Get records from database
+        records = await self._model_cls.find(query)
+        return cast("RecordSet[M]", RecordSet(self._model_cls, records))
+
+    def filtered(self, func: Callable[[M], bool]) -> "RecordSet[M]":
         """Filter records using predicate function.
 
         Args:
@@ -144,9 +167,9 @@ class RecordSet(Generic[T]):
             New RecordSet with filtered records
         """
         filtered_records = [r for r in self._records if func(r)]
-        return RecordSet(self._model, filtered_records)
+        return RecordSet(self._model_cls, filtered_records)
 
-    def mapped(self, func: Callable[[T], Any]) -> List[Any]:
+    def mapped(self, func: Callable[[M], Any]) -> List[Any]:
         """Map function over records.
 
         Args:
@@ -157,7 +180,7 @@ class RecordSet(Generic[T]):
         """
         return [func(record) for record in self._records]
 
-    def _domain_to_query(self, domain: List[tuple]) -> Dict:
+    def _domain_to_query(self, domain: List[Tuple[str, str, Any]]) -> Dict[str, Any]:
         """Convert domain to MongoDB query.
 
         Args:
@@ -166,7 +189,7 @@ class RecordSet(Generic[T]):
         Returns:
             MongoDB query dict
         """
-        query = {}
+        query: Dict[str, Any] = {}
         operators = {
             "=": "$eq",
             "!=": "$ne",
@@ -197,6 +220,21 @@ class RecordSet(Generic[T]):
         return bool(self._records)
 
     @property
-    def env(self):
+    def env(self) -> Registry:
         """Get environment registry."""
-        return registry
+        return env
+
+    def _parse_order(self, order: str) -> List[Tuple[str, int]]:
+        """Parse order string to MongoDB sort specification.
+
+        Args:
+            order: Order string (e.g. "name asc, date desc")
+
+        Returns:
+            List of (field, direction) tuples
+        """
+        sort: List[Tuple[str, int]] = []
+        for item in order.split(","):
+            field, direction = item.strip().split(" ")
+            sort.append((field, 1 if direction.lower() == "asc" else -1))
+        return sort

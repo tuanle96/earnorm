@@ -33,6 +33,10 @@ class LifecycleManager:
     Handles initialization, startup, shutdown and cleanup of services.
     """
 
+    def __init__(self) -> None:
+        """Initialize lifecycle manager."""
+        self._services: dict[str, Any] = {}
+
     async def init_service(self, service: Any) -> None:
         """Initialize service.
 
@@ -68,6 +72,26 @@ class LifecycleManager:
         """
         if isinstance(service, LifecycleHooks):
             await service.on_cleanup()
+
+    def register(self, key: str, service: Any) -> None:
+        """Register service.
+
+        Args:
+            key: Service key
+            service: Service instance
+        """
+        self._services[key] = service
+
+    def get(self, key: str) -> Any:
+        """Get service by key.
+
+        Args:
+            key: Service key
+
+        Returns:
+            Service instance
+        """
+        return self._services[key]
 
 
 # Global lifecycle manager instance

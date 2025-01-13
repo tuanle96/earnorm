@@ -1,5 +1,2 @@
 [flake8]
 ignore = E501,W503
-
-[*.md]
-ignore = MD022

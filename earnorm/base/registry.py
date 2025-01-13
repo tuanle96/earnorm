@@ -4,10 +4,20 @@ import importlib
 import inspect
 import logging
 import pkgutil
-from typing import Any, Dict, List, Optional, Protocol, Set, Type, runtime_checkable
+from typing import (
+    Any,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    Set,
+    Type,
+    cast,
+    runtime_checkable,
+)
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from pymongo.collection import IndexModel
+from pymongo.operations import IndexModel
 
 from .model import BaseModel
 from .recordset import RecordSet
@@ -22,7 +32,7 @@ class ModelProtocol(Protocol):
     _collection: str
     _abstract: bool
     _data: Dict[str, Any]
-    _indexes: List[IndexModel]
+    _indexes: List[Dict[str, Any]]  # MongoDB index specification
     _validators: List[Any]
     _constraints: List[Any]
     _acl: List[Any]
@@ -89,11 +99,20 @@ class Registry:
         Returns:
             Collection name
         """
-        if hasattr(model_cls, "_collection"):
-            return model_cls._collection
-        if hasattr(model_cls, "_name"):
-            return model_cls._name
+        if hasattr(model_cls, "get_collection_name"):
+            return model_cls.get_collection_name()
+        if hasattr(model_cls, "get_name"):
+            return model_cls.get_name()
         return model_cls.__name__.lower()
+
+    def _is_model_class(self, obj: Any) -> bool:
+        """Check if object is a model class."""
+        return (
+            inspect.isclass(obj)
+            and hasattr(obj, "_collection")
+            and hasattr(obj, "_name")
+            and obj != BaseModel
+        )
 
     def _discover_models(self) -> None:
         """Discover models in registered packages.
@@ -112,11 +131,7 @@ class Registry:
 
                 # Get all classes defined in module
                 for name, obj in inspect.getmembers(module):
-                    if (
-                        inspect.isclass(obj)
-                        and issubclass(obj, BaseModel)
-                        and obj != BaseModel
-                    ):
+                    if self._is_model_class(obj):
                         # Register both concrete and abstract models
                         collection = self._get_collection_name(obj)
                         self._models[collection] = obj
@@ -127,7 +142,8 @@ class Registry:
 
                 # Scan submodules
                 if hasattr(module, "__path__"):
-                    for _, name, _ in pkgutil.iter_modules(module.__path__):
+                    paths = cast(List[str], module.__path__)
+                    for _, name, _ in pkgutil.iter_modules(paths):
                         scan_module(f"{module_name}.{name}")
 
             except ImportError as e:
@@ -183,7 +199,7 @@ class Registry:
             if getattr(model_cls, "_abstract", False)
         ]
 
-    def __getitem__(self, collection: str) -> RecordSet[ModelProtocol]:
+    def __getitem__(self, collection: str) -> RecordSet[BaseModel]:
         """Get recordset for collection.
 
         Auto-discovers models if not already done.
@@ -197,7 +213,6 @@ class Registry:
         Raises:
             KeyError: If model not found
         """
-        # Discover models on first access
         if not self._discovered:
             self._discover_models()
 
@@ -230,7 +245,6 @@ class Registry:
             db: Motor database instance
         """
         self._db = db
-
         # Discover models before initializing
         if not self._discovered:
             self._discover_models()
@@ -238,9 +252,10 @@ class Registry:
         # Initialize collections and indexes for concrete models only
         for model_cls in self._models.values():
             if not getattr(model_cls, "_abstract", False):
-                collection = model_cls._collection
-                if hasattr(model_cls, "_indexes"):
-                    await db[collection].create_indexes(model_cls._indexes)
+                collection = model_cls.get_collection_name()
+                indexes = [IndexModel(idx) for idx in model_cls.get_indexes()]
+                if indexes:
+                    await db[collection].create_indexes(indexes)
 
     @property
     def db(self) -> Optional[AsyncIOMotorDatabase[dict[str, Any]]]:
@@ -292,6 +307,15 @@ class Registry:
 
         return len(self._models)
 
+    def register_model(self, model: Type[BaseModel]) -> None:
+        """Register model directly.
 
-# Registry is now managed by container in earnorm.di.container
-# See container.registry() to get the global instance
+        Args:
+            model: Model class to register
+        """
+        collection = self._get_collection_name(model)
+        self._models[collection] = model
+        logger.info(
+            f"Registered model {model.__name__} as {collection} "
+            f"({'abstract' if getattr(model, '_abstract', False) else 'concrete'})"
+        )

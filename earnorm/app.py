@@ -1,116 +1,61 @@
-"""Application initialization for EarnORM."""
+"""EarnORM application."""
 
-import importlib
-import inspect
-from pathlib import Path
-from typing import List, Optional, Type, Union
+from typing import Any, Type
+
+from motor.motor_asyncio import AsyncIOMotorClient
 
 from earnorm.base.model import BaseModel
-from earnorm.di.container import container, env
+from earnorm.base.registry import Registry
+from earnorm.di.container import DIContainer
 
 
-class EarnORMApp:
-    """EarnORM application manager.
+class EarnORMApp(DIContainer):
+    """EarnORM application.
 
-    This class manages the application lifecycle, including:
-    - Container initialization
-    - Model registration
-    - Database setup
-
-    Example:
-        ```python
-        from earnorm.app import create_app
-
-        app = create_app()
-
-        # Register models manually
-        app.register_model(User)
-        app.register_model(Product)
-
-        # Or auto-discover models in modules
-        app.discover_models(['myapp.models'])
-
-        # Initialize app
-        await app.init(
-            mongo_uri="mongodb://localhost:27017",
-            database="myapp"
-        )
-        ```
+    This class manages the application lifecycle and provides access to core services.
     """
 
     def __init__(self) -> None:
         """Initialize application."""
-        self._initialized = False
-        self._models: List[Type[BaseModel]] = []
+        super().__init__()
+        self.registry = Registry()
+        self.register("registry", self.registry)
 
     def register_model(self, model: Type[BaseModel]) -> None:
-        """Register model with the application.
+        """Register model.
 
         Args:
             model: Model class to register
         """
-        if not inspect.isclass(model) or not issubclass(model, BaseModel):
-            raise TypeError(f"Expected BaseModel subclass, got {type(model)}")
+        self.registry.register_model(model)
 
-        # Add to internal registry
-        if model not in self._models:
-            self._models.append(model)
-
-        # Register with env if initialized
-        if self._initialized:
-            env.register(model)
-
-    def discover_models(self, modules: List[str]) -> None:
-        """Auto-discover and register models from modules.
-
-        Args:
-            modules: List of module paths to scan
-        """
-        for module_path in modules:
-            module = importlib.import_module(module_path)
-
-            # Get all classes defined in module
-            for name, obj in inspect.getmembers(module):
-                if (
-                    inspect.isclass(obj)
-                    and issubclass(obj, BaseModel)
-                    and obj != BaseModel
-                ):
-                    self.register_model(obj)
-
-    async def init(self, mongo_uri: str, database: str, **kwargs) -> None:
-        """Initialize application.
+    async def init_resources(
+        self, *, mongo_uri: str, database: str, **kwargs: Any
+    ) -> None:
+        """Initialize application resources.
 
         Args:
             mongo_uri: MongoDB connection URI
             database: Database name
             **kwargs: Additional configuration
         """
-        if self._initialized:
-            return
-
-        # Initialize container
-        await container.init_resources(mongo_uri=mongo_uri, database=database, **kwargs)
-
-        # Register all models
-        for model in self._models:
-            env.register(model)
-
-        self._initialized = True
+        # Initialize database
+        client = AsyncIOMotorClient[Any](mongo_uri)
+        db = client[database]
+        await self.registry.init_db(db)
 
     async def cleanup(self) -> None:
         """Cleanup application resources."""
-        if not self._initialized:
-            return
+        # Close database connection
+        if self.registry.db is not None:
+            client = self.registry.db.client
+            if client.is_alive():
+                client.close()
 
-        await container.cleanup()
-        self._initialized = False
 
+# Global application instance
+app = EarnORMApp()
 
-def create_app() -> EarnORMApp:
-    """Create new EarnORM application.
-
-    Returns:
-        New EarnORMApp instance
-    """
-    return EarnORMApp()
+# Expose commonly used instances
+registry = app.registry
+env = registry  # Odoo-style env alias
