@@ -1,4 +1,4 @@
-"""Model registry management."""
+"""Model registry for EarnORM."""
 
 from typing import Dict, Optional, Type
 
@@ -6,37 +6,83 @@ from .model import BaseModel
 
 
 class Registry:
-    """Model registry for managing all models in the system."""
+    """Registry for model classes."""
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """Initialize registry."""
         self._models: Dict[str, Type[BaseModel]] = {}
-        self._env = None
 
-    def register_model(self, name: str, model: Type[BaseModel]) -> None:
-        """Register a model with the given name."""
-        self._models[name] = model
+    def register(self, model_cls: Type[BaseModel]) -> None:
+        """Register model class.
 
-    def get_model(self, name: str) -> Optional[Type[BaseModel]]:
-        """Get a model by name."""
-        return self._models.get(name)
+        Args:
+            model_cls: Model class to register
+        """
+        self._models[model_cls.get_collection()] = model_cls
 
-    def set_env(self, env) -> None:
-        """Set the environment for all models."""
-        self._env = env
-        for model in self._models.values():
-            model._env = env
+    def unregister(self, model_cls: Type[BaseModel]) -> None:
+        """Unregister model class.
 
-    def __getitem__(self, name: str) -> Type[BaseModel]:
-        """Get a model by name using dict-like syntax."""
-        model = self.get_model(name)
-        if model is None:
-            raise KeyError(f"Model {name} not found in registry")
-        return model
+        Args:
+            model_cls: Model class to unregister
+        """
+        if model_cls.get_collection() in self._models:
+            del self._models[model_cls.get_collection()]
 
-    @property
-    def env(self):
-        """Get the current environment."""
-        return self._env
+    def get(self, collection: str) -> Optional[Type[BaseModel]]:
+        """Get model class by collection name.
+
+        Args:
+            collection: Collection name
+
+        Returns:
+            Model class or None if not found
+        """
+        return self._models.get(collection)
+
+    def __getitem__(self, collection: str) -> Type[BaseModel]:
+        """Get model class by collection name.
+
+        Args:
+            collection: Collection name
+
+        Returns:
+            Model class
+
+        Raises:
+            KeyError: If model not found
+        """
+        model_cls = self.get(collection)
+        if model_cls is None:
+            raise KeyError(f"Model not found: {collection}")
+        return model_cls
+
+    def __contains__(self, collection: str) -> bool:
+        """Check if collection exists.
+
+        Args:
+            collection: Collection name
+
+        Returns:
+            bool: True if collection exists
+        """
+        return collection in self._models
+
+    def __iter__(self):
+        """Iterate over registered models.
+
+        Yields:
+            tuple: (collection, model_cls)
+        """
+        return iter(self._models.items())
+
+    def __len__(self) -> int:
+        """Get number of registered models.
+
+        Returns:
+            int: Number of models
+        """
+        return len(self._models)
 
 
 # Global registry instance

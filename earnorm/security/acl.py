@@ -1,100 +1,99 @@
 """Access Control List management."""
 
-from functools import wraps
-from typing import Dict, List, Optional, Set, Type, Union
+from typing import Any, Dict, List, Optional, Protocol, Set, Type, runtime_checkable
+
+from motor.motor_asyncio import AsyncIOMotorClientSession
 
 from ..base.model import BaseModel
+from ..cache.cache import cached
+
+
+@runtime_checkable
+class User(Protocol):
+    """User protocol."""
+
+    id: str
+    roles: List[str]
+    groups: Set[str]
 
 
 class ACLManager:
-    """Manager for Access Control Lists."""
+    """Access Control List manager."""
 
-    def __init__(self):
-        self._acls: Dict[str, Dict[str, Set[str]]] = {}
-        self._cache: Dict[str, Dict[str, bool]] = {}
+    def __init__(self) -> None:
+        """Initialize ACL manager."""
+        self._acls: Dict[str, Dict[str, bool]] = {}
 
-    def register_model(self, model: Type[BaseModel]) -> None:
-        """Register ACL for a model."""
-        if hasattr(model, "_acl"):
-            collection = model._collection
-            self._acls[collection] = {
-                op: set(groups) for op, groups in model._acl.items()
-            }
+    async def can_access(
+        self,
+        user: User,
+        collection: str,
+        mode: str,
+        session: Optional[AsyncIOMotorClientSession] = None,
+    ) -> bool:
+        """Check if user can access collection in given mode.
 
-    def can_access(self, user: "BaseModel", collection: str, operation: str) -> bool:
-        """Check if user can perform operation on collection."""
-        # Check cache first
-        cache_key = f"{user.id}:{collection}:{operation}"
-        if cache_key in self._cache:
-            return self._cache[cache_key]
+        Args:
+            user: User to check
+            collection: Collection name
+            mode: Access mode (read/write/create/unlink)
+            session: Optional database session
 
-        # Get required groups for operation
-        required_groups = self._acls.get(collection, {}).get(operation, set())
-        if not required_groups:
-            result = False  # No groups defined means no access
-        else:
-            # Check if user has any of the required groups
-            result = any(group in user.groups for group in required_groups)
+        Returns:
+            bool: True if access is allowed
+        """
+        # Get ACL for collection
+        acl = self._acls.get(collection, {})
 
-        # Cache result
-        self._cache[cache_key] = result
-        return result
+        # Check user groups
+        for group in user.groups:
+            if acl.get(f"{group}:{mode}", False):
+                return True
 
-    def clear_cache(self, user_id: Optional[str] = None) -> None:
-        """Clear ACL cache for user or all users."""
-        if user_id:
-            self._cache = {
-                k: v for k, v in self._cache.items() if not k.startswith(f"{user_id}:")
-            }
-        else:
-            self._cache.clear()
+        return False
+
+    def register_acl(
+        self,
+        collection: str,
+        group: str,
+        mode: str,
+        allow: bool = True,
+    ) -> None:
+        """Register ACL rule.
+
+        Args:
+            collection: Collection name
+            group: Group name
+            mode: Access mode (read/write/create/unlink)
+            allow: Whether to allow access
+        """
+        if collection not in self._acls:
+            self._acls[collection] = {}
+
+        self._acls[collection][f"{group}:{mode}"] = allow
+
+    @cached(ttl=300, key_pattern="acl_access:{0.__name__}:{1}:{2}")
+    async def check_access(
+        self,
+        model_cls: Type[BaseModel],
+        mode: str,
+        groups: Set[str],
+        session: Optional[AsyncIOMotorClientSession] = None,
+    ) -> bool:
+        """Check if model can be accessed in given mode."""
+        # Get collection name from model class
+        collection = model_cls.get_collection()
+
+        # Get ACL for collection
+        acl = self._acls.get(collection, {})
+
+        # Check each group's access
+        for group in groups:
+            if acl.get(f"{group}:{mode}", False):
+                return True
+
+        return False
 
 
 # Global ACL manager instance
 acl_manager = ACLManager()
-
-
-def requires(*groups: str):
-    """Decorator to require group membership for method access."""
-
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(self, *args, **kwargs):
-            # Get current user from environment
-            user = self.env.user
-            if not user:
-                raise PermissionError("No user in context")
-
-            # Check if user has any of the required groups
-            if not any(group in user.groups for group in groups):
-                raise PermissionError(f"Access denied: requires one of {groups}")
-
-            return await func(self, *args, **kwargs)
-
-        return wrapper
-
-    return decorator
-
-
-def check_operation(operation: str):
-    """Decorator to check operation permission on model."""
-
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(self, *args, **kwargs):
-            # Get current user from environment
-            user = self.env.user
-            if not user:
-                raise PermissionError("No user in context")
-
-            # Check if user can perform operation
-            if not acl_manager.can_access(user, self._collection, operation):
-                raise PermissionError(
-                    f"Access denied: cannot {operation} on {self._collection}"
-                )
-
-            return await func(self, *args, **kwargs)
-
-        return wrapper
-
-    return decorator

@@ -54,6 +54,40 @@ Currently in prototype stage, EarnORM aims to be the go-to choice for building h
 - **Monitoring**: Performance metrics and health checks
 - **DevContainer**: Ready-to-use development environment
 
+### Field Types and Relationships
+```python
+from earnorm import BaseModel, Field
+from typing import List, Optional
+
+class Category(BaseModel):
+    _collection = "categories"
+    name: str = Field(min_length=2)
+    description: Optional[str] = None
+
+class Product(BaseModel):
+    _collection = "products"
+    name: str = Field(min_length=3)
+    price: float = Field(gt=0)
+    
+    # One-to-many relationship with lazy loading
+    category = Many2oneField(Category, lazy=True)
+    
+    # Many-to-many relationship
+    tags = Many2manyField("Tag", lazy=True)
+    
+    async def get_category(self):
+        # Lazy loading in sync mode
+        category = self.category.convert()
+        
+        # Full loading in async mode
+        category = await self.category.async_convert()
+        return category
+
+class Tag(BaseModel):
+    _collection = "tags"
+    name: str = Field(unique=True)
+    products = One2manyField(Product, inverse_field="tags")
+
 ## 🚀 Quickstart
 
 ### Installation
@@ -170,6 +204,7 @@ The project is currently in prototype stage with basic functionality:
 ✅ Implemented:
 
 🚧 In Progress:
+
 - Base Model with Pydantic integration
 - Schema Management (collections, indexes)
 - Security System (ACL, RBAC, Record Rules)
@@ -193,10 +228,12 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
 EarnORM is released under the Creative Commons Attribution-NonCommercial (CC BY-NC) license.
 
 This means you are free to:
+
 - Use, copy and distribute the code
 - Modify and build upon the code
 
 Under the following terms:
+
 - You must give appropriate credit
 - You may not use the code for commercial purposes
 - Derivative works must be shared under the same license
@@ -211,6 +248,7 @@ Under the following terms:
 EarnORM is developed by the EarnBase team and the open source community.
 
 Special thanks to:
+
 - Pydantic team
 - Motor team
 - MongoDB team 
