@@ -34,193 +34,50 @@ Currently in prototype stage, EarnORM aims to be the go-to choice for building h
 ### ⚡️ Performance Features
 
 - **Async Core**: Built from ground up with async/await for non-blocking I/O operations
-- **Connection Pooling**: Smart connection management for optimal resource utilization
-- **Query Optimization**: Automatic query analysis and index suggestions
-- **Multi-level Caching**: In-memory and Redis caching with intelligent invalidation
+- **Connection Pooling**: Smart connection management with Motor
+- **Query Optimization**: Automatic index management and domain expressions
 - **Batch Operations**: Efficient bulk create, update, and delete operations
 - **Lazy Loading**: Load related documents only when needed
 
 ### 🛡 Core Features
 
-- **Type Safety**: Full type hints and runtime validation with Pydantic
+- **Type Safety**: Full type hints and runtime validation
 - **Schema Management**: Automatic collection and index management
-- **Security System**: Comprehensive ACL, RBAC, and Record Rules
-- **Change Tracking**: Audit logging and version control
-- **Event System**: Rich set of lifecycle hooks and event handlers
-- **Plugin System**: Extensible architecture with plugin support
+- **Domain Expressions**: Powerful search domain syntax (=, !=, >, >=, <, <=, in, not in, like, ilike)
+- **RecordSet Operations**: Filtering, sorting, mapping, and batch operations
+- **Event System**: Validators and constraints hooks
+- **Field Types**: Built-in field types with validation (String, Int, Email, etc.)
 
 ### 🔧 Development Tools
 
-- **Async CLI**: Schema management and development tools
-- **Testing Suite**: Async test utilities and fixtures
-- **Dev Server**: Development server with hot reload
-- **Documentation**: Auto-generated API documentation
-- **Monitoring**: Performance metrics and health checks
-- **DevContainer**: Ready-to-use development environment
-
-### Field Types and Relationships
-
-```python
-from earnorm import BaseModel, Field
-from typing import List, Optional
-
-class Category(BaseModel):
-    _collection = "categories"
-    name: str = Field(min_length=2)
-    description: Optional[str] = None
-
-class Product(BaseModel):
-    _collection = "products"
-    name: str = Field(min_length=3)
-    price: float = Field(gt=0)
-    
-    # One-to-many relationship with lazy loading
-    category = Many2oneField(Category, lazy=True)
-    
-    # Many-to-many relationship
-    tags = Many2manyField("Tag", lazy=True)
-    
-    async def get_category(self):
-        # Lazy loading in sync mode
-        category = self.category.convert()
-        
-        # Full loading in async mode
-        category = await self.category.async_convert()
-        return category
-
-class Tag(BaseModel):
-    _collection = "tags"
-    name: str = Field(unique=True)
-    products = One2manyField(Product, inverse_field="tags")
-
-## 🚀 Quickstart
-
-### Installation
-```bash
-pip install earnorm
-```
-
-### Define Models
-
-```python
-from earnorm import BaseModel, Field
-from datetime import datetime
-from typing import Optional, List
-
-class User(BaseModel):
-    _collection = "users"
-    _indexes = [
-        {"keys": [("email", 1)], "unique": True}
-    ]
-    
-    username: str = Field(min_length=3)
-    email: str = Field(regex=r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    
-    @property
-    async def orders(self) -> List["Order"]:
-        return await self.env["orders"].find({"user_id": self.id})
-
-class Order(BaseModel):
-    _collection = "orders"
-    _abstract = False
-    
-    user_id: str
-    items: List[str]
-    total: float
-    status: str = "pending"
-    
-    @property
-    async def user(self) -> Optional[User]:
-        return await self.env["users"].find_one({"_id": self.user_id})
-```
-
-### Use Async/Await
-
-```python
-import asyncio
-from earnorm import init_orm
-
-async def main():
-    # Initialize ORM
-    await init_orm(
-        uri="mongodb://localhost:27017",
-        database="myapp",
-        redis_uri="redis://localhost:6379"
-    )
-    
-    # Create user
-    user = User(username="john", email="john@example.com")
-    await user.save()
-    
-    # Create order with validation
-    order = Order(user_id=user.id, items=["item1", "item2"], total=29.99)
-    await order.save()
-    
-    # Efficient querying with async
-    orders = await Order.find(
-        {"total": {"$gt": 20}},
-        sort=[("created_at", -1)],
-        limit=10
-    ).to_list()
-    
-    # Access related documents
-    for order in orders:
-        user = await order.user  # Lazy loading
-        print(f"Order {order.id} by {user.username}")
-
-if __name__ == "__main__":
-    asyncio.run(main())
-
-### Schema Management
-```bash
-# Create/update collections and indexes
-earnorm schema upgrade --database mydb
-
-# View schema information
-earnorm schema info --database mydb
-```
-
-### Security
-
-```python
-# Define groups
-@groups.define
-class UserGroups:
-    ADMIN = "admin"
-    USER = "user"
-
-# Define model with security
-class Order(BaseModel):
-    _collection = "orders"
-    _acl = {
-        "create": ["admin"],
-        "read": ["admin", "user"],
-        "write": ["admin"],
-        "delete": ["admin"]
-    }
-    _audit = {
-        "create": True,
-        "write": ["status", "total"]
-    }
-```
+- **Type Hints**: Full IDE support with auto-completion
+- **Field Validation**: Required fields, unique constraints, and custom validators
+- **Error Handling**: Clear error messages and validation feedback
+- **Documentation**: Comprehensive docstrings and type annotations
+- **Example Code**: Ready-to-use example applications
 
 ## 🏗 Project Status
 
-The project is currently in prototype stage with basic functionality:
+The project is currently in prototype stage with the following functionality:
 
 ✅ Implemented:
 
+- Async Model Base with Motor integration
+- Type-safe RecordSet operations
+- Field types and validation
+- Domain expressions for querying
+- Collection and index management
+- Validators and constraints
+- Basic event system
+
 🚧 In Progress:
 
-- Base Model with Pydantic integration
-- Schema Management (collections, indexes)
-- Security System (ACL, RBAC, Record Rules)
-- Audit Logging
-- CLI Tools
-- Caching System
-- Query Builder
-- Testing Utilities
+- Relationship fields (One2many, Many2one)
+- Caching system
+- Security (ACL, RBAC)
+- Audit logging
+- CLI tools
+- Testing utilities
 - Documentation
 
 ## 📝 Documentation

@@ -11,7 +11,8 @@ from typing import Any, Dict, List, Optional, Set, Type, cast
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo.operations import IndexModel
 
-from earnorm.base.types import ModelProtocol, RecordSetProtocol, RegistryProtocol
+from earnorm.base.recordset import RecordSet
+from earnorm.base.types import ModelProtocol, RegistryProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -196,31 +197,22 @@ class Registry(RegistryProtocol):
             if getattr(model_cls, "_abstract", False)
         ]
 
-    def __getitem__(self, collection: str) -> RecordSetProtocol[ModelProtocol]:
-        """Get recordset for collection.
-
-        Auto-discovers models if not already done.
+    def __getitem__(self, collection: str) -> RecordSet[ModelProtocol]:
+        """Get empty RecordSet for model.
 
         Args:
             collection: Collection name
 
         Returns:
-            RecordSet for the model
+            Empty RecordSet for model
 
         Raises:
             KeyError: If model not found
         """
-        if not self._discovered:
-            self._discover_models()
-
         model_cls = self.get(collection)
         if model_cls is None:
             raise KeyError(f"Model not found: {collection}")
-
-        # Import here to avoid circular import
-        from earnorm.base.recordset import RecordSet
-
-        return RecordSet(model_cls)
+        return RecordSet(model_cls, [])
 
     def get(self, collection: str) -> Optional[Type[ModelProtocol]]:
         """Get model class by collection name.

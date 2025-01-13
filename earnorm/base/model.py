@@ -10,6 +10,7 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
+    Type,
     TypeVar,
     Union,
 )
@@ -19,8 +20,9 @@ from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
 from pymongo.cursor import Cursor
 
 from earnorm.base.domain import Domain, DomainParser
+from earnorm.base.recordset import RecordSet
 from earnorm.base.registry import Registry
-from earnorm.base.types import FieldProtocol, ModelProtocol
+from earnorm.base.types import FieldProtocol, ModelProtocol, RecordSetProtocol
 from earnorm.di import container
 
 # Type aliases
@@ -57,22 +59,19 @@ class BaseModel(ModelProtocol):
 
     # Required attributes
     _name: str = ""
-
-    # Optional attributes with default values
-    _collection: str = ""  # Override collection name
+    _collection: str = ""
     _abstract: bool = False
     _data: Dict[str, Any] = {}
-    _indexes: List[Dict[str, Any]] = []  # Changed to List to match protocol
-    _validators: List[ValidatorFunc[Any]] = []
-    _constraints: List[ConstraintFunc[Any]] = []
-    _acl: AclDict = {}
-    _rules: RuleDict = {}
-    _events: Dict[str, List[ValidatorFunc[Any]]] = {}
-    _audit: AuditConfig = {}
-    _cache: CacheConfig = {}
-    _metrics: MetricsConfig = {}
-    _json_encoders: JsonEncoders = {}
-    env: Registry = env
+    _indexes: List[Dict[str, Any]] = []
+
+    def __init_subclass__(cls) -> None:
+        """Initialize subclass annotations."""
+        super().__init_subclass__()
+        cls.__annotations__ = {}
+        # Set field types in annotations
+        for field_name, field in cls.__dict__.items():
+            if isinstance(field, FieldProtocol):
+                cls.__annotations__[field_name] = type(field.convert(None))
 
     def __init__(self, **data: Any) -> None:
         """Initialize model instance.
@@ -83,6 +82,18 @@ class BaseModel(ModelProtocol):
         self._data = data
         self._collection = getattr(self.__class__, "_collection", self._name)
         self._abstract = getattr(self.__class__, "_abstract", False)
+
+    # Optional attributes with default values
+    _validators: List[ValidatorFunc[Any]] = []
+    _constraints: List[ConstraintFunc[Any]] = []
+    _acl: AclDict = {}
+    _rules: RuleDict = {}
+    _events: Dict[str, List[ValidatorFunc[Any]]] = {}
+    _audit: AuditConfig = {}
+    _cache: CacheConfig = {}
+    _metrics: MetricsConfig = {}
+    _json_encoders: JsonEncoders = {}
+    env: Registry = env
 
     @property
     def id(self) -> Optional[str]:
@@ -159,27 +170,15 @@ class BaseModel(ModelProtocol):
 
     @classmethod
     async def find_one(
-        cls, domain: Optional[List[Any]] = None, **kwargs: Any
-    ) -> Optional["ModelProtocol"]:
-        """Find single document.
-
-        Args:
-            domain: List of domain expressions, e.g:
-                   [('email', '=', 'john@example.com')]
-                   [('age', '>', 18), '|', ('name', '=', 'John'), ('name', '=', 'Jane')]
-            **kwargs: Additional query options
-
-        Returns:
-            Model instance if found, None otherwise
-        """
+        cls: Type[ModelT], domain: Optional[List[Any]] = None, **kwargs: Any
+    ) -> RecordSetProtocol[ModelT]:
+        """Find single record and return as RecordSet."""
         query = DomainParser(domain).to_mongo_query()
         collection = await cls._get_collection()
         data = await collection.find_one(query, **kwargs)
         if data:
-            instance = cls()
-            instance._data = data  # Set raw data from MongoDB
-            return instance
-        return None
+            return RecordSet(cls, [cls(**data)])
+        return RecordSet(cls, [])
 
     @classmethod
     async def find(
@@ -292,3 +291,26 @@ class BaseModel(ModelProtocol):
         if isinstance(cls._indexes, dict):
             return [cls._indexes]
         return cls._indexes
+
+    @classmethod
+    async def search(
+        cls: Type[ModelT], domain: Optional[List[Any]] = None, **kwargs: Any
+    ) -> RecordSetProtocol[ModelT]:
+        """Search records and return RecordSet."""
+        query = DomainParser(domain).to_mongo_query()
+        collection = await cls._get_collection()
+        cursor = collection.find(query, **kwargs)
+        records = [cls(**data) async for data in cursor]
+        return RecordSet(cls, records)
+
+    @classmethod
+    async def browse(cls: Type[ModelT], ids: List[str]) -> RecordSetProtocol[ModelT]:
+        """Browse records by IDs."""
+        domain = [("_id", "in", [ObjectId(id) for id in ids])]
+        return await cls.search(domain)
+
+    def __getattr__(self, name: str) -> Any:
+        """Get dynamic attribute."""
+        if name in self._data:
+            return self._data[name]
+        raise AttributeError(f"'{self.__class__.__name__}' has no attribute '{name}'")

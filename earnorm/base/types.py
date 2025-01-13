@@ -1,8 +1,19 @@
 """Type definitions for EarnORM."""
 
-from typing import Any, Dict, List, Optional, Protocol, Type, TypeVar, runtime_checkable
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    Type,
+    TypeVar,
+    runtime_checkable,
+)
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from typing_extensions import Self
 
 
 @runtime_checkable
@@ -14,6 +25,16 @@ class ModelProtocol(Protocol):
     _abstract: bool
     _data: Dict[str, Any]
     _indexes: List[Dict[str, Any]]
+    __annotations__: Dict[str, Any]
+
+    def __getattr__(self, name: str) -> Any:
+        """Get dynamic attribute."""
+        ...
+
+    @property
+    def data(self) -> Dict[str, Any]:
+        """Get model data."""
+        ...
 
     @classmethod
     def get_collection_name(cls) -> str:
@@ -26,20 +47,27 @@ class ModelProtocol(Protocol):
         ...
 
     @classmethod
+    async def search(
+        cls, domain: Optional[List[Any]] = None, **kwargs: Any
+    ) -> "RecordSetProtocol[Self]":
+        """Search records and return RecordSet."""
+        ...
+
+    @classmethod
+    async def browse(cls, ids: List[str]) -> "RecordSetProtocol[Self]":
+        """Browse records by IDs."""
+        ...
+
+    @classmethod
     async def find_one(
         cls, domain: Optional[List[Any]] = None, **kwargs: Any
-    ) -> Optional["ModelProtocol"]:
-        """Find single document."""
+    ) -> "RecordSetProtocol[Self]":
+        """Find single record."""
         ...
 
     @property
     def id(self) -> Optional[str]:
         """Get record ID."""
-        ...
-
-    @property
-    def data(self) -> Dict[str, Any]:
-        """Get record data."""
         ...
 
     async def validate(self) -> None:
@@ -48,6 +76,10 @@ class ModelProtocol(Protocol):
 
     async def save(self) -> None:
         """Save record."""
+        ...
+
+    async def delete(self) -> None:
+        """Delete record."""
         ...
 
 
@@ -59,6 +91,20 @@ class FieldProtocol(Protocol):
     required: bool
     unique: bool
     default: Any
+
+    def __get__(
+        self, instance: Optional["ModelProtocol"], owner: Type["ModelProtocol"]
+    ) -> Any:
+        """Get field value."""
+        ...
+
+    def __set__(self, instance: Optional["ModelProtocol"], value: Any) -> None:
+        """Set field value."""
+        ...
+
+    def __delete__(self, instance: Optional["ModelProtocol"]) -> None:
+        """Delete field value."""
+        ...
 
     def convert(self, value: Any) -> Any:
         """Convert value to field type."""
@@ -115,6 +161,42 @@ class RecordSetProtocol(Protocol[M_co]):
 
     async def unlink(self) -> bool:
         """Delete records."""
+        ...
+
+    def filtered(self, func: Callable[[M_co], bool]) -> "RecordSetProtocol[M_co]":
+        """Filter records using predicate function."""
+        ...
+
+    def filtered_domain(self, domain: List[Any]) -> "RecordSetProtocol[M_co]":
+        """Filter records using domain expression."""
+        ...
+
+    def sorted(self, key: str, reverse: bool = False) -> "RecordSetProtocol[M_co]":
+        """Sort records by field."""
+        ...
+
+    def mapped(self, field: str) -> List[Any]:
+        """Map field values from records."""
+        ...
+
+    def ensure_one(self) -> M_co:
+        """Ensure recordset contains exactly one record."""
+        ...
+
+    def exists(self) -> bool:
+        """Check if recordset contains any records."""
+        ...
+
+    def count(self) -> int:
+        """Get number of records."""
+        ...
+
+    def first(self) -> Optional[M_co]:
+        """Get first record or None."""
+        ...
+
+    def last(self) -> Optional[M_co]:
+        """Get last record or None."""
         ...
 
 

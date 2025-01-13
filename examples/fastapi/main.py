@@ -1,101 +1,111 @@
-"""FastAPI example application."""
+"""FastAPI integration example."""
 
-from contextlib import asynccontextmanager
-from typing import List
+from typing import List, Optional
 
-from bson import ObjectId
+import uvicorn
 from fastapi import FastAPI, HTTPException
-from models import Post, PostCreate, PostResponse, User, UserCreate, UserResponse
+from pydantic import BaseModel as PydanticModel
 
-from earnorm import init
+import earnorm
+from earnorm import BaseModel, Email, Int, String
+
+app = FastAPI(title="EarnORM FastAPI Example")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Lifespan event handler for FastAPI."""
-    await init(
-        mongo_uri="mongodb://localhost:27017", database="earnorm_fastapi_example"
+class User(BaseModel):
+    """User model."""
+
+    _collection = "users"
+    _name = "user"
+    _indexes = [{"email": 1}]
+
+    name = String(required=True)
+    email = Email(required=True, unique=True)
+    age = Int(required=True)
+
+
+class UserCreate(PydanticModel):
+    """User creation schema."""
+
+    name: str
+    email: str
+    age: int
+
+
+class UserResponse(PydanticModel):
+    """User response schema."""
+
+    id: Optional[str] = None
+    name: str
+    email: str
+    age: int
+
+
+@app.on_event("startup")
+async def startup():
+    """Initialize EarnORM on startup."""
+    await earnorm.init(
+        mongo_uri="mongodb://localhost:27017",
+        database="earnorm_example",
     )
-    yield
 
 
-# Create FastAPI app
-app = FastAPI(title="EarnORM FastAPI Example", lifespan=lifespan)
-
-
-# User endpoints
 @app.post("/users/", response_model=UserResponse)
 async def create_user(user: UserCreate):
     """Create a new user."""
-    # Check if email exists
-    existing = await User.find_one({"email": user.email})
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
-
-    # Create user
-    new_user = User(name=user.name, email=user.email, age=user.age)
-
-    await new_user.save()
-
-    return new_user.to_response()
+    try:
+        user_obj = User(**user.dict())
+        await user_obj.save()
+        return UserResponse(
+            id=user_obj.id,
+            name=user_obj.name,
+            email=user_obj.email,
+            age=user_obj.age,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/users/", response_model=List[UserResponse])
-async def list_users():
-    """List all users."""
-    users = await User.find({})
-    return [user.to_response() for user in users]
+async def list_users(age_gt: Optional[int] = None):
+    """List all users with optional age filter."""
+    domain = [("age", ">", age_gt)] if age_gt else None
+    users = await User.search(domain)
+    return [
+        UserResponse(
+            id=user.id,
+            name=user.name,
+            email=user.email,
+            age=user.age,
+        )
+        for user in users
+    ]
 
 
 @app.get("/users/{user_id}", response_model=UserResponse)
 async def get_user(user_id: str):
-    """Get a specific user."""
-    user = await User.find_one({"_id": ObjectId(user_id)})
-    if not user:
+    """Get a user by ID."""
+    user = await User.find_one([("_id", "=", user_id)])
+    if not user.exists():
         raise HTTPException(status_code=404, detail="User not found")
-
-    return user.to_response()
-
-
-# Post endpoints
-@app.post("/posts/", response_model=PostResponse)
-async def create_post(post: PostCreate):
-    """Create a new post."""
-    # Check if author exists
-    author = await User.find_one({"_id": ObjectId(post.author_id)})
-    if not author:
-        raise HTTPException(status_code=404, detail="Author not found")
-
-    # Create post
-    new_post = Post(title=post.title, content=post.content, author_id=author)
-    await new_post.save()
-
-    return new_post.to_response()
+    record = user.ensure_one()
+    return UserResponse(
+        id=record.id,
+        name=record.name,
+        email=record.email,
+        age=record.age,
+    )
 
 
-@app.get("/posts/", response_model=List[PostResponse])
-async def list_posts():
-    """List all posts."""
-    posts = await Post.find({})
-    return [post.to_response() for post in posts]
-
-
-@app.get("/posts/{post_id}", response_model=PostResponse)
-async def get_post(post_id: str):
-    """Get a specific post."""
-    post = await Post.find_one({"_id": ObjectId(post_id)})
-    if not post:
-        raise HTTPException(status_code=404, detail="Post not found")
-
-    return post.to_response()
-
-
-@app.get("/users/{user_id}/posts", response_model=List[PostResponse])
-async def get_user_posts(user_id: str):
-    """Get all posts by a specific user."""
-    user = await User.find_one({"_id": ObjectId(user_id)})
-    if not user:
+@app.delete("/users/{user_id}")
+async def delete_user(user_id: str):
+    """Delete a user by ID."""
+    user = await User.find_one([("_id", "=", user_id)])
+    if not user.exists():
         raise HTTPException(status_code=404, detail="User not found")
+    await user.unlink()
+    return {"message": "User deleted"}
 
-    posts = await user.posts
-    return [post.to_response() for post in posts]
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
