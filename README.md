@@ -20,6 +20,7 @@
 EarnORM is a high-performance, async-first MongoDB ORM for Python, designed to maximize throughput in I/O-bound applications. Built on top of Motor and Pydantic, it leverages the full power of async/await to handle thousands of database operations concurrently while maintaining type safety and data validation.
 
 🚀 **Key Highlights**:
+
 - **Async-First Design**: Native async/await support throughout the entire stack for maximum I/O performance
 - **Optimized for Speed**: Connection pooling, query optimization, and multi-level caching (memory + Redis)
 - **Type Safety**: Full type hints and runtime validation powered by Pydantic
@@ -31,6 +32,7 @@ Currently in prototype stage, EarnORM aims to be the go-to choice for building h
 ## 🌟 Features
 
 ### ⚡️ Performance Features
+
 - **Async Core**: Built from ground up with async/await for non-blocking I/O operations
 - **Connection Pooling**: Smart connection management for optimal resource utilization
 - **Query Optimization**: Automatic query analysis and index suggestions
@@ -39,6 +41,7 @@ Currently in prototype stage, EarnORM aims to be the go-to choice for building h
 - **Lazy Loading**: Load related documents only when needed
 
 ### 🛡 Core Features
+
 - **Type Safety**: Full type hints and runtime validation with Pydantic
 - **Schema Management**: Automatic collection and index management
 - **Security System**: Comprehensive ACL, RBAC, and Record Rules
@@ -47,6 +50,7 @@ Currently in prototype stage, EarnORM aims to be the go-to choice for building h
 - **Plugin System**: Extensible architecture with plugin support
 
 ### 🔧 Development Tools
+
 - **Async CLI**: Schema management and development tools
 - **Testing Suite**: Async test utilities and fixtures
 - **Dev Server**: Development server with hot reload
@@ -55,6 +59,7 @@ Currently in prototype stage, EarnORM aims to be the go-to choice for building h
 - **DevContainer**: Ready-to-use development environment
 
 ### Field Types and Relationships
+
 ```python
 from earnorm import BaseModel, Field
 from typing import List, Optional
@@ -96,6 +101,7 @@ pip install earnorm
 ```
 
 ### Define Models
+
 ```python
 from earnorm import BaseModel, Field
 from datetime import datetime
@@ -130,6 +136,7 @@ class Order(BaseModel):
 ```
 
 ### Use Async/Await
+
 ```python
 import asyncio
 from earnorm import init_orm
@@ -175,6 +182,7 @@ earnorm schema info --database mydb
 ```
 
 ### Security
+
 ```python
 # Define groups
 @groups.define
@@ -251,4 +259,4 @@ Special thanks to:
 
 - Pydantic team
 - Motor team
-- MongoDB team 
+- MongoDB team

@@ -5,6 +5,7 @@ Core components for EarnORM.
 ## Purpose
 
 The base module provides core functionality:
+
 - Base model with MongoDB support
 - Field types and validation
 - Record Rules and Access Control
@@ -17,6 +18,7 @@ The base module provides core functionality:
 ## Concepts & Examples
 
 ### Base Model
+
 ```python
 from earnorm import BaseModel, Field
 from datetime import datetime
@@ -53,6 +55,7 @@ class User(BaseModel):
 ```
 
 ### Record Rules
+
 ```python
 from earnorm.base import Rule, RuleManager
 
@@ -83,6 +86,7 @@ can_access = await rule_manager.check_access(
 ```
 
 ### RecordSet
+
 ```python
 from earnorm import RecordSet
 
@@ -103,6 +107,7 @@ active_users = user_set.filtered(lambda u: u.active)
 ```
 
 ### Caching
+
 ```python
 from earnorm.cache import cached
 
@@ -118,6 +123,7 @@ class User(BaseModel):
 ```
 
 ### Field Types and Relationships
+
 ```python
 from earnorm.base.fields import (
     StringField, IntegerField, FloatField,
@@ -219,6 +225,7 @@ Key features of relationship fields:
    - Full async/await support
 
 ### API Decorators
+
 ```python
 from earnorm.api import model, multi, returns
 
@@ -246,6 +253,7 @@ class Order(BaseModel):
 ```
 
 ### Model Registry & Environment
+
 ```python
 # Models are automatically registered when defined
 class User(BaseModel):
@@ -273,6 +281,7 @@ async def process_order(order_id: ObjectId):
 ```
 
 ### Inheritance
+
 ```python
 class Vehicle(BaseModel):
     _collection = "vehicles"
@@ -301,6 +310,7 @@ class Car(Vehicle):
 ## Best Practices
 
 1. **Model Design**
+
 - Use type hints with Pydantic models
 - Add field validation and indexes
 - Define clear lifecycle hooks
@@ -309,6 +319,7 @@ class Car(Vehicle):
 - Set collection names and indexes
 
 2. **Security**
+
 - Define record rules
 - Set access control
 - Use security groups
@@ -316,6 +327,7 @@ class Car(Vehicle):
 - Cache access checks
 
 3. **Performance**
+
 - Use recordsets for batch operations
 - Cache frequent queries
 - Optimize database access
@@ -323,6 +335,7 @@ class Car(Vehicle):
 - Handle large datasets
 
 4. **Type Safety**
+
 - Use Pydantic validation
 - Add type hints
 - Handle optional fields
@@ -330,6 +343,7 @@ class Car(Vehicle):
 - Test type conversions
 
 5. **Caching Strategy**
+
 - Cache frequent queries
 - Set appropriate TTL
 - Invalidate on changes
@@ -339,6 +353,7 @@ class Car(Vehicle):
 ## Future Features
 
 1. **Model Features**
+
 - [ ] Computed fields
 - [ ] Virtual fields
 - [ ] Field encryption
@@ -346,6 +361,7 @@ class Car(Vehicle):
 - [ ] Field observers
 
 2. **Security Features**
+
 - [ ] Row-level security
 - [ ] Field-level security
 - [ ] Audit logging
@@ -353,6 +369,7 @@ class Car(Vehicle):
 - [ ] Security policies
 
 3. **Performance Features**
+
 - [ ] Query optimization
 - [ ] Bulk operations
 - [ ] Async iteration
@@ -360,6 +377,7 @@ class Car(Vehicle):
 - [ ] Query profiling
 
 4. **Cache Features**
+
 - [ ] Distributed caching
 - [ ] Cache invalidation
 - [ ] Cache warming
@@ -367,8 +385,9 @@ class Car(Vehicle):
 - [ ] Cache policies
 
 5. **Type Features**
+
 - [ ] Custom types
 - [ ] Type conversion
 - [ ] Type validation
 - [ ] Generic types
-- [ ] Type inference 
+- [ ] Type inference
