@@ -1,392 +1,191 @@
-"""Base model implementation."""
+"""Base model for EarnORM."""
 
-from datetime import datetime, timezone
-from functools import wraps
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Type, TypeVar, cast
+from typing import Any, Dict, List, Optional, Sequence, Type, TypeVar, cast
 
-from bson import ObjectId
-from motor.motor_asyncio import AsyncIOMotorClientSession, AsyncIOMotorCursor
-from pydantic import BaseModel as PydanticBaseModel
-
-from ..cache.cache import cache, cached
-from ..validation.decorators import validates
-from ..validation.validators import ValidationError
-from .connection import ConnectionManager
-from .recordset import RecordSet
-from .schema import schema_manager
+from ..di.container import container
+from .types import AclDict, AclManager, AuditConfig
+from .types import BaseModel as BaseModelProtocol
+from .types import (
+    CacheConfig,
+    ConstraintFunc,
+    IndexDict,
+    JsonEncoders,
+    MetricsConfig,
+    MetricsManager,
+    PoolManager,
+    RuleDict,
+    RuleManager,
+    ValidatorFunc,
+)
 
 T = TypeVar("T", bound="BaseModel")
-HookType = Callable[..., Awaitable[None]]
-ModelType = TypeVar("ModelType", bound="BaseModel")
 
 
-def hook(func: HookType) -> HookType:
-    """Decorator for lifecycle hooks."""
+class BaseModel(BaseModelProtocol):
+    """Base model for EarnORM.
 
-    @wraps(func)
-    async def wrapper(self: "BaseModel", *args: Any, **kwargs: Any) -> None:
-        return await func(self, *args, **kwargs)
+    Provides core functionality for models:
+    - Database operations
+    - Validation
+    - Access control
+    - Caching
+    - Events
+    - Metrics
+    """
 
-    return cast(HookType, wrapper)
+    # Model configuration
+    _collection: str = ""
+    _data: Dict[str, Any] = {}
+    _indexes: IndexDict = {}
+    _validators: List[ValidatorFunc[Any]] = []
+    _constraints: List[ConstraintFunc[Any]] = []
+    _acl: AclDict = {}
+    _rules: RuleDict = {}
+    _events: Dict[str, List[ValidatorFunc[Any]]] = {}
+    _audit: AuditConfig = {}
+    _cache: CacheConfig = {}
+    _metrics: MetricsConfig = {}
+    _json_encoders: JsonEncoders = {}
 
+    def __init__(self, **data: Any) -> None:
+        """Initialize model.
 
-class BaseModel(PydanticBaseModel):
-    """Base model with MongoDB support."""
-
-    # Collection configuration
-    _collection: str
-    _abstract: bool = False  # Set to True to skip collection creation
-    _indexes: List[Dict[str, Any]] = []  # List of index configurations
-
-    # Common fields
-    id: Optional[ObjectId] = None
-
-    class Config:
-        """Pydantic configuration."""
-
-        arbitrary_types_allowed = True
-        json_encoders: Dict[Type[Any], Any] = {
-            ObjectId: str,
-            datetime: lambda dt: (
-                dt if isinstance(dt, datetime) else datetime.now(timezone.utc)
-            ).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-        }
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        """Register model with schema manager."""
-        super().__init_subclass__(**kwargs)
-        schema_manager.register_model(cls)
-
-    # Lifecycle Hooks
-    @hook
-    async def before_validate(self) -> None:
-        """Hook called before validation."""
-        pass
-
-    @hook
-    async def after_validate(self) -> None:
-        """Hook called after validation."""
-        pass
-
-    @hook
-    async def before_create(self) -> None:
-        """Hook called before creating a new document."""
-        pass
-
-    @hook
-    async def after_create(self) -> None:
-        """Hook called after successful creation."""
-        pass
-
-    @hook
-    async def before_update(self) -> None:
-        """Hook called before updating document."""
-        pass
-
-    @hook
-    async def after_update(self) -> None:
-        """Hook called after successful update."""
-        pass
-
-    @hook
-    async def before_delete(self) -> None:
-        """Hook called before deleting document."""
-        pass
-
-    @hook
-    async def after_delete(self) -> None:
-        """Hook called after successful deletion."""
-        pass
-
-    @hook
-    async def before_save(self) -> None:
-        """Hook called before saving document (create or update)."""
-        pass
-
-    @hook
-    async def after_save(self) -> None:
-        """Hook called after successful save."""
-        pass
+        Args:
+            **data: Model data
+        """
+        self._data = data
 
     @classmethod
     def get_collection(cls) -> str:
-        """Get collection name."""
+        """Get collection name.
+
+        Returns:
+            Collection name
+        """
         return cls._collection
 
-    @classmethod
-    def get_indexes(cls) -> List[Dict[str, Any]]:
-        """Get index configurations."""
-        return cls._indexes
+    async def save(self) -> None:
+        """Save model to database."""
+        # Get collection
+        pool_manager = cast(PoolManager, await container.get("pool_manager"))
+        collection = await pool_manager.get_collection(self._collection)
 
-    @classmethod
-    def add_index(
-        cls, keys: List[tuple[str, int]], unique: bool = False, **kwargs: Any
-    ) -> None:
-        """Add an index configuration."""
-        cls._indexes.append({"keys": keys, "unique": unique, **kwargs})
+        # Validate data
+        await self._validate()
 
-    @validates
-    async def _validate(self) -> None:
-        """Run model validation."""
-        # Run before validation hook
-        await self.before_validate()
+        # Check access
+        await self._check_access()
 
-        # Get validation methods
-        methods: List[Callable[..., Any]] = []
-        for name in dir(self):
-            if name.startswith("validate_"):
-                method = getattr(self, name)
-                if callable(method):
-                    methods.append(method)
+        # Run before save hooks
+        await self._run_hooks("before_save")
 
-        # Run validation methods
-        for method in methods:
-            try:
-                await method()
-            except ValidationError as e:
-                if not e.field:
-                    e.field = method.__name__.replace("validate_", "")
-                raise e
-
-        # Run after validation hook
-        await self.after_validate()
-
-    async def save(
-        self,
-        session: Optional[AsyncIOMotorClientSession] = None,
-    ) -> bool:
-        """Save document (create or update)."""
-        # Validate before save
-        try:
-            await self._validate()
-        except ValidationError as e:
-            raise ValueError(f"Validation failed for field {e.field}: {e.message}")
-
-        await self.before_save()
-
-        if self.id is None:
-            # Create new document
-            await self.before_create()
-
-            conn = ConnectionManager()
-            collection = conn.get_collection(self.get_collection())
-
-            doc = self.model_dump(exclude={"id"})
-            result = await collection.insert_one(doc, session=session)
-
-            self.id = result.inserted_id
-            await self.after_create()
-        else:
-            # Update existing document
-            await self.before_update()
-
-            conn = ConnectionManager()
-            collection = conn.get_collection(self.get_collection())
-
-            doc = self.model_dump(exclude={"id"})
-            result = await collection.update_one(
-                {"_id": self.id},
-                {"$set": doc},
-                session=session,
+        # Save to database
+        if "_id" in self._data:
+            await collection.update_one(
+                {"_id": self._data["_id"]}, {"$set": self._data}
             )
+        else:
+            result = await collection.insert_one(self._data)
+            self._data["_id"] = result.inserted_id
 
-            if result.modified_count == 0:
-                return False
+        # Run after save hooks
+        await self._run_hooks("after_save")
 
-            await self.after_update()
+        # Track metrics
+        metrics_manager = cast(MetricsManager, await container.get("metrics_manager"))
+        await metrics_manager.track_operation("save", self._collection, self._metrics)
 
-        await self.after_save()
-        # Invalidate cache
-        cache.delete(f"{self.__class__.__name__}:find_one:{{'_id':{self.id}}}")
-        cache.delete(f"{self.__class__.__name__}:find")
-        return True
+    async def delete(self) -> None:
+        """Delete model from database."""
+        # Get collection
+        pool_manager = cast(PoolManager, await container.get("pool_manager"))
+        collection = await pool_manager.get_collection(self._collection)
+
+        # Check access
+        await self._check_access()
+
+        # Run before delete hooks
+        await self._run_hooks("before_delete")
+
+        # Delete from database
+        await collection.delete_one({"_id": self._data["_id"]})
+
+        # Run after delete hooks
+        await self._run_hooks("after_delete")
+
+        # Track metrics
+        metrics_manager = cast(MetricsManager, await container.get("metrics_manager"))
+        await metrics_manager.track_operation("delete", self._collection, self._metrics)
 
     @classmethod
-    @cached(ttl=300, key_pattern="{0.__name__}:find_one:{1}")
-    async def find_one(
-        cls: Type[ModelType],
-        filter: Optional[Dict[str, Any]] = None,
-        session: Optional[AsyncIOMotorClientSession] = None,
-        **kwargs: Any,
-    ) -> Optional[RecordSet[ModelType]]:
+    async def find_one(cls: Type[T], filter_: Dict[str, Any]) -> Optional[T]:
         """Find single document.
 
         Args:
-            filter: Query filter
-            session: Optional database session
-            **kwargs: Additional arguments for find_one
+            filter_: Query filter
 
         Returns:
-            RecordSet containing single document or None if not found
+            Model instance or None if not found
         """
-        conn = ConnectionManager()
-        collection = conn.get_collection(cls.get_collection())
+        # Get collection
+        pool_manager = cast(PoolManager, await container.get("pool_manager"))
+        collection = await pool_manager.get_collection(cls._collection)
 
-        doc = await collection.find_one(filter or {}, session=session, **kwargs)
+        # Find document
+        doc = await collection.find_one(filter_)
         if doc is None:
             return None
 
-        return RecordSet(cls, [cls.model_validate(doc)])
+        # Create model instance
+        return cls(**doc)
 
     @classmethod
-    @cached(ttl=300, key_pattern="{0.__name__}:find:{1}")
-    async def find(
-        cls: Type[ModelType],
-        filter: Optional[Dict[str, Any]] = None,
-        session: Optional[AsyncIOMotorClientSession] = None,
-        **kwargs: Any,
-    ) -> RecordSet[ModelType]:
+    async def find(cls: Type[T], filter_: Dict[str, Any]) -> Sequence[T]:
         """Find multiple documents.
 
         Args:
-            filter: Query filter
-            session: Optional database session
-            **kwargs: Additional arguments for find
+            filter_: Query filter
 
         Returns:
-            RecordSet containing found documents
+            List of model instances
         """
-        conn = ConnectionManager()
-        collection = conn.get_collection(cls.get_collection())
+        # Get collection
+        pool_manager = cast(PoolManager, await container.get("pool_manager"))
+        collection = await pool_manager.get_collection(cls._collection)
 
-        cursor = cast(
-            AsyncIOMotorCursor[Dict[str, Any]],
-            collection.find(filter or {}, session=session, **kwargs),
-        )
-        docs = cast(List[Dict[str, Any]], await cursor.to_list(length=None))
+        # Find documents
+        docs = await collection.find(filter_).to_list(None)
 
-        return RecordSet(cls, [cls.model_validate(doc) for doc in docs])
+        # Create model instances
+        return [cls(**doc) for doc in docs]
 
-    async def delete(
-        self,
-        session: Optional[AsyncIOMotorClientSession] = None,
-    ) -> bool:
-        """Delete document.
+    async def _validate(self) -> None:
+        """Validate model data."""
+        # Run validators
+        for validator in self._validators:
+            await validator(self)
+
+        # Run constraints
+        for constraint in self._constraints:
+            await constraint(self)
+
+    async def _check_access(self) -> None:
+        """Check access control."""
+        # Check ACL
+        acl_manager = cast(AclManager, await container.get("acl_manager"))
+        await acl_manager.check_access(self)
+
+        # Check rules
+        rule_manager = cast(RuleManager, await container.get("rule_manager"))
+        await rule_manager.check_rules(self)
+
+    async def _run_hooks(self, event: str) -> None:
+        """Run lifecycle hooks.
 
         Args:
-            session: Optional database session
-
-        Returns:
-            bool: True if successful
+            event: Event name
         """
-        if self.id is None:
-            return False
-
-        await self.before_delete()
-
-        conn = ConnectionManager()
-        collection = conn.get_collection(self.get_collection())
-
-        result = await collection.delete_one({"_id": self.id}, session=session)
-
-        if result.deleted_count == 0:
-            return False
-
-        await self.after_delete()
-        # Invalidate cache
-        cache.delete(f"{self.__class__.__name__}:find_one:{{'_id':{self.id}}}")
-        cache.delete(f"{self.__class__.__name__}:find")
-        return True
-
-    @classmethod
-    async def create(
-        cls,
-        data: Dict[str, Any],
-        session: Optional[AsyncIOMotorClientSession] = None,
-    ) -> "BaseModel":
-        """Create new document.
-
-        Args:
-            data: Document data
-            session: Optional database session
-
-        Returns:
-            Created document
-        """
-        instance = cls(**data)
-        await instance.save(session=session)
-        return instance
-
-    @classmethod
-    async def update(
-        cls: Type[ModelType],
-        filter: Dict[str, Any],
-        update: Dict[str, Any],
-        session: Optional[AsyncIOMotorClientSession] = None,
-    ) -> RecordSet[ModelType]:
-        """Update documents.
-
-        Args:
-            filter: Query filter
-            update: Update operations
-            session: Optional database session
-
-        Returns:
-            RecordSet containing updated documents
-        """
-        conn = ConnectionManager()
-        collection = conn.get_collection(cls.get_collection())
-
-        result = await collection.update_many(filter, update, session=session)
-        if result.modified_count > 0:
-            # Return updated documents
-            return await cls.find(filter, session=session)
-        return RecordSet(cls, [])
-
-    @classmethod
-    async def delete_many(
-        cls,
-        filter: Dict[str, Any],
-        session: Optional[AsyncIOMotorClientSession] = None,
-    ) -> bool:
-        """Delete multiple documents.
-
-        Args:
-            filter: Query filter
-            session: Optional database session
-
-        Returns:
-            bool: True if successful
-        """
-        conn = ConnectionManager()
-        collection = conn.get_collection(cls.get_collection())
-
-        result = await collection.delete_many(filter, session=session)
-        return result.deleted_count > 0
-
-    @classmethod
-    async def count(
-        cls,
-        filter: Optional[Dict[str, Any]] = None,
-        session: Optional[AsyncIOMotorClientSession] = None,
-    ) -> int:
-        """Count documents.
-
-        Args:
-            filter: Query filter
-            session: Optional database session
-
-        Returns:
-            Number of documents
-        """
-        conn = ConnectionManager()
-        collection = conn.get_collection(cls.get_collection())
-
-        return await collection.count_documents(filter or {}, session=session)
-
-    @classmethod
-    async def exists(
-        cls,
-        filter: Dict[str, Any],
-        session: Optional[AsyncIOMotorClientSession] = None,
-    ) -> bool:
-        """Check if documents exist.
-
-        Args:
-            filter: Query filter
-            session: Optional database session
-
-        Returns:
-            bool: True if documents exist
-        """
-        return await cls.count(filter, session=session) > 0
+        if event in self._events:
+            hooks = self._events[event]
+            for hook in hooks:
+                await hook(self)

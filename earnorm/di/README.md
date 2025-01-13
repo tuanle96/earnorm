@@ -1,212 +1,475 @@
-# Dependency Injection Components
+# EarnORM Dependency Injection
 
-Dependency Injection system for EarnORM using dependency-injector.
+EarnORM DI is a simple yet powerful dependency injection system designed for Python applications, especially for use with FastAPI.
 
-## Purpose
+## Key Features
 
-The DI module provides dependency injection capabilities:
-- Container management
-- Service providers
-- Dependency resolution
-- Lifecycle management
-- Scoped dependencies
-- Configuration injection
+- Container-based dependency management
+- Service providers with lifecycle management
+- Protocol-based dependency injection
+- Seamless FastAPI integration
+- Flexible configuration management
+- Service lifecycle management
 
-## Concepts & Examples
+## Installation
 
-### Basic Container
-```python
-# Container definition
-from dependency_injector import containers, providers
+EarnORM DI is included in the EarnORM package:
 
-class Container(containers.DeclarativeContainer):
-    config = providers.Configuration()
-    
-    # Database
-    db = providers.Singleton(
-        Database,
-        uri=config.db.uri,
-        pool_size=config.db.pool_size
-    )
-    
-    # Services
-    user_service = providers.Factory(
-        UserService,
-        db=db,
-        cache=cache
-    )
-    
-    # Repositories
-    user_repository = providers.Factory(
-        UserRepository,
-        db=db
-    )
-
-# Container usage
-container = Container()
-container.config.from_dict({
-    "db": {
-        "uri": "mongodb://localhost:27017",
-        "pool_size": 10
-    }
-})
-
-user_service = container.user_service()
+```bash
+pdm add earnorm
 ```
 
-### Service Providers
-```python
-# Service definition
-@injectable
-class UserService:
-    def __init__(self, db: Database, cache: Cache):
-        self.db = db
-        self.cache = cache
-    
-    @inject
-    def get_user(self, user_id: str, auth: AuthService):
-        if not auth.can_access(user_id):
-            raise PermissionError()
-        return self.db.users.find_one(id=user_id)
+## Basic Usage
 
-# Provider registration
-class ServiceProvider(providers.Provider):
-    def __init__(self):
-        self.services = {
-            "user": UserService,
-            "auth": AuthService,
-            "email": EmailService
+### 1. Define Services
+
+```python
+from earnorm.di.types import BaseManager
+from earnorm.base.pool import MongoPoolManager
+from motor.motor_asyncio import AsyncIOMotorClient
+from typing import Optional, Dict, Any
+
+class DatabaseService(BaseManager):
+    """MongoDB database service."""
+    
+    def __init__(self) -> None:
+        self.pool_manager: Optional[MongoPoolManager] = None
+        
+    async def init(self) -> None:
+        """Initialize database service."""
+        self.pool_manager = MongoPoolManager()
+        
+    async def cleanup(self) -> None:
+        """Cleanup database connections."""
+        if self.pool_manager:
+            self.pool_manager.close_all()
+            
+    def get_database(self, name: str = "earnbase"):
+        """Get database by name."""
+        return self.pool_manager.get_database()
+        
+    def get_collection(self, name: str):
+        """Get collection by name."""
+        return self.pool_manager.get_collection(name)
+
+class UserService(BaseManager):
+    """User service with database dependency."""
+    
+    def __init__(self, db_service: DatabaseService) -> None:
+        self.db = db_service
+        self.collection = None
+        
+    async def init(self) -> None:
+        """Initialize user collection."""
+        self.collection = self.db.get_collection("users")
+        
+    async def cleanup(self) -> None:
+        """Cleanup resources."""
+        self.collection = None
+        
+    async def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get user by ID."""
+        return await self.collection.find_one({"_id": user_id})
+        
+    async def create_user(self, user_data: Dict[str, Any]) -> str:
+        """Create new user."""
+        result = await self.collection.insert_one(user_data)
+        return str(result.inserted_id)
+        
+    async def update_user(self, user_id: str, update_data: Dict[str, Any]) -> bool:
+        """Update user data."""
+        result = await self.collection.update_one(
+            {"_id": user_id}, 
+            {"$set": update_data}
+        )
+        return result.modified_count > 0
+```
+
+### 2. Register Services with Container
+
+```python
+from earnorm.di.container import Container
+from earnorm.di.types import BaseManager
+
+# Initialize container
+container = Container[BaseManager]()
+
+# Register services
+container.register(DatabaseService, DatabaseService)
+container.register(UserService, UserService)
+
+# Initialize services
+await container.init()
+```
+
+### 3. FastAPI Integration
+
+```python
+from fastapi import FastAPI, Depends, HTTPException
+from earnorm.di.container import container
+from typing import Dict, Any, List
+
+app = FastAPI()
+
+# Dependencies
+async def get_user_service():
+    return container.get(UserService)
+
+# User model for request/response
+class UserCreate(BaseModel):
+    name: str
+    email: str
+    role: str = "user"
+
+class UserUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    role: Optional[str] = None
+
+class UserResponse(BaseModel):
+    id: str
+    name: str
+    email: str
+    role: str
+
+# Routes
+@app.post("/users", response_model=UserResponse)
+async def create_user(
+    user: UserCreate,
+    user_service: UserService = Depends(get_user_service)
+):
+    """Create new user."""
+    user_id = await user_service.create_user(user.dict())
+    return {"id": user_id, **user.dict()}
+
+@app.get("/users/{user_id}", response_model=UserResponse)
+async def get_user(
+    user_id: str,
+    user_service: UserService = Depends(get_user_service)
+):
+    """Get user by ID."""
+    user = await user_service.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+@app.patch("/users/{user_id}", response_model=UserResponse)
+async def update_user(
+    user_id: str,
+    update_data: UserUpdate,
+    user_service: UserService = Depends(get_user_service)
+):
+    """Update user data."""
+    # Remove None values
+    update_dict = {k: v for k, v in update_data.dict().items() if v is not None}
+    
+    success = await user_service.update_user(user_id, update_dict)
+    if not success:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    # Get updated user
+    user = await user_service.get_user(user_id)
+    return user
+
+# Lifecycle events
+@app.on_event("startup")
+async def startup():
+    """Initialize services."""
+    await container.init()
+
+@app.on_event("shutdown")
+async def shutdown():
+    """Cleanup services."""
+    await container.cleanup()
+```
+
+## Complete Example with Models
+
+Here's a complete example using EarnORM models and DI:
+
+```python
+from earnorm.base.model import BaseModel
+from earnorm.di.container import Container
+from earnorm.di.types import BaseManager
+from fastapi import FastAPI, Depends, HTTPException
+from typing import Optional, Dict, Any
+import uvicorn
+
+# 1. Define Model
+class User(BaseModel):
+    """User model."""
+    
+    _collection = "users"
+    
+    # Validators
+    _validators = [
+        lambda user: assert user._data.get("email"), "Email is required",
+        lambda user: assert "@" in user._data.get("email", ""), "Invalid email"
+    ]
+    
+    # Indexes
+    _indexes = {
+        "email_unique": {
+            "keys": [("email", 1)],
+            "unique": True
         }
+    }
     
-    def get_service(self, name):
-        return self.services[name]()
+    # Access control
+    _acl = {
+        "create": ["admin"],
+        "read": ["admin", "user"],
+        "update": ["admin"],
+        "delete": ["admin"]
+    }
+    
+    # Audit config
+    _audit = {
+        "enabled": True,
+        "events": ["create", "update", "delete"]
+    }
+    
+    # Cache config
+    _cache = {
+        "enabled": True,
+        "ttl": 300  # 5 minutes
+    }
+
+# 2. Define Services
+class UserService(BaseManager):
+    """User service."""
+    
+    def __init__(self) -> None:
+        self.model = User
+        
+    async def init(self) -> None:
+        """Initialize service."""
+        pass
+        
+    async def cleanup(self) -> None:
+        """Cleanup resources."""
+        pass
+        
+    async def create_user(self, data: Dict[str, Any]) -> str:
+        """Create new user."""
+        user = self.model(**data)
+        await user.save()
+        return str(user._data["_id"])
+        
+    async def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get user by ID."""
+        user = await self.model.find_one({"_id": user_id})
+        return user._data if user else None
+        
+    async def update_user(self, user_id: str, data: Dict[str, Any]) -> bool:
+        """Update user."""
+        user = await self.model.find_one({"_id": user_id})
+        if not user:
+            return False
+            
+        user._data.update(data)
+        await user.save()
+        return True
+        
+    async def delete_user(self, user_id: str) -> bool:
+        """Delete user."""
+        user = await self.model.find_one({"_id": user_id})
+        if not user:
+            return False
+            
+        await user.delete()
+        return True
+
+# 3. Setup Container
+container = Container[BaseManager]()
+container.register(UserService, UserService)
+
+# 4. Create FastAPI App
+app = FastAPI(title="EarnORM Example")
+
+# 5. Define Dependencies
+def get_user_service():
+    return container.get(UserService)
+
+# 6. Define Routes
+@app.post("/users")
+async def create_user(
+    user: Dict[str, Any],
+    user_service: UserService = Depends(get_user_service)
+):
+    """Create new user."""
+    try:
+        user_id = await user_service.create_user(user)
+        return {"id": user_id, **user}
+    except AssertionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/users/{user_id}")
+async def get_user(
+    user_id: str,
+    user_service: UserService = Depends(get_user_service)
+):
+    """Get user by ID."""
+    user = await user_service.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+@app.patch("/users/{user_id}")
+async def update_user(
+    user_id: str,
+    update_data: Dict[str, Any],
+    user_service: UserService = Depends(get_user_service)
+):
+    """Update user."""
+    try:
+        success = await user_service.update_user(user_id, update_data)
+        if not success:
+            raise HTTPException(status_code=404, detail="User not found")
+        return await user_service.get_user(user_id)
+    except AssertionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.delete("/users/{user_id}")
+async def delete_user(
+    user_id: str,
+    user_service: UserService = Depends(get_user_service)
+):
+    """Delete user."""
+    success = await user_service.delete_user(user_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"message": "User deleted"}
+
+# 7. Setup Lifecycle Events
+@app.on_event("startup")
+async def startup():
+    """Initialize all services."""
+    await container.init()
+
+@app.on_event("shutdown")
+async def shutdown():
+    """Cleanup all services."""
+    await container.cleanup()
+
+# 8. Run Application
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 ```
 
-### Scoped Dependencies
-```python
-# Request scope
-class RequestScope(containers.DeclarativeContainer):
-    request = providers.Object()
-    
-    session = providers.Singleton(
-        Session,
-        request=request
-    )
-    
-    current_user = providers.Factory(
-        get_current_user,
-        session=session
-    )
+## Advanced Features
 
-# Scope usage
-@inject
-def handle_request(request, scope: RequestScope):
-    scope.override(request=request)
-    user = scope.current_user()
-    return process_request(user)
+### 1. Lifecycle Hooks
+
+```python
+from earnorm.di.lifecycle import LifecycleHooks
+from earnorm.base.pool import MongoPoolManager
+
+class DatabaseService(BaseManager, LifecycleHooks):
+    def __init__(self) -> None:
+        self.pool_manager = MongoPoolManager()
+        
+    async def on_init(self):
+        """Initialize database connections."""
+        # Setup connection pools
+        self.pool_manager.get_pool("mongodb://localhost:27017")
+        
+    async def on_start(self):
+        """Start monitoring."""
+        # Setup monitoring
+        pass
+        
+    async def on_stop(self):
+        """Stop monitoring."""
+        # Cleanup monitoring
+        pass
+        
+    async def on_cleanup(self):
+        """Cleanup all resources."""
+        self.pool_manager.close_all()
 ```
 
-### Configuration Injection
+### 2. Service Provider Pattern
+
 ```python
-# Config injection
-class AppContainer(containers.DeclarativeContainer):
-    config = providers.Configuration()
-    
-    db_pool = providers.Singleton(
-        ConnectionPool,
-        uri=config.db.uri,
-        min_size=config.db.pool.min_size,
-        max_size=config.db.pool.max_size
-    )
-    
-    cache = providers.Singleton(
-        Cache,
-        host=config.cache.host,
-        port=config.cache.port
-    )
+from earnorm.di.providers import ServiceProvider
+from earnorm.base.pool import MongoPoolManager
 
-# Load config
-container = AppContainer()
-container.config.from_yaml('config.yml')
-```
+# Create provider
+provider = ServiceProvider()
 
-### Lifecycle Management
-```python
-# Resource lifecycle
-class ResourceContainer(containers.DeclarativeContainer):
-    @providers.singleton
-    def database(self) -> Database:
-        db = Database()
-        yield db
-        db.close()
-    
-    @providers.factory
-    def session(self, db=database) -> Session:
-        session = Session(db)
-        yield session
-        session.close()
+# Register core services
+provider.register("database", DatabaseService)
+provider.register("user", UserService)
+provider.register("pool", MongoPoolManager)
 
-# Cleanup
-def shutdown():
-    container.shutdown_resources()
+# Initialize all services
+await provider.start_all()
+
+# Stop all services
+await provider.stop_all()
 ```
 
 ## Best Practices
 
-1. **Container Design**
-- Single responsibility
-- Clear dependencies
-- Proper scoping
-- Resource management
-- Error handling
+1. **Use Protocols**: Always define and use protocols for services to ensure loose coupling.
 
-2. **Service Management**
-- Interface based
-- Loose coupling
-- Clear lifecycle
-- Easy testing
-- Good documentation
+2. **Lifecycle Management**: Implement init() and cleanup() methods for each service properly.
 
-3. **Configuration**
-- Environment aware
-- Validation
-- Overrides
-- Defaults
-- Documentation
+3. **Dependency Chain**: Arrange dependencies in a logical initialization order.
 
-4. **Testing**
-- Mock dependencies
-- Test containers
-- Verify injection
-- Check lifecycles
-- Monitor resources
+4. **Configuration**: Use configuration injection through the container constructor.
 
-## Future Features
+5. **Testing**: Use mock services in testing by registering mock implementations.
 
-1. **Container Features**
-- [ ] Auto-discovery
-- [ ] Hot reload
-- [ ] Dependency graph
-- [ ] Circular detection
-- [ ] Plugin support
+## Testing
 
-2. **Service Features**
-- [ ] Async support
-- [ ] Event system
-- [ ] Middleware
-- [ ] Interceptors
-- [ ] Decorators
+```python
+import pytest
+from unittest.mock import AsyncMock, MagicMock
+from earnorm.base.pool import MongoPoolManager
 
-3. **Configuration Features**
-- [ ] Schema validation
-- [ ] Dynamic config
-- [ ] Config inheritance
-- [ ] Environment vars
-- [ ] Secret management
+class MockMongoPoolManager(MongoPoolManager):
+    def __init__(self):
+        super().__init__()
+        self.collection = AsyncMock()
+        
+    def get_collection(self, name: str):
+        return self.collection
 
-4. **Development Features**
-- [ ] Debug tools
-- [ ] Performance monitoring
-- [ ] Testing utilities
-- [ ] Documentation gen
-- [ ] IDE integration 
+class MockDatabaseService(DatabaseService):
+    async def init(self):
+        self.pool_manager = MockMongoPoolManager()
+
+@pytest.fixture
+async def test_container():
+    container = Container()
+    container.register(DatabaseService, MockDatabaseService)
+    container.register(UserService, UserService)
+    await container.init()
+    yield container
+    await container.cleanup()
+
+async def test_user_service(test_container):
+    user_service = test_container.get(UserService)
+    
+    # Setup mock return value
+    user_service.db.pool_manager.collection.find_one.return_value = {
+        "_id": "123",
+        "name": "Test User",
+        "email": "test@example.com"
+    }
+    
+    # Test get_user
+    user = await user_service.get_user("123")
+    assert user["name"] == "Test User"
+    assert user["email"] == "test@example.com"
+```
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details. 
