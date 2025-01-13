@@ -64,10 +64,8 @@ class Registry(RegistryProtocol):
     def _get_collection_name(self, model_cls: Type[ModelProtocol]) -> str:
         """Get collection name for model class.
 
-        The collection name is determined in the following order:
-        1. _collection attribute if defined
-        2. _name attribute if defined (Odoo style)
-        3. Lowercase class name
+        The collection name is determined by calling get_collection_name()
+        on the model class.
 
         Args:
             model_cls: Model class
@@ -75,11 +73,7 @@ class Registry(RegistryProtocol):
         Returns:
             Collection name
         """
-        if hasattr(model_cls, "_collection") and model_cls._collection:
-            return model_cls._collection
-        if hasattr(model_cls, "_name") and model_cls._name:
-            return model_cls._name
-        return model_cls.__name__.lower()
+        return model_cls.get_collection_name()
 
     def _is_model_class(self, obj: Any) -> bool:
         """Check if object is a model class."""
@@ -260,10 +254,9 @@ class Registry(RegistryProtocol):
         for model_cls in self._models.values():
             if not getattr(model_cls, "_abstract", False):
                 collection = self._get_collection_name(model_cls)
-                if hasattr(model_cls, "_indexes"):
-                    indexes = [IndexModel(idx) for idx in model_cls._indexes]
-                    if indexes:
-                        await db[collection].create_indexes(indexes)
+                indexes = [IndexModel(idx) for idx in model_cls.get_indexes()]
+                if indexes:
+                    await db[collection].create_indexes(indexes)
 
     @property
     def db(self) -> Optional[AsyncIOMotorDatabase[dict[str, Any]]]:

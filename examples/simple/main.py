@@ -2,11 +2,10 @@
 
 import asyncio
 import logging
-import os
 
 from models import User
 
-from earnorm import init, registry
+import earnorm
 
 # Configure logging
 logging.basicConfig(
@@ -18,15 +17,10 @@ logger = logging.getLogger(__name__)
 async def main():
     """Main function."""
     try:
-        # Add models path to registry
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        models_file = os.path.join(current_dir, "models.py")
-        registry.add_scan_path(models_file)
-
         # Initialize EarnORM
         logger.info("Initializing EarnORM")
         mongo_uri = "mongodb://localhost:27017"
-        await init(
+        await earnorm.init(
             mongo_uri=mongo_uri,
             database="earnorm_example",
         )
@@ -37,6 +31,18 @@ async def main():
         user = User(name="John Doe", email="john@example.com", age=30)
         await user.save()
         logger.info("User created successfully")
+
+        # Find a user
+        logger.info("Finding user")
+        user = await User.find_one([("email", "=", "john@example.com")])
+        if user:
+            logger.info("User found: %s", user)
+            logger.info("User email: %s", user.email)
+            logger.info("User age: %s", user.age)
+            logger.info("User name: %s", user.name)
+        else:
+            logger.error("User not found")
+
     except Exception as e:
         logger.error("Failed to run example: %s", e)
         raise

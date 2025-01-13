@@ -6,13 +6,13 @@ from typing import Any, Dict, Generic, List, Optional, Type, TypeVar, Union
 from bson import ObjectId
 from typing_extensions import Self
 
-from earnorm.base.model import BaseModel
+from earnorm.base.types import FieldProtocol, ModelProtocol
 
 T = TypeVar("T")
-M = TypeVar("M", bound=BaseModel)
+M = TypeVar("M", bound=ModelProtocol)
 
 
-class Field(Generic[T]):
+class Field(FieldProtocol, Generic[T]):
     """Base field class."""
 
     def __init__(
@@ -28,10 +28,9 @@ class Field(Generic[T]):
         self.unique = unique
         self.default = default
         self.name: str = ""
-        self.model_cls: Optional[Type[BaseModel]] = None
 
     def __get__(
-        self, instance: Optional[BaseModel], owner: Type[BaseModel]
+        self, instance: Optional[ModelProtocol], owner: Type[ModelProtocol]
     ) -> Union[Self, T]:
         """Get field value.
 
@@ -43,9 +42,9 @@ class Field(Generic[T]):
         value = instance.data.get(self.name)
         if value is None:
             return self.convert(self.default)
-        return value  # Return raw value from data
+        return self.from_mongo(value)  # Convert value from MongoDB format
 
-    def __set__(self, instance: Optional[BaseModel], value: Any) -> None:
+    def __set__(self, instance: Optional[ModelProtocol], value: Any) -> None:
         """Set field value.
 
         Args:
@@ -61,7 +60,7 @@ class Field(Generic[T]):
             # If setting a raw value, convert it directly
             instance.data[self.name] = self.convert(value)
 
-    def __delete__(self, instance: Optional[BaseModel]) -> None:
+    def __delete__(self, instance: Optional[ModelProtocol]) -> None:
         """Delete field value."""
         if instance is None:
             return
@@ -69,17 +68,7 @@ class Field(Generic[T]):
 
     @abstractmethod
     def convert(self, value: Any) -> T:
-        """Convert value to field type.
-
-        This method should never return None. Instead, return a default value
-        appropriate for the field type (e.g. empty string for StringField).
-
-        Args:
-            value: Value to convert
-
-        Returns:
-            Converted value of type T
-        """
+        """Convert value to field type."""
         pass
 
     def to_dict(self, value: Optional[T]) -> Any:
@@ -90,7 +79,7 @@ class Field(Generic[T]):
         """Convert Python value to MongoDB value."""
         return value
 
-    def from_mongo(self, value: Any) -> Optional[T]:
+    def from_mongo(self, value: Any) -> T:
         """Convert MongoDB value to Python value."""
         return self.convert(value)
 
@@ -208,10 +197,10 @@ class ObjectIdField(Field[ObjectId]):
             return value
         return ObjectId(str(value))
 
-    def from_mongo(self, value: Any) -> Optional[ObjectId]:
+    def from_mongo(self, value: Any) -> ObjectId:
         """Convert MongoDB ObjectId to Python ObjectId."""
         if value is None:
-            return None
+            return ObjectId()  # Return new ObjectId instead of None
         if type(value) is ObjectId:  # type: ignore
             return value
         return ObjectId(str(value))
@@ -259,18 +248,17 @@ class ListField(Field[List[T]], Generic[T]):
             return None
         return [self.field.to_mongo(item) for item in value]
 
-    def from_mongo(self, value: Any) -> Optional[List[T]]:
+    def from_mongo(self, value: Any) -> List[T]:
         """Convert MongoDB array to Python list."""
         if value is None:
-            return None
+            return []  # Return empty list instead of None
         if not isinstance(value, list):
             raise ValueError(f"Expected list, got {type(value)}")
         result: List[T] = []
         items: List[Any] = value
         for item in items:
             converted = self.field.from_mongo(item)
-            if converted is not None:
-                result.append(converted)
+            result.append(converted)
         return result
 
 

@@ -2,6 +2,8 @@
 
 from typing import Any, Dict, List, Optional, Protocol, Type, TypeVar, runtime_checkable
 
+from motor.motor_asyncio import AsyncIOMotorDatabase
+
 
 @runtime_checkable
 class ModelProtocol(Protocol):
@@ -12,34 +14,27 @@ class ModelProtocol(Protocol):
     _abstract: bool
     _data: Dict[str, Any]
     _indexes: List[Dict[str, Any]]
-    _validators: List[Any]
-    _constraints: List[Any]
-    _acl: Dict[str, Any]
-    _rules: Dict[str, Any]
-    _events: Dict[str, List[Any]]
-    _audit: Dict[str, Any]
-    _cache: Dict[str, Any]
-    _metrics: Dict[str, Any]
-    _json_encoders: Dict[type, Any]
+
+    @classmethod
+    def get_collection_name(cls) -> str:
+        """Get collection name."""
+        ...
+
+    @classmethod
+    def get_indexes(cls) -> List[Dict[str, Any]]:
+        """Get model indexes."""
+        ...
+
+    @classmethod
+    async def find_one(
+        cls, domain: Optional[List[Any]] = None, **kwargs: Any
+    ) -> Optional["ModelProtocol"]:
+        """Find single document."""
+        ...
 
     @property
-    def id(self) -> Any:
+    def id(self) -> Optional[str]:
         """Get record ID."""
-        ...
-
-    @property
-    def ids(self) -> List[Any]:
-        """Get record IDs."""
-        ...
-
-    @property
-    def collection(self) -> str:
-        """Get collection name."""
-        ...
-
-    @property
-    def collection_name(self) -> str:
-        """Get collection name."""
         ...
 
     @property
@@ -55,50 +50,40 @@ class ModelProtocol(Protocol):
         """Save record."""
         ...
 
-    async def delete(self) -> None:
-        """Delete record."""
+
+@runtime_checkable
+class FieldProtocol(Protocol):
+    """Protocol for field classes."""
+
+    name: str
+    required: bool
+    unique: bool
+    default: Any
+
+    def convert(self, value: Any) -> Any:
+        """Convert value to field type."""
         ...
 
-    def __iter__(self) -> Any:
-        """Iterate over record fields."""
+    def to_mongo(self, value: Any) -> Any:
+        """Convert value to MongoDB format."""
         ...
 
-    @classmethod
-    def get_collection_name(cls) -> str:
-        """Get collection name."""
-        ...
-
-    @classmethod
-    def get_name(cls) -> str:
-        """Get model name."""
-        ...
-
-    @classmethod
-    def get_indexes(cls) -> List[Dict[str, Any]]:
-        """Get indexes."""
-        ...
-
-    @classmethod
-    async def find_one(
-        cls, domain: Any = None, **kwargs: Any
-    ) -> Optional["ModelProtocol"]:
-        """Find one record."""
-        ...
-
-    @classmethod
-    async def find(cls, domain: Any = None, **kwargs: Any) -> List["ModelProtocol"]:
-        """Find records."""
+    def from_mongo(self, value: Any) -> Any:
+        """Convert value from MongoDB format."""
         ...
 
 
+M = TypeVar("M", bound=ModelProtocol)
+F = TypeVar("F", bound=FieldProtocol)
 M_co = TypeVar("M_co", bound=ModelProtocol, covariant=True)
 
 
+@runtime_checkable
 class RecordSetProtocol(Protocol[M_co]):
     """Protocol for recordset."""
 
     def __init__(
-        self, model_cls: Type[M_co], records: Optional[List[M_co]] = None
+        self, model_cls: type[M_co], records: Optional[List[M_co]] = None
     ) -> None:
         """Initialize recordset."""
         ...
@@ -133,12 +118,12 @@ class RecordSetProtocol(Protocol[M_co]):
         ...
 
 
+@runtime_checkable
 class RegistryProtocol(Protocol):
     """Protocol for registry."""
 
-    def __init__(self) -> None:
-        """Initialize registry."""
-        ...
+    _models: Dict[str, Type[ModelProtocol]]
+    _db: Optional[AsyncIOMotorDatabase[Dict[str, Any]]]
 
     def add_scan_path(self, package_name: str) -> None:
         """Add package to scan for models."""

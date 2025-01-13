@@ -69,6 +69,13 @@ class DIContainer:
             self._services["registry"] = DIContainer._registry
             self._services["lifecycle"] = DIContainer._lifecycle
 
+    @property
+    def registry(self) -> Registry:
+        """Get registry instance."""
+        if self._registry is None:
+            raise RuntimeError("Registry not initialized")
+        return self._registry
+
     async def init(self, **kwargs: Any) -> None:
         """Initialize container."""
         await self.init_resources(**kwargs)

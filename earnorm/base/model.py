@@ -5,6 +5,7 @@ from typing import (
     Callable,
     Coroutine,
     Dict,
+    Iterator,
     List,
     Optional,
     Sequence,
@@ -17,7 +18,9 @@ from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
 from pymongo.cursor import Cursor
 
+from earnorm.base.domain import Domain, DomainParser
 from earnorm.base.registry import Registry
+from earnorm.base.types import FieldProtocol, ModelProtocol
 from earnorm.di import container
 
 # Type aliases
@@ -31,7 +34,6 @@ MetricsConfig = Dict[str, Any]
 JsonEncoders = Dict[type, Callable[[Any], str]]
 DomainTuple = Tuple[str, str, Any]
 DomainOperator = Union[str, DomainTuple]  # Can be '|', '&' or a condition tuple
-Domain = Sequence[DomainOperator]  # Use Sequence instead of List for covariance
 MongoQuery = Dict[str, Any]
 SortSpec = List[Tuple[str, int]]
 Collection = AsyncIOMotorCollection[Dict[str, Any]]
@@ -50,25 +52,8 @@ ConstraintFunc = Callable[[ModelT], Coroutine[Any, Any, None]]
 env: Registry = container.get("registry")
 
 
-class BaseModel:
-    """Base model implementation.
-
-    Attributes:
-        _name: Model name, used as collection name if _collection not set
-        _collection: Override MongoDB collection name (optional)
-        _abstract: Whether this is an abstract model (optional)
-        _data: Model data dictionary (optional)
-        _indexes: Collection indexes configuration (optional)
-        _validators: List of validator functions (optional)
-        _constraints: List of constraint functions (optional)
-        _acl: Access control configuration (optional)
-        _rules: Record rules configuration (optional)
-        _events: Event handlers configuration (optional)
-        _audit: Audit logging configuration (optional)
-        _cache: Caching configuration (optional)
-        _metrics: Metrics configuration (optional)
-        _json_encoders: Custom JSON encoders (optional)
-    """
+class BaseModel(ModelProtocol):
+    """Base model implementation."""
 
     # Required attributes
     _name: str = ""
@@ -77,7 +62,7 @@ class BaseModel:
     _collection: str = ""  # Override collection name
     _abstract: bool = False
     _data: Dict[str, Any] = {}
-    _indexes: Union[IndexDict, List[Dict[str, Any]]] = []
+    _indexes: List[Dict[str, Any]] = []  # Changed to List to match protocol
     _validators: List[ValidatorFunc[Any]] = []
     _constraints: List[ConstraintFunc[Any]] = []
     _acl: AclDict = {}
@@ -140,16 +125,27 @@ class BaseModel:
         # Get collection
         collection = await self._get_collection()
 
+        # Convert data to MongoDB format
+        mongo_data: Dict[str, Any] = {}
+        for field_name, field in self.__class__.__dict__.items():
+            if isinstance(field, FieldProtocol):
+                field.name = field_name  # Set field name
+                value = getattr(self, field_name)
+                if value is not None:  # Only save non-None values
+                    mongo_data[field_name] = field.to_mongo(value)
+
         # Insert or update
         if self.id:
             update_result = await collection.update_one(
-                {"_id": ObjectId(self.id)}, {"$set": self._data}
+                {"_id": ObjectId(self.id)}, {"$set": mongo_data}
             )
             if not update_result.modified_count:
                 raise ValueError("Document not found")
+            self._data.update(mongo_data)  # Update local data
         else:
-            insert_result = await collection.insert_one(self._data)
-            self._data["_id"] = insert_result.inserted_id
+            insert_result = await collection.insert_one(mongo_data)
+            mongo_data["_id"] = insert_result.inserted_id
+            self._data = mongo_data  # Update local data
 
     async def delete(self) -> None:
         """Delete model from database."""
@@ -162,33 +158,45 @@ class BaseModel:
             raise ValueError("Document not found")
 
     @classmethod
-    async def find_one(cls, filter_: Dict[str, Any]) -> Optional["BaseModel"]:
+    async def find_one(
+        cls, domain: Optional[List[Any]] = None, **kwargs: Any
+    ) -> Optional["ModelProtocol"]:
         """Find single document.
 
         Args:
-            filter_: Query filter
+            domain: List of domain expressions, e.g:
+                   [('email', '=', 'john@example.com')]
+                   [('age', '>', 18), '|', ('name', '=', 'John'), ('name', '=', 'Jane')]
+            **kwargs: Additional query options
 
         Returns:
             Model instance if found, None otherwise
         """
+        query = DomainParser(domain).to_mongo_query()
         collection = await cls._get_collection()
-        data = await collection.find_one(filter_)
+        data = await collection.find_one(query, **kwargs)
         if data:
-            return cls(**data)
+            instance = cls()
+            instance._data = data  # Set raw data from MongoDB
+            return instance
         return None
 
     @classmethod
-    async def find(cls, filter_: Dict[str, Any]) -> Sequence["BaseModel"]:
+    async def find(
+        cls, domain: Optional[Domain] = None, **kwargs: Any
+    ) -> List[ModelProtocol]:
         """Find multiple documents.
 
         Args:
-            filter_: Query filter
+            domain: List of domain expressions
+            **kwargs: Additional query options
 
         Returns:
             List of model instances
         """
+        query = DomainParser(domain).to_mongo_query()
         collection = await cls._get_collection()
-        cursor = collection.find(filter_)
+        cursor = collection.find(query, **kwargs)
         return [cls(**data) async for data in cursor]
 
     @classmethod
@@ -253,3 +261,34 @@ class BaseModel:
         if registry.db is None:
             raise RuntimeError("Database not initialized")
         return registry.db[cls._collection]
+
+    @property
+    def ids(self) -> List[Any]:
+        """Get record IDs."""
+        return [self.id] if self.id else []
+
+    @property
+    def collection_name(self) -> str:
+        """Get collection name."""
+        return self._collection
+
+    def __iter__(self) -> Iterator[tuple[str, Any]]:
+        """Iterate over record fields."""
+        return iter(self._data.items())
+
+    @classmethod
+    def get_collection_name(cls) -> str:
+        """Get collection name."""
+        return cls._collection or cls._name
+
+    @classmethod
+    def get_name(cls) -> str:
+        """Get model name."""
+        return cls._name
+
+    @classmethod
+    def get_indexes(cls) -> List[Dict[str, Any]]:
+        """Get model indexes."""
+        if isinstance(cls._indexes, dict):
+            return [cls._indexes]
+        return cls._indexes
