@@ -44,6 +44,63 @@ Currently in prototype stage, EarnORM aims to be the go-to choice for building h
 - **Documentation**: Comprehensive docstrings and type annotations
 - **Example Code**: Ready-to-use example applications
 
+## 🔄 Feature Comparison
+
+### Core Features
+
+| Feature | EarnORM | MongoEngine | Beanie | Mongoose |
+|---------|---------|-------------|---------|-----------|
+| **Async Support** | ✅ Native | ❌ | ✅ Native | ✅ Via Promises |
+| **Type Safety** | ✅ Full | ⚠️ Basic | ✅ Via Pydantic | ⚠️ Basic |
+| **Query Language** | ✅ Domain Expressions | ✅ Django-style | ✅ Motor-style | ✅ Chainable API |
+| **Schema Validation** | ✅ Runtime | ✅ Runtime | ✅ Via Pydantic | ✅ Runtime |
+| **Middleware/Hooks** | ✅ Lifecycle Hooks | ✅ Signals | ✅ Events | ✅ Middleware |
+
+### Database Features
+
+| Feature | EarnORM | MongoEngine | Beanie | Mongoose |
+|---------|---------|-------------|---------|-----------|
+| **Connection Pooling** | ✅ | ⚠️ Basic | ✅ Via Motor | ✅ |
+| **Transactions** | ✅ | ✅ | ✅ | ✅ |
+| **Bulk Operations** | ✅ | ✅ | ✅ | ✅ |
+| **GridFS Support** | ❌ | ✅ | ❌ | ✅ |
+| **Aggregation Pipeline** | ✅ | ✅ | ✅ | ✅ |
+
+### Relations
+
+| Feature | EarnORM | MongoEngine | Beanie | Mongoose |
+|---------|---------|-------------|---------|-----------|
+| **Reference Fields** | ✅ | ✅ | ✅ | ✅ |
+| **Many2one** | ✅ | ✅ | ✅ | ✅ |
+| **One2many** | ✅ | ✅ | ✅ | ✅ |
+| **Many2many** | ✅ | ✅ | ⚠️ Basic | ✅ |
+| **Lazy Loading** | ✅ | ✅ | ✅ | ✅ |
+
+### Enterprise Features
+
+| Feature | EarnORM | MongoEngine | Beanie | Mongoose |
+|---------|---------|-------------|---------|-----------|
+| **Access Control** | ✅ | ❌ | ❌ | ⚠️ Basic |
+| **Audit Logging** | ✅ | ❌ | ❌ | ⚠️ Via Plugin |
+| **Event System** | ✅ | ⚠️ Basic | ✅ | ✅ |
+| **DI Container** | ✅ | ❌ | ❌ | ❌ |
+| **Lifecycle Management** | ✅ | ❌ | ⚠️ Basic | ⚠️ Basic |
+
+### Developer Experience
+
+| Feature | EarnORM | MongoEngine | Beanie | Mongoose |
+|---------|---------|-------------|---------|-----------|
+| **Documentation** | ⚠️ Basic | ✅ | ✅ | ✅ |
+| **IDE Support** | ✅ | ⚠️ Basic | ✅ | ✅ |
+| **Migration Tools** | ❌ | ⚠️ Basic | ❌ | ✅ |
+| **CLI Tools** | ❌ | ❌ | ❌ | ✅ |
+| **Testing Support** | ⚠️ Basic | ✅ | ✅ | ✅ |
+
+Legend:
+- ✅ Full support
+- ⚠️ Basic/Partial support
+- ❌ Not supported
+
 ## 🏗 Project Status
 
 The project is currently in prototype stage with the following functionality:
