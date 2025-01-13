@@ -4,25 +4,22 @@ from typing import (
     Any,
     Callable,
     Dict,
-    Generic,
     Iterator,
     List,
     Optional,
-    Sequence,
     Tuple,
     Type,
     TypeVar,
-    Union,
     cast,
 )
 
-from earnorm.base.model import BaseModel, env
-from earnorm.base.registry import Registry
+from earnorm.base.env import env
+from earnorm.base.types import ModelProtocol, RecordSetProtocol, RegistryProtocol
 
-M = TypeVar("M", bound=BaseModel)
+M = TypeVar("M", bound=ModelProtocol)
 
 
-class RecordSet(Generic[M]):
+class RecordSet(RecordSetProtocol[M]):
     """RecordSet for batch operations.
 
     A RecordSet represents a collection of records from a specific model.
@@ -44,9 +41,7 @@ class RecordSet(Generic[M]):
         ```
     """
 
-    def __init__(
-        self, model_cls: Type[M], records: Optional[Sequence[M]] = None
-    ) -> None:
+    def __init__(self, model_cls: Type[M], records: Optional[List[M]] = None) -> None:
         """Initialize RecordSet.
 
         Args:
@@ -57,17 +52,15 @@ class RecordSet(Generic[M]):
         self._records: List[M] = list(records) if records else []
         self._collection = model_cls.get_collection_name()
 
-    def __getitem__(self, index: Union[int, slice]) -> Union[M, "RecordSet[M]"]:
-        """Get record or slice of records.
+    def __getitem__(self, index: int) -> M:
+        """Get record by index.
 
         Args:
-            index: Integer index or slice
+            index: Integer index
 
         Returns:
-            Single record or new RecordSet with sliced records
+            Single record
         """
-        if isinstance(index, slice):
-            return RecordSet(self._model_cls, self._records[index])
         return self._records[index]
 
     def __len__(self) -> int:
@@ -83,7 +76,7 @@ class RecordSet(Generic[M]):
         """Get list of record IDs."""
         return [str(record.id) for record in self._records]
 
-    async def create(self, values: Dict[str, Any]) -> "RecordSet[M]":
+    async def create(self, values: Dict[str, Any]) -> "RecordSetProtocol[M]":
         """Create new record.
 
         Args:
@@ -220,7 +213,7 @@ class RecordSet(Generic[M]):
         return bool(self._records)
 
     @property
-    def env(self) -> Registry:
+    def env(self) -> RegistryProtocol:
         """Get environment registry."""
         return env
 

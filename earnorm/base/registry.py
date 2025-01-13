@@ -1,46 +1,22 @@
 """Model registry for EarnORM."""
 
-import importlib
+import importlib.util
 import inspect
 import logging
+import os
 import pkgutil
-from typing import (
-    Any,
-    Dict,
-    List,
-    Optional,
-    Protocol,
-    Set,
-    Type,
-    cast,
-    runtime_checkable,
-)
+import sys
+from typing import Any, Dict, List, Optional, Set, Type, cast
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo.operations import IndexModel
 
-from .model import BaseModel
-from .recordset import RecordSet
+from earnorm.base.types import ModelProtocol, RecordSetProtocol, RegistryProtocol
 
 logger = logging.getLogger(__name__)
 
 
-@runtime_checkable
-class ModelProtocol(Protocol):
-    """Protocol for model classes."""
-
-    _collection: str
-    _abstract: bool
-    _data: Dict[str, Any]
-    _indexes: List[Dict[str, Any]]  # MongoDB index specification
-    _validators: List[Any]
-    _constraints: List[Any]
-    _acl: List[Any]
-    _rules: List[Any]
-    _events: Dict[str, List[Any]]
-
-
-class Registry:
+class Registry(RegistryProtocol):
     """Registry for model classes.
 
     The registry discovers and registers all model classes that inherit from BaseModel,
@@ -71,7 +47,7 @@ class Registry:
 
     def __init__(self) -> None:
         """Initialize registry."""
-        self._models: Dict[str, Type[BaseModel]] = {}
+        self._models: Dict[str, Type[ModelProtocol]] = {}
         self._db: Optional[AsyncIOMotorDatabase[dict[str, Any]]] = None
         self._discovered = False
         self._scan_paths: Set[str] = set()
@@ -85,7 +61,7 @@ class Registry:
         self._scan_paths.add(package_name)
         self._discovered = False  # Force rediscovery
 
-    def _get_collection_name(self, model_cls: Type[BaseModel]) -> str:
+    def _get_collection_name(self, model_cls: Type[ModelProtocol]) -> str:
         """Get collection name for model class.
 
         The collection name is determined in the following order:
@@ -99,19 +75,23 @@ class Registry:
         Returns:
             Collection name
         """
-        if hasattr(model_cls, "get_collection_name"):
-            return model_cls.get_collection_name()
-        if hasattr(model_cls, "get_name"):
-            return model_cls.get_name()
+        if hasattr(model_cls, "_collection") and model_cls._collection:
+            return model_cls._collection
+        if hasattr(model_cls, "_name") and model_cls._name:
+            return model_cls._name
         return model_cls.__name__.lower()
 
     def _is_model_class(self, obj: Any) -> bool:
         """Check if object is a model class."""
+        # Import BaseModel here to avoid circular import
+        from earnorm.base.model import BaseModel as _BaseModel
+
         return (
             inspect.isclass(obj)
             and hasattr(obj, "_collection")
             and hasattr(obj, "_name")
-            and obj != BaseModel
+            and issubclass(obj, _BaseModel)
+            and obj is not _BaseModel
         )
 
     def _discover_models(self) -> None:
@@ -123,11 +103,27 @@ class Registry:
         if self._discovered:
             return
 
-        def scan_module(module_name: str) -> None:
+        def scan_module(module_path: str) -> None:
             """Scan module for model classes."""
             try:
-                module = importlib.import_module(module_name)
-                logger.debug(f"Scanning module: {module_name}")
+                # Handle both package names and file paths
+                if os.path.isfile(module_path):
+                    # Import from file path
+                    module_name = os.path.splitext(os.path.basename(module_path))[0]
+                    spec = importlib.util.spec_from_file_location(
+                        module_name, module_path
+                    )
+                    if spec is None or spec.loader is None:
+                        logger.warning(f"Failed to load module spec: {module_path}")
+                        return
+                    module = importlib.util.module_from_spec(spec)
+                    sys.modules[module_name] = module
+                    spec.loader.exec_module(module)
+                else:
+                    # Import from package name
+                    module = importlib.import_module(module_path)
+
+                logger.debug(f"Scanning module: {module_path}")
 
                 # Get all classes defined in module
                 for name, obj in inspect.getmembers(module):
@@ -136,18 +132,25 @@ class Registry:
                         collection = self._get_collection_name(obj)
                         self._models[collection] = obj
                         logger.info(
-                            f"Registered model {name} as {collection} "
-                            f"({'abstract' if getattr(obj, '_abstract', False) else 'concrete'})"
+                            "Registered model {} as {} ({})".format(
+                                name,
+                                collection,
+                                (
+                                    "abstract"
+                                    if getattr(obj, "_abstract", False)
+                                    else "concrete"
+                                ),
+                            )
                         )
 
-                # Scan submodules
+                # Scan submodules if it's a package
                 if hasattr(module, "__path__"):
                     paths = cast(List[str], module.__path__)
                     for _, name, _ in pkgutil.iter_modules(paths):
-                        scan_module(f"{module_name}.{name}")
+                        scan_module(f"{module_path}.{name}")
 
             except ImportError as e:
-                logger.warning(f"Failed to import {module_name}: {e}")
+                logger.warning(f"Failed to import {module_path}: {e}")
 
         # Add default scan path if none specified
         if not self._scan_paths:
@@ -169,7 +172,7 @@ class Registry:
         self._discovered = False
         self._discover_models()
 
-    def get_concrete_models(self) -> List[Type[BaseModel]]:
+    def get_concrete_models(self) -> List[Type[ModelProtocol]]:
         """Get list of concrete model classes.
 
         Returns:
@@ -184,7 +187,7 @@ class Registry:
             if not getattr(model_cls, "_abstract", False)
         ]
 
-    def get_abstract_models(self) -> List[Type[BaseModel]]:
+    def get_abstract_models(self) -> List[Type[ModelProtocol]]:
         """Get list of abstract model classes.
 
         Returns:
@@ -199,7 +202,7 @@ class Registry:
             if getattr(model_cls, "_abstract", False)
         ]
 
-    def __getitem__(self, collection: str) -> RecordSet[BaseModel]:
+    def __getitem__(self, collection: str) -> RecordSetProtocol[ModelProtocol]:
         """Get recordset for collection.
 
         Auto-discovers models if not already done.
@@ -219,9 +222,13 @@ class Registry:
         model_cls = self.get(collection)
         if model_cls is None:
             raise KeyError(f"Model not found: {collection}")
+
+        # Import here to avoid circular import
+        from earnorm.base.recordset import RecordSet
+
         return RecordSet(model_cls)
 
-    def get(self, collection: str) -> Optional[Type[BaseModel]]:
+    def get(self, collection: str) -> Optional[Type[ModelProtocol]]:
         """Get model class by collection name.
 
         Auto-discovers models if not already done.
@@ -252,10 +259,11 @@ class Registry:
         # Initialize collections and indexes for concrete models only
         for model_cls in self._models.values():
             if not getattr(model_cls, "_abstract", False):
-                collection = model_cls.get_collection_name()
-                indexes = [IndexModel(idx) for idx in model_cls.get_indexes()]
-                if indexes:
-                    await db[collection].create_indexes(indexes)
+                collection = self._get_collection_name(model_cls)
+                if hasattr(model_cls, "_indexes"):
+                    indexes = [IndexModel(idx) for idx in model_cls._indexes]
+                    if indexes:
+                        await db[collection].create_indexes(indexes)
 
     @property
     def db(self) -> Optional[AsyncIOMotorDatabase[dict[str, Any]]]:
@@ -307,7 +315,7 @@ class Registry:
 
         return len(self._models)
 
-    def register_model(self, model: Type[BaseModel]) -> None:
+    def register_model(self, model: Type[ModelProtocol]) -> None:
         """Register model directly.
 
         Args:
@@ -319,3 +327,28 @@ class Registry:
             f"Registered model {model.__name__} as {collection} "
             f"({'abstract' if getattr(model, '_abstract', False) else 'concrete'})"
         )
+
+    def get_model(self, model_name: str) -> Optional[Type[ModelProtocol]]:
+        """Get model class by name.
+
+        Args:
+            model_name: Name of the model class
+
+        Returns:
+            Model class or None if not found
+        """
+        # Discover models on first access
+        if not self._discovered:
+            self._discover_models()
+
+        # Try exact match first
+        if model_name in self._models:
+            return self._models[model_name]
+
+        # Try case-insensitive match
+        lower_name = model_name.lower()
+        for name, model in self._models.items():
+            if name.lower() == lower_name:
+                return model
+
+        return None

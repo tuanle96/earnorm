@@ -1,9 +1,10 @@
 """Base field types for EarnORM."""
 
-from abc import ABC, abstractmethod
-from typing import Any, Dict, Generic, List, Optional, Type, TypeVar
+from abc import abstractmethod
+from typing import Any, Dict, Generic, List, Optional, Type, TypeVar, Union
 
 from bson import ObjectId
+from typing_extensions import Self
 
 from earnorm.base.model import BaseModel
 
@@ -11,40 +12,74 @@ T = TypeVar("T")
 M = TypeVar("M", bound=BaseModel)
 
 
-class Field(Generic[T], ABC):
+class Field(Generic[T]):
     """Base field class."""
 
     def __init__(
         self,
         *,
         required: bool = False,
-        default: Any = None,
-        index: bool = False,
         unique: bool = False,
+        default: Any = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize field."""
         self.required = required
-        self.default = default
-        self.index = index
         self.unique = unique
-
-        # Set by Model metaclass
+        self.default = default
         self.name: str = ""
-        self._model_cls: Optional[Type[BaseModel]] = None
+        self.model_cls: Optional[Type[BaseModel]] = None
 
-    @property
-    def model_cls(self) -> Optional[Type[BaseModel]]:
-        """Get model class."""
-        return self._model_cls
+    def __get__(
+        self, instance: Optional[BaseModel], owner: Type[BaseModel]
+    ) -> Union[Self, T]:
+        """Get field value.
 
-    @model_cls.setter
-    def model_cls(self, value: Optional[Type[BaseModel]]) -> None:
-        """Set model class."""
-        self._model_cls = value
+        If accessed on class, returns the field instance.
+        If accessed on instance, returns the field value.
+        """
+        if instance is None:
+            return self
+        value = instance.data.get(self.name)
+        if value is None:
+            return self.convert(self.default)
+        return value  # Return raw value from data
+
+    def __set__(self, instance: Optional[BaseModel], value: Any) -> None:
+        """Set field value.
+
+        Args:
+            instance: Model instance
+            value: Value to set
+        """
+        if instance is None:
+            return
+        if isinstance(value, Field):
+            # If setting a Field instance, convert its default value
+            instance.data[self.name] = self.convert(value.default)
+        else:
+            # If setting a raw value, convert it directly
+            instance.data[self.name] = self.convert(value)
+
+    def __delete__(self, instance: Optional[BaseModel]) -> None:
+        """Delete field value."""
+        if instance is None:
+            return
+        instance.data.pop(self.name, None)
 
     @abstractmethod
-    def convert(self, value: Any) -> Optional[T]:
-        """Convert value to field type."""
+    def convert(self, value: Any) -> T:
+        """Convert value to field type.
+
+        This method should never return None. Instead, return a default value
+        appropriate for the field type (e.g. empty string for StringField).
+
+        Args:
+            value: Value to convert
+
+        Returns:
+            Converted value of type T
+        """
         pass
 
     def to_dict(self, value: Optional[T]) -> Any:
@@ -151,11 +186,11 @@ class BooleanField(Field[bool]):
 class ObjectIdField(Field[ObjectId]):
     """ObjectId field."""
 
-    def convert(self, value: Any) -> Optional[ObjectId]:
+    def convert(self, value: Any) -> ObjectId:
         """Convert value to ObjectId."""
-        if value is None:
-            return None
-        if type(value) is ObjectId:  # type: ignore
+        if value is None or value == "":
+            return ObjectId()  # Generate new ObjectId instead of returning None
+        if isinstance(value, ObjectId):
             return value
         return ObjectId(str(value))
 
@@ -199,18 +234,17 @@ class ListField(Field[List[T]], Generic[T]):
         )
         self.field = field
 
-    def convert(self, value: Any) -> Optional[List[T]]:
+    def convert(self, value: Any) -> List[T]:
         """Convert value to list."""
         if value is None:
-            return None
+            return []  # Return empty list instead of None
         if not isinstance(value, list):
             raise ValueError(f"Expected list, got {type(value)}")
         result: List[T] = []
         items: List[Any] = value
         for item in items:
             converted = self.field.convert(item)
-            if converted is not None:
-                result.append(converted)
+            result.append(converted)
         return result
 
     def to_dict(self, value: Optional[List[T]]) -> Optional[List[Any]]:

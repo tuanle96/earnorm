@@ -4,6 +4,7 @@ import os
 from typing import Any, Optional, Union
 
 from earnorm.base.model import BaseModel
+from earnorm.base.model import env as model_env
 from earnorm.di import Container, DIContainer
 from earnorm.fields import BooleanField as Bool
 from earnorm.fields import CharField as Char
@@ -60,9 +61,10 @@ async def init(
     )
 
     # Update global instances
-    global env, registry
+    global env, registry, model_env
     env = container.get("registry")
     registry = env
+    model_env = env  # Update env in model.py
 
 
 __all__ = [

@@ -1,10 +1,24 @@
 """Relation field types for EarnORM."""
 
-from typing import Any, Dict, Generic, List, Optional, Self, Type, TypeVar, Union, cast
+from typing import (
+    Any,
+    Dict,
+    ForwardRef,
+    Generic,
+    Iterator,
+    List,
+    Optional,
+    Type,
+    TypeVar,
+    Union,
+    cast,
+)
 
 from bson import ObjectId
+from typing_extensions import Self
 
 from earnorm.base.model import BaseModel
+from earnorm.base.registry import Registry
 from earnorm.fields.base import Field
 
 M = TypeVar("M", bound="BaseModel")
@@ -16,7 +30,7 @@ class BaseRelationField(Field[M], Generic[M]):
 
     def __init__(
         self,
-        referenced_model: Type[M],
+        referenced_model: Union[str, Type[M], ForwardRef],
         required: bool = False,
         unique: bool = False,
         default: Optional[Union[M, List[M]]] = None,
@@ -31,16 +45,48 @@ class BaseRelationField(Field[M], Generic[M]):
             default: Default value for this field
             **kwargs: Additional arguments passed to Field constructor
         """
-        self.referenced_model = referenced_model
+        self._model_registry = Registry()
+        self._referenced_model_name: str = ""
+        self._referenced_model_class: Optional[Type[M]] = None
+
+        if isinstance(referenced_model, str):
+            self._referenced_model_name = referenced_model
+        elif isinstance(referenced_model, ForwardRef):
+            self._referenced_model_name = referenced_model.__forward_arg__
+        else:
+            self._referenced_model_name = referenced_model.__name__
+            self._referenced_model_class = referenced_model
+
         super().__init__(required=required, unique=unique, default=default, **kwargs)
+
+    @property
+    def referenced_model(self) -> Type[M]:
+        """Get referenced model class."""
+        if self._referenced_model_class is None:
+            model_class = self._model_registry.get_model(self._referenced_model_name)
+            if model_class is None:
+                raise ValueError(
+                    f"Model {self._referenced_model_name} not found in registry"
+                )
+            self._referenced_model_class = cast(Type[M], model_class)
+        return self._referenced_model_class
+
+    @property
+    def collection(self) -> str:
+        """Get collection name."""
+        return getattr(self.referenced_model, "collection", "")
 
     def __get__(
         self, instance: Optional[BaseModel], owner: Type[BaseModel]
-    ) -> Union[Self, Optional[M]]:
+    ) -> Union[Self, M]:
         """Get field value."""
         if instance is None:
             return self
-        return instance.data.get(self.name)
+        value = instance.data.get(self.name)
+        if value is None:
+            # Create empty instance instead of returning None
+            return self.referenced_model(_collection=self.collection)
+        return value
 
     def __set__(
         self,
@@ -88,7 +134,7 @@ class ReferenceField(Field[M], Generic[M]):
 
     def __init__(
         self,
-        referenced_model: Type[M],
+        referenced_model: Union[str, Type[M], ForwardRef],
         *,
         required: bool = False,
         default: Any = None,
@@ -103,7 +149,7 @@ class ReferenceField(Field[M], Generic[M]):
             index=index,
             unique=unique,
         )
-        self._referenced_model: Type[M] = referenced_model
+        self._referenced_model: Type[M] = cast(Type[M], referenced_model)
         self.lazy = lazy
 
     @property
@@ -118,10 +164,11 @@ class ReferenceField(Field[M], Generic[M]):
         """Get collection name."""
         return getattr(self.referenced_model, "collection", "")
 
-    def convert(self, value: Any) -> Optional[M]:
+    def convert(self, value: Any) -> M:
         """Convert value to model instance."""
         if value is None:
-            return None
+            # Create empty instance instead of returning None
+            return self.referenced_model(_collection=self.collection)
         if isinstance(value, ObjectId):
             if self.lazy:
                 return self.referenced_model(
@@ -130,7 +177,7 @@ class ReferenceField(Field[M], Generic[M]):
                     _abstract=False,
                     _indexes=[],
                 )
-            return None  # Async operation not supported in sync convert
+            raise ValueError("Cannot convert ObjectId in sync mode")
         if isinstance(value, self.referenced_model):
             return value
         if isinstance(value, dict):
@@ -227,7 +274,7 @@ class Many2oneField(ReferenceField[M], Generic[M]):
 
     def __init__(
         self,
-        referenced_model: Type[M],
+        referenced_model: Union[str, Type[M], ForwardRef],
         *,
         required: bool = False,
         default: Any = None,
@@ -237,6 +284,16 @@ class Many2oneField(ReferenceField[M], Generic[M]):
         lazy: bool = False,
     ) -> None:
         """Initialize field."""
+        self._model_registry = Registry()
+        self._referenced_model_name: str = ""
+        if isinstance(referenced_model, str):
+            self._referenced_model_name = referenced_model
+        elif isinstance(referenced_model, ForwardRef):
+            self._referenced_model_name = referenced_model.__forward_arg__
+        else:
+            self._referenced_model_name = referenced_model.__name__
+            self._model_registry.register_model(referenced_model)
+
         super().__init__(
             referenced_model,
             required=required,
@@ -253,7 +310,7 @@ class One2manyField(Field[List[M]], Generic[M]):
 
     def __init__(
         self,
-        referenced_model: Type[M],
+        referenced_model: Union[str, Type[M], ForwardRef],
         inverse_field: str,
         *,
         required: bool = False,
@@ -261,20 +318,56 @@ class One2manyField(Field[List[M]], Generic[M]):
         lazy: bool = False,
     ) -> None:
         """Initialize field."""
+        self._model_registry = Registry()
+        self._referenced_model_name: str = ""
+        self._referenced_model_class: Optional[Type[M]] = None
+        self._data: List[M] = []
+
+        if isinstance(referenced_model, str):
+            self._referenced_model_name = referenced_model
+        elif isinstance(referenced_model, ForwardRef):
+            self._referenced_model_name = referenced_model.__forward_arg__
+        else:
+            self._referenced_model_name = referenced_model.__name__
+            self._referenced_model_class = referenced_model
+            self._model_registry.register_model(referenced_model)
+
         super().__init__(
             required=required,
             default=default,
         )
-        self._referenced_model: Type[M] = referenced_model
         self.inverse_field = inverse_field
         self.lazy = lazy
+
+    def __iter__(self) -> Iterator[M]:
+        """Iterate over records."""
+        if not self._data:
+            self._data = self.convert(None)
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        """Get number of records."""
+        if not self._data:
+            self._data = self.convert(None)
+        return len(self._data)
+
+    def __getitem__(self, index: int) -> M:
+        """Get record by index."""
+        if not self._data:
+            self._data = self.convert(None)
+        return self._data[index]
 
     @property
     def referenced_model(self) -> Type[M]:
         """Get referenced model."""
-        if not self._referenced_model:
-            raise ValueError("Referenced model not set")
-        return self._referenced_model
+        if self._referenced_model_class is None:
+            model_class = self._model_registry.get_model(self._referenced_model_name)
+            if model_class is None:
+                raise ValueError(
+                    f"Model {self._referenced_model_name} not found in registry"
+                )
+            self._referenced_model_class = cast(Type[M], model_class)
+        return self._referenced_model_class
 
     @property
     def collection(self) -> str:
@@ -376,7 +469,7 @@ class One2manyField(Field[List[M]], Generic[M]):
                     else:
                         record = await self.referenced_model.find_one({"_id": item_id})
                         if record:
-                            records.append(record)  # type: ignore
+                            records.append(cast(M, record))
                 except (TypeError, ValueError):
                     continue
         return records
@@ -460,7 +553,7 @@ class Many2manyField(Field[List[M]], Generic[M]):
 
     def __init__(
         self,
-        referenced_model: Type[M],
+        referenced_model: Union[str, Type[M], ForwardRef],
         *,
         required: bool = False,
         default: Any = None,
@@ -470,22 +563,58 @@ class Many2manyField(Field[List[M]], Generic[M]):
         column2: Optional[str] = None,
     ) -> None:
         """Initialize field."""
+        self._model_registry = Registry()
+        self._referenced_model_name: str = ""
+        self._referenced_model_class: Optional[Type[M]] = None
+        self._data: List[M] = []
+
+        if isinstance(referenced_model, str):
+            self._referenced_model_name = referenced_model
+        elif isinstance(referenced_model, ForwardRef):
+            self._referenced_model_name = referenced_model.__forward_arg__
+        else:
+            self._referenced_model_name = referenced_model.__name__
+            self._referenced_model_class = referenced_model
+            self._model_registry.register_model(referenced_model)
+
         super().__init__(
             required=required,
             default=default,
         )
-        self._referenced_model: Type[M] = referenced_model
         self.lazy = lazy
         self.relation = relation
         self.column1 = column1
         self.column2 = column2
 
+    def __iter__(self) -> Iterator[M]:
+        """Iterate over records."""
+        if not self._data:
+            self._data = self.convert(None)
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        """Get number of records."""
+        if not self._data:
+            self._data = self.convert(None)
+        return len(self._data)
+
+    def __getitem__(self, index: int) -> M:
+        """Get record by index."""
+        if not self._data:
+            self._data = self.convert(None)
+        return self._data[index]
+
     @property
     def referenced_model(self) -> Type[M]:
         """Get referenced model."""
-        if not self._referenced_model:
-            raise ValueError("Referenced model not set")
-        return self._referenced_model
+        if self._referenced_model_class is None:
+            model_class = self._model_registry.get_model(self._referenced_model_name)
+            if model_class is None:
+                raise ValueError(
+                    f"Model {self._referenced_model_name} not found in registry"
+                )
+            self._referenced_model_class = cast(Type[M], model_class)
+        return self._referenced_model_class
 
     @property
     def collection(self) -> str:
