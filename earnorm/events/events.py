@@ -4,6 +4,7 @@ import asyncio
 from collections import defaultdict
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, TypeVar
 
+from ..metrics.prometheus import metrics_manager
 from ..utils.singleton import Singleton
 
 T = TypeVar("T")
@@ -55,11 +56,14 @@ class EventManager(metaclass=Singleton):
         if event in self._handlers:
             self._handlers[event] = [h for h in self._handlers[event] if h != handler]
 
-    async def emit(self, event: str, *args: Any, **kwargs: Any) -> None:
+    async def emit(
+        self, event: str, model: str = "", *args: Any, **kwargs: Any
+    ) -> None:
         """Emit event.
 
         Args:
             event: Event name
+            model: Optional model name
             *args: Positional arguments for handlers
             **kwargs: Keyword arguments for handlers
         """
@@ -69,7 +73,9 @@ class EventManager(metaclass=Singleton):
         # Create tasks for handlers
         tasks: List[asyncio.Task[None]] = []
         for handler in self._handlers[event]:
-            task = asyncio.create_task(self._run_handler(handler, *args, **kwargs))
+            task = asyncio.create_task(
+                self._run_handler(event, model, handler, *args, **kwargs)
+            )
             tasks.append(task)
             self._running_tasks.add(task)
             task.add_done_callback(self._running_tasks.discard)
@@ -79,11 +85,13 @@ class EventManager(metaclass=Singleton):
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _run_handler(
-        self, handler: EventHandler, *args: Any, **kwargs: Any
+        self, event: str, model: str, handler: EventHandler, *args: Any, **kwargs: Any
     ) -> None:
         """Run event handler with retry logic.
 
         Args:
+            event: Event name
+            model: Model name
             handler: Event handler function
             *args: Positional arguments for handler
             **kwargs: Keyword arguments for handler
@@ -92,6 +100,11 @@ class EventManager(metaclass=Singleton):
         while True:
             try:
                 await handler(*args, **kwargs)
+                await metrics_manager.track_event(
+                    event=event,
+                    model=model,
+                    success=True,
+                )
                 break
             except Exception as e:
                 retries += 1
@@ -100,6 +113,12 @@ class EventManager(metaclass=Singleton):
                     name = handler.__name__
                     msg = f"Handler {name} failed after {retries} retries: {str(e)}"
                     print(msg)
+                    await metrics_manager.track_event(
+                        event=event,
+                        model=model,
+                        success=False,
+                        error=msg,
+                    )
                     break
                 await asyncio.sleep(self._retry_delay * retries)
 

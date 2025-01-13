@@ -1,58 +1,26 @@
-"""Container for EarnORM."""
+"""Dependency injection container."""
 
-from typing import Any, Dict, Generic, Optional, Type, TypeVar
+from typing import Any, Protocol, Union, runtime_checkable
 
-from .types import BaseManager
+from ..metrics.base import MetricsManager
+from ..pool.base import PoolManager
+from ..rules.base import RuleManager
+from ..security.base import AclManager
 
-T = TypeVar("T", bound=BaseManager)
 
+@runtime_checkable
+class Container(Protocol):
+    """Protocol for dependency injection container."""
 
-class Container(Generic[T]):
-    """Container for managing dependencies."""
-
-    def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
-        """Initialize container with config."""
-        self._instances: Dict[Type[T], T] = {}
-        self._config = config or {}
-
-    def register(self, protocol: Type[T], implementation: Type[T]) -> None:
-        """Register a service implementation for a protocol.
-
-        Args:
-            protocol: The protocol/interface type
-            implementation: The concrete implementation class
-        """
-        if protocol not in self._instances:
-            self._instances[protocol] = implementation()
-
-    def get(self, protocol: Type[T]) -> T:
-        """Get an instance of a registered service.
+    async def get(
+        self, name: str
+    ) -> Union[PoolManager, MetricsManager, AclManager, RuleManager]:
+        """Get service by name.
 
         Args:
-            protocol: The protocol/interface type to retrieve
+            name: Service name
 
         Returns:
-            The registered service instance
-
-        Raises:
-            KeyError: If no implementation is registered for the protocol
+            Service instance
         """
-        if protocol not in self._instances:
-            raise KeyError(f"No implementation registered for {protocol.__name__}")
-        return self._instances[protocol]
-
-    async def init(self) -> None:
-        """Initialize all registered services."""
-        for service in self._instances.values():
-            service: BaseManager
-            await service.init()
-
-    async def cleanup(self) -> None:
-        """Clean up all registered services."""
-        for service in reversed(list(self._instances.values())):
-            service: BaseManager
-            await service.cleanup()
-
-
-# Global container instance
-container = Container[BaseManager]({})
+        ...

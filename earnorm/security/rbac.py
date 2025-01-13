@@ -1,64 +1,161 @@
-"""Role-based Access Control management."""
+"""Role-based access control implementation."""
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set, Type
 
-from motor.motor_asyncio import AsyncIOMotorClientSession
+from ..base.model import BaseModel
+from ..metrics import MetricsManager
+from .base import AccessDeniedError, AccessManager, User
 
 
-class RBACManager:
-    """Role-based Access Control manager."""
+class Role:
+    """Role with permissions."""
 
-    def __init__(self) -> None:
-        """Initialize RBAC manager."""
-        self._permissions: Dict[str, Dict[str, bool]] = {}
-
-    async def check_permission(
-        self,
-        roles: List[str],
-        collection: str,
-        mode: str,
-        session: Optional[AsyncIOMotorClientSession] = None,
-    ) -> bool:
-        """Check if roles have permission for collection in given mode.
+    def __init__(self, name: str, permissions: Set[str]) -> None:
+        """Initialize role.
 
         Args:
-            roles: List of role names
-            collection: Collection name
-            mode: Access mode (read/write/create/unlink)
-            session: Optional database session
+            name: Role name
+            permissions: Set of permissions
+        """
+        self.name = name
+        self.permissions = permissions
+
+
+class RBACManager(AccessManager):
+    """Role-based access control manager."""
+
+    def __init__(
+        self,
+        metrics_manager: Optional[MetricsManager] = None,
+    ) -> None:
+        """Initialize RBAC manager.
+
+        Args:
+            metrics_manager: Optional metrics manager
+        """
+        self._metrics_manager = metrics_manager
+        self._roles: Dict[str, Role] = {}
+        self._model_permissions: Dict[Type[BaseModel], Dict[str, Set[str]]] = {}
+
+    def add_role(self, role: Role) -> None:
+        """Add role.
+
+        Args:
+            role: Role to add
+        """
+        self._roles[role.name] = role
+
+    def remove_role(self, name: str) -> None:
+        """Remove role.
+
+        Args:
+            name: Role name
+        """
+        if name in self._roles:
+            del self._roles[name]
+
+    def register_rule(
+        self,
+        model: Type[BaseModel],
+        operation: str,
+        permissions: Set[str],
+    ) -> None:
+        """Register access rule.
+
+        Args:
+            model: Model class
+            operation: Operation name
+            permissions: Required permissions
+        """
+        if model not in self._model_permissions:
+            self._model_permissions[model] = {}
+        self._model_permissions[model][operation] = permissions
+
+    async def check_access(
+        self,
+        user: User,
+        model: Type[BaseModel],
+        operation: str,
+        session: Optional[Any] = None,
+    ) -> bool:
+        """Check if user can access model in given operation.
+
+        Args:
+            user: User to check
+            model: Model class
+            operation: Operation name
+            session: Optional database session (not used)
 
         Returns:
-            bool: True if permission is granted
+            bool: True if access is allowed
+
+        Raises:
+            AccessDeniedError: If access is denied
         """
-        # Get permissions for collection
-        perms = self._permissions.get(collection, {})
+        # Get required permissions
+        if model not in self._model_permissions:
+            return True
+        if operation not in self._model_permissions[model]:
+            return True
+        required_permissions = self._model_permissions[model][operation]
 
-        # Check roles
-        for role in roles:
-            if perms.get(f"{role}:{mode}", False):
-                return True
+        # Check permissions
+        for permission in required_permissions:
+            if permission not in user.permissions:
+                await self._track_access_denied(
+                    user.id,
+                    model.__name__,
+                    operation,
+                    f"Missing permission: {permission}",
+                )
+                raise AccessDeniedError(f"Missing permission: {permission}")
 
-        return False
+        # Track access granted
+        await self._track_access_granted(user.id, model.__name__, operation)
+        return True
 
-    def register_permission(
+    async def _track_access_denied(
         self,
-        collection: str,
-        role: str,
-        mode: str,
-        allow: bool = True,
+        user_id: str,
+        model: str,
+        operation: str,
+        reason: str,
     ) -> None:
-        """Register permission rule.
+        """Track access denied.
 
         Args:
-            collection: Collection name
-            role: Role name
-            mode: Access mode (read/write/create/unlink)
-            allow: Whether to allow access
+            user_id: User ID
+            model: Model name
+            operation: Operation name
+            reason: Denial reason
         """
-        if collection not in self._permissions:
-            self._permissions[collection] = {}
+        if self._metrics_manager:
+            await self._metrics_manager.track_access_denied(
+                user_id=user_id,
+                model=model,
+                operation=operation,
+                reason=reason,
+            )
 
-        self._permissions[collection][f"{role}:{mode}"] = allow
+    async def _track_access_granted(
+        self,
+        user_id: str,
+        model: str,
+        operation: str,
+    ) -> None:
+        """Track access granted.
+
+        Args:
+            user_id: User ID
+            model: Model name
+            operation: Operation name
+        """
+        if self._metrics_manager:
+            await self._metrics_manager.track_access_granted(
+                user_id=user_id,
+                model=model,
+                operation=operation,
+            )
 
 
 # Global RBAC manager instance
