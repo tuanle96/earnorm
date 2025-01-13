@@ -3,19 +3,7 @@
 [![Project Status: Prototype](https://img.shields.io/badge/Project%20Status-Prototype-yellow.svg)]()
 [![License: CC BY-NC](https://img.shields.io/badge/License-CC%20BY--NC-lightgrey.svg)]()
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)]()
-
 [![PyPI version](https://badge.fury.io/py/earnorm.svg)](https://badge.fury.io/py/earnorm)
-[![Downloads](https://pepy.tech/badge/earnorm)](https://pepy.tech/project/earnorm)
-[![Documentation Status](https://readthedocs.org/projects/earnorm/badge/?version=latest)](https://earnorm.readthedocs.io/en/latest/?badge=latest)
-
-[![Tests](https://github.com/earnorm/earnorm/workflows/Tests/badge.svg)](https://github.com/earnorm/earnorm/actions)
-[![codecov](https://codecov.io/gh/earnorm/earnorm/branch/main/graph/badge.svg)](https://codecov.io/gh/earnorm/earnorm)
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
-
-[![GitHub contributors](https://img.shields.io/github/contributors/earnorm/earnorm.svg)](https://github.com/earnorm/earnorm/graphs/contributors)
-[![GitHub issues](https://img.shields.io/github/issues/earnorm/earnorm.svg)](https://github.com/earnorm/earnorm/issues)
-[![GitHub stars](https://img.shields.io/github/stars/earnorm/earnorm.svg)](https://github.com/earnorm/earnorm/stargazers)
-[![GitHub Sponsors](https://img.shields.io/github/sponsors/earnorm)](https://github.com/sponsors/earnorm)
 
 EarnORM is a high-performance, async-first MongoDB ORM for Python, designed to maximize throughput in I/O-bound applications. Built on top of Motor and Pydantic, it leverages the full power of async/await to handle thousands of database operations concurrently while maintaining type safety and data validation.
 
@@ -117,3 +105,155 @@ Special thanks to:
 - Pydantic team
 - Motor team
 - MongoDB team
+
+## Examples
+
+EarnORM provides examples for integration with popular Python web frameworks:
+
+### Simple Example
+```python
+from earnorm import BaseModel, String, Email, Int
+
+class User(BaseModel):
+    _collection = "users"
+    _name = "user" 
+    _indexes = [{"email": 1}]
+
+    name = String(required=True)
+    email = Email(required=True, unique=True) 
+    age = Int(required=True)
+
+# Create user
+user = User(name="John", email="john@example.com", age=25)
+await user.save()
+
+# Search users
+users = await User.search([("age", ">", 20)])
+for user in users:
+    print(f"{user.name}: {user.age}")
+
+# Find one user
+user = await User.find_one([("email", "=", "john@example.com")])
+if user.exists():
+    record = user.ensure_one()
+    print(f"Found user: {record.name}")
+```
+
+### Framework Integration Examples
+
+The `examples` directory contains sample applications demonstrating EarnORM integration with:
+
+- **FastAPI**: REST API with Pydantic models and dependency injection
+- **Django**: Async views with Django 3.1+ and URL routing
+- **Flask**: Class-based views with MethodView
+
+See the respective example directories for complete implementations.
+
+## Best Practices
+
+### Model Definition
+
+1. **Collection Names**: Use plural form for collection names
+```python
+class User(BaseModel):
+    _collection = "users"  # Good
+    _name = "user"        # Singular for model name
+```
+
+2. **Field Requirements**: Always specify field requirements explicitly
+```python
+class Product(BaseModel):
+    name = String(required=True)           # Required field
+    description = String(required=False)    # Optional field
+    price = Float(required=True)
+```
+
+3. **Indexes**: Define indexes for frequently queried fields
+```python
+class Order(BaseModel):
+    _indexes = [
+        {"user_id": 1},              # Single field index
+        {"created_at": -1},          # Descending index
+        {"status": 1, "date": -1}    # Compound index
+    ]
+```
+
+### Querying
+
+1. **Domain Expressions**: Use domain expressions for complex queries
+```python
+# Good
+users = await User.search([
+    ("age", ">", 18),
+    ("status", "=", "active")
+])
+
+# Avoid raw queries when possible
+```
+
+2. **RecordSet Operations**: Utilize RecordSet methods for data manipulation
+```python
+# Filter records
+active_users = users.filtered_domain([("status", "=", "active")])
+
+# Sort records
+sorted_users = users.sorted("age", reverse=True)
+
+# Ensure single record
+user = users.ensure_one()
+```
+
+3. **Batch Operations**: Use batch methods for better performance
+```python
+# Create multiple records
+users = await User.create([
+    {"name": "John", "age": 25},
+    {"name": "Jane", "age": 30}
+])
+
+# Delete multiple records
+await users.unlink()
+```
+
+### Error Handling
+
+1. **Validation Errors**: Always handle validation errors
+```python
+try:
+    user = User(name="John", age="invalid")
+    await user.save()
+except ValueError as e:
+    print(f"Validation error: {e}")
+```
+
+2. **Record Existence**: Check record existence before operations
+```python
+user = await User.find_one([("email", "=", "john@example.com")])
+if not user.exists():
+    raise ValueError("User not found")
+```
+
+### Performance
+
+1. **Indexing**: Create indexes for frequently queried fields and sorting operations
+2. **Batch Operations**: Use batch operations instead of individual operations when possible
+3. **Field Selection**: Only select required fields in queries
+4. **Pagination**: Implement pagination for large result sets
+
+### Type Safety
+
+1. **Type Hints**: Use type hints for better IDE support
+```python
+from typing import List, Optional
+
+def get_users(age: int) -> List[User]:
+    return User.search([("age", ">", age)])
+```
+
+2. **Field Types**: Use appropriate field types for data validation
+```python
+class User(BaseModel):
+    age = Int(min_value=0, max_value=150)
+    email = Email(unique=True)
+    status = String(choices=["active", "inactive"])
+```
