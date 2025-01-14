@@ -171,7 +171,7 @@ EarnORM provides examples for integration with popular Python web frameworks and
 ```python
 import asyncio
 import earnorm
-from earnorm import String, Email, Int, models
+from earnorm import fields, models
 
 async def main():
     # Initialize EarnORM
@@ -186,9 +186,9 @@ async def main():
         _name = "user" 
         _indexes = [{"email": 1}]
 
-        name = String(required=True)
-        email = Email(required=True, unique=True) 
-        age = Int(required=True)
+        name = fields.String(required=True)
+        email = fields.Email(required=True, unique=True) 
+        age = fields.Int(required=True)
 
     # Create a new user
     user = User(name="John", email="john@example.com", age=25)
@@ -221,7 +221,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel as PydanticModel
 
 import earnorm
-from earnorm import String, Email, Int, models
+from earnorm import fields, models
 
 class User(models.BaseModel):
     """User model with validation."""
@@ -229,9 +229,9 @@ class User(models.BaseModel):
     _name = "user"
     _indexes = [{"email": 1}]
 
-    name = String(required=True)
-    email = Email(required=True, unique=True)
-    age = Int(required=True, min_value=0, max_value=150)
+    name = fields.String(required=True)
+    email = fields.Email(required=True, unique=True)
+    age = fields.Int(required=True, min_value=0, max_value=150)
 
 class UserCreate(PydanticModel):
     """User creation schema."""
@@ -321,7 +321,7 @@ async def delete_user(user_id: str):
 ```python
 import asyncio
 import earnorm
-from earnorm import String, models
+from earnorm import fields, models
 
 async def monitor_pool():
     """Monitor pool health and metrics."""
@@ -376,8 +376,8 @@ async def main():
         _collection = "tasks"
         _name = "task"
         
-        name = String(required=True)
-        status = String(choices=["pending", "done"])
+        name = fields.String(required=True)
+        status = fields.String(choices=["pending", "done"])
 
     # Create multiple tasks to demonstrate pool usage
     tasks = []
@@ -421,22 +421,22 @@ See the respective example directories for complete implementations.
 
 1. **Collection Names**: Use plural form for collection names
 ```python
-class User(BaseModel):
+class User(models.BaseModel):
     _collection = "users"  # Good
     _name = "user"        # Singular for model name
 ```
 
 2. **Field Requirements**: Always specify field requirements explicitly
 ```python
-class Product(BaseModel):
-    name = String(required=True)           # Required field
-    description = String(required=False)    # Optional field
-    price = Float(required=True)
+class Product(models.BaseModel):
+    name = fields.String(required=True)           # Required field
+    description = fields.String(required=False)    # Optional field
+    price = fields.Float(required=True)
 ```
 
 3. **Indexes**: Define indexes for frequently queried fields
 ```python
-class Order(BaseModel):
+class Order(models.BaseModel):
     _indexes = [
         {"user_id": 1},              # Single field index
         {"created_at": -1},          # Descending index
@@ -518,10 +518,10 @@ def get_users(age: int) -> List[User]:
 
 2. **Field Types**: Use appropriate field types for data validation
 ```python
-class User(BaseModel):
-    age = Int(min_value=0, max_value=150)
-    email = Email(unique=True)
-    status = String(choices=["active", "inactive"])
+class User(models.BaseModel):
+    age = fields.Int(min_value=0, max_value=150)
+    email = fields.Email(unique=True)
+    status = fields.String(choices=["active", "inactive"])
 ```
 
 ## 🔌 Connection Pool & Metrics
