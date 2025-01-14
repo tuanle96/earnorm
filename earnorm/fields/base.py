@@ -1,15 +1,17 @@
 """Base field types for EarnORM."""
 
 from abc import abstractmethod
-from typing import Any, Dict, Generic, List, Optional, Type, TypeVar, Union
+from typing import Any, Callable, Dict, Generic, List, Optional, Type, TypeVar, Union
 
 from bson import ObjectId
 from typing_extensions import Self
 
 from earnorm.base.types import FieldProtocol, ModelProtocol
+from earnorm.validators import ValidationError
 
 T = TypeVar("T")
 M = TypeVar("M", bound=ModelProtocol)
+ValidatorFunc = Callable[[Any], None]
 
 
 class Field(FieldProtocol, Generic[T]):
@@ -21,43 +23,54 @@ class Field(FieldProtocol, Generic[T]):
         required: bool = False,
         unique: bool = False,
         default: Any = None,
+        validators: Optional[List[ValidatorFunc]] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize field."""
         self.required = required
         self.unique = unique
         self.default = default
+        self.validators = validators or []
         self.name: str = ""
+
+    def validate(self, value: Any) -> None:
+        """Validate field value.
+
+        Args:
+            value: Value to validate
+
+        Raises:
+            ValidationError: If validation fails
+        """
+        if self.required and value is None:
+            raise ValidationError(f"Field {self.name} is required")
+
+        if value is not None:
+            for validator in self.validators:
+                validator(value)
 
     def __get__(
         self, instance: Optional[ModelProtocol], owner: Type[ModelProtocol]
     ) -> Union[Self, T]:
-        """Get field value.
-
-        If accessed on class, returns the field instance.
-        If accessed on instance, returns the field value.
-        """
+        """Get field value."""
         if instance is None:
             return self
         value = instance.data.get(self.name)
         if value is None:
             return self.convert(self.default)
-        return self.from_mongo(value)  # Convert value from MongoDB format
+        return self.from_mongo(value)
 
     def __set__(self, instance: Optional[ModelProtocol], value: Any) -> None:
-        """Set field value.
-
-        Args:
-            instance: Model instance
-            value: Value to set
-        """
+        """Set field value."""
         if instance is None:
             return
+
+        # Validate before setting
+        self.validate(value)
+
         if isinstance(value, Field):
-            # If setting a Field instance, convert its default value
             instance.data[self.name] = self.convert(value.default)
         else:
-            # If setting a raw value, convert it directly
             instance.data[self.name] = self.convert(value)
 
     def __delete__(self, instance: Optional[ModelProtocol]) -> None:
@@ -82,28 +95,6 @@ class Field(FieldProtocol, Generic[T]):
     def from_mongo(self, value: Any) -> T:
         """Convert MongoDB value to Python value."""
         return self.convert(value)
-
-
-class StringField(Field[str]):
-    """String field."""
-
-    def convert(self, value: Any) -> str:
-        """Convert value to string."""
-        if value is None:
-            return ""
-        return str(value)
-
-    def to_mongo(self, value: Optional[str]) -> str:
-        """Convert Python string to MongoDB string."""
-        if value is None:
-            return ""
-        return str(value)
-
-    def from_mongo(self, value: Any) -> str:
-        """Convert MongoDB string to Python string."""
-        if value is None:
-            return ""
-        return str(value)
 
 
 class IntegerField(Field[int]):

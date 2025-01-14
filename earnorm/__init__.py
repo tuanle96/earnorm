@@ -2,23 +2,19 @@
 
 from typing import Any, Type
 
-from earnorm.base.model import BaseModel
+from earnorm import fields
+from earnorm.base import model as models
 from earnorm.di import Container, DIContainer
-from earnorm.fields import BooleanField as Bool
-from earnorm.fields import CharField as Char
-from earnorm.fields import DictField as Dict
-from earnorm.fields import EmailField as Email
-from earnorm.fields import FloatField as Float
-from earnorm.fields import IntegerField as Int
-from earnorm.fields import ListField as List
-from earnorm.fields import Many2manyField as Many2many
-from earnorm.fields import Many2oneField as Many2one
-from earnorm.fields import ObjectIdField as ObjectId
-from earnorm.fields import One2manyField as One2many
-from earnorm.fields import PasswordField as Password
-from earnorm.fields import PhoneField as Phone
-from earnorm.fields import ReferenceField as Reference
-from earnorm.fields import StringField as String
+from earnorm.fields.base import BooleanField as Bool
+from earnorm.fields.base import DictField as Dict
+from earnorm.fields.base import FloatField as Float
+from earnorm.fields.base import IntegerField as Int
+from earnorm.fields.base import ListField as List
+from earnorm.fields.base import ObjectIdField as ObjectId
+from earnorm.fields.string import EmailStringField as Email
+from earnorm.fields.string import PasswordStringField as Password
+from earnorm.fields.string import PhoneStringField as Phone
+from earnorm.fields.string import StringField as String
 
 # Global variables
 env = None
@@ -29,7 +25,7 @@ di = None
 container = DIContainer()
 
 
-def get_all_subclasses(cls: Type[BaseModel]) -> list[Type[BaseModel]]:
+def get_all_subclasses(cls: Type[models.BaseModel]) -> list[Type[models.BaseModel]]:
     """Get all subclasses of a class recursively.
 
     Args:
@@ -38,7 +34,7 @@ def get_all_subclasses(cls: Type[BaseModel]) -> list[Type[BaseModel]]:
     Returns:
         List of subclass types
     """
-    all_subclasses: list[Type[BaseModel]] = []
+    all_subclasses: list[Type[models.BaseModel]] = []
     for subclass in cls.__subclasses__():
         all_subclasses.append(subclass)
         all_subclasses.extend(get_all_subclasses(subclass))
@@ -68,14 +64,15 @@ async def init(
     registry = env
 
     # Get all subclasses of BaseModel
-    for model_cls in get_all_subclasses(BaseModel):
+    for model_cls in get_all_subclasses(models.BaseModel):
         registry.register_model(model_cls)
 
 
 __all__ = [
-    "BaseModel",
+    "models",
     "init",
-    # Field types
+    "fields",
+    # Field Types
     "String",
     "Int",
     "Float",
@@ -83,16 +80,10 @@ __all__ = [
     "ObjectId",
     "List",
     "Dict",
-    # Enhanced char fields
-    "Char",
+    # String Fields
     "Email",
     "Phone",
     "Password",
-    # Relation fields
-    "Reference",
-    "Many2one",
-    "One2many",
-    "Many2many",
     # DI and Registry
     "di",
     "env",

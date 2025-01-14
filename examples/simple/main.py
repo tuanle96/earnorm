@@ -4,7 +4,7 @@ import asyncio
 import logging
 
 import earnorm
-from earnorm import BaseModel, Email, Int, String
+from earnorm import fields, models
 
 # Configure logging
 logging.basicConfig(
@@ -13,7 +13,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class User(BaseModel):
+class User(models.BaseModel):
     """User model."""
 
     # Collection configuration
@@ -22,9 +22,9 @@ class User(BaseModel):
     _indexes = [{"email": 1}]  # MongoDB index format
 
     # Fields
-    name = String(required=True)
-    email = Email(required=True, unique=True)
-    age = Int(required=True)
+    name = fields.String(required=True)
+    email = fields.Email(required=True, unique=True)
+    age = fields.Int(required=True)
 
 
 async def main():
