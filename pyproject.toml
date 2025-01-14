@@ -25,10 +25,10 @@ classifiers = [
 
 [tool.poetry.dependencies]
 python = "^3.9"
-motor = "^3.3.0"
+motor = "3.3.2"
+pymongo = "4.6.1"
 pydantic = "^2.0.0"
 dependency-injector = "^4.41.0"
-pymongo = "^4.6.0"
 typing-extensions = "^4.8.0"
 python-dotenv = "^1.0.0"
 PyYAML = "^6.0.1"
