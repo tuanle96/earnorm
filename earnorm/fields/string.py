@@ -1,62 +1,58 @@
-"""String field types for EarnORM."""
+"""String field types."""
 
-from typing import Any, List, Optional, Pattern, Union
+from typing import Any, List, Optional
 
-from earnorm.fields.base import Field, ValidatorFunc
-from earnorm.validators import validate_email, validate_length, validate_regex
+from earnorm.fields.base import Field
+from earnorm.validators import (
+    ValidatorFunc,
+    validate_email,
+    validate_length,
+    validate_regex,
+)
 
 
 class StringField(Field[str]):
-    """String field with validation attributes."""
+    """String field."""
 
     def __init__(
         self,
         *,
         required: bool = False,
-        default: Any = None,
-        index: bool = False,
         unique: bool = False,
-        strip: bool = True,
+        default: Any = None,
+        validators: Optional[List[ValidatorFunc]] = None,
         min_length: Optional[int] = None,
         max_length: Optional[int] = None,
-        pattern: Optional[Union[str, Pattern[str]]] = None,
-        validators: Optional[List[ValidatorFunc]] = None,
+        pattern: Optional[str] = None,
+        strip: bool = True,
+        **kwargs: Any,
     ) -> None:
         """Initialize field.
 
         Args:
             required: Whether field is required
+            unique: Whether field value must be unique
             default: Default value
-            index: Whether to create index
-            unique: Whether field should be unique
-            strip: Whether to strip whitespace
-            min_length: Minimum length
-            max_length: Maximum length
-            pattern: Regex pattern for validation
-            validators: Additional validators
+            validators: List of validator functions
+            min_length: Minimum string length
+            max_length: Maximum string length
+            pattern: Regex pattern to validate against
+            strip: Whether to strip whitespace from value
         """
-        # Build validators list
-        field_validators = validators or []
-
-        # Add length validator if specified
-        if min_length is not None or max_length is not None:
-            field_validators.append(validate_length(min_length, max_length))
-
-        # Add regex validator if specified
-        if pattern is not None:
-            field_validators.append(validate_regex(pattern))
-
         super().__init__(
             required=required,
-            default=default,
-            index=index,
             unique=unique,
-            validators=field_validators,
+            default=default,
+            validators=validators,
+            **kwargs,
         )
         self.strip = strip
-        self.min_length = min_length
-        self.max_length = max_length
-        self.pattern = pattern
+
+        # Add validators
+        if min_length is not None or max_length is not None:
+            self.validators.append(validate_length(min_length, max_length))
+        if pattern is not None:
+            self.validators.append(validate_regex(pattern))
 
     def convert(self, value: Any) -> str:
         """Convert value to string."""
@@ -71,10 +67,9 @@ class StringField(Field[str]):
         """Convert Python string to MongoDB string."""
         if value is None:
             return ""
-        result = str(value)
         if self.strip:
-            result = result.strip()
-        return result
+            value = value.strip()
+        return str(value)
 
     def from_mongo(self, value: Any) -> str:
         """Convert MongoDB string to Python string."""
@@ -87,180 +82,95 @@ class StringField(Field[str]):
 
 
 class EmailStringField(StringField):
-    """Email string field with validation."""
+    """Email string field."""
 
     def __init__(
         self,
         *,
         required: bool = False,
-        default: Any = None,
-        index: bool = False,
         unique: bool = False,
-        strip: bool = True,
+        default: Any = None,
         validators: Optional[List[ValidatorFunc]] = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize field.
 
         Args:
             required: Whether field is required
+            unique: Whether field value must be unique
             default: Default value
-            index: Whether to create index
-            unique: Whether field should be unique
-            strip: Whether to strip whitespace
-            validators: Additional validators
+            validators: List of validator functions
         """
-        # Add email validator
-        field_validators = validators or []
-        field_validators.append(validate_email)
-
         super().__init__(
             required=required,
-            default=default,
-            index=index,
             unique=unique,
-            strip=strip,
-            validators=field_validators,
+            default=default,
+            validators=validators,
+            **kwargs,
         )
-
-    def convert(self, value: Any) -> str:
-        """Convert value to email."""
-        result = super().convert(value)
-        if not result:
-            return ""
-        return result.lower()
-
-    def to_mongo(self, value: Optional[str]) -> str:
-        """Convert Python email to MongoDB string."""
-        result = super().to_mongo(value)
-        if not result:
-            return ""
-        return result.lower()
-
-    def from_mongo(self, value: Any) -> str:
-        """Convert MongoDB string to Python email."""
-        result = super().from_mongo(value)
-        if not result:
-            return ""
-        return result.lower()
+        self.validators.append(validate_email)
 
 
 class PhoneStringField(StringField):
-    """Phone string field with validation."""
+    """Phone string field."""
 
     def __init__(
         self,
         *,
         required: bool = False,
-        default: Any = None,
-        index: bool = False,
         unique: bool = False,
-        strip: bool = True,
+        default: Any = None,
         validators: Optional[List[ValidatorFunc]] = None,
-        pattern: str = r"^\+?1?\d{9,15}$",
+        **kwargs: Any,
     ) -> None:
         """Initialize field.
 
         Args:
             required: Whether field is required
+            unique: Whether field value must be unique
             default: Default value
-            index: Whether to create index
-            unique: Whether field should be unique
-            strip: Whether to strip whitespace
-            validators: Additional validators
-            pattern: Phone number regex pattern
+            validators: List of validator functions
         """
         super().__init__(
             required=required,
-            default=default,
-            index=index,
             unique=unique,
-            strip=strip,
-            pattern=pattern,
+            default=default,
             validators=validators,
+            pattern=r"^\+?[1-9]\d{1,14}$",  # E.164 format
+            **kwargs,
         )
-
-    def convert(self, value: Any) -> str:
-        """Convert value to phone number."""
-        result = super().convert(value)
-        if not result:
-            return ""
-        # Remove all non-digit characters
-        return "".join(filter(str.isdigit, result))
-
-    def to_mongo(self, value: Optional[str]) -> str:
-        """Convert Python phone number to MongoDB string."""
-        result = super().to_mongo(value)
-        if not result:
-            return ""
-        # Remove all non-digit characters
-        return "".join(filter(str.isdigit, result))
-
-    def from_mongo(self, value: Any) -> str:
-        """Convert MongoDB string to Python phone number."""
-        result = super().from_mongo(value)
-        if not result:
-            return ""
-        # Remove all non-digit characters
-        return "".join(filter(str.isdigit, result))
 
 
 class PasswordStringField(StringField):
-    """Password string field with validation."""
+    """Password string field."""
 
     def __init__(
         self,
         *,
         required: bool = False,
-        default: Any = None,
-        index: bool = False,
         unique: bool = False,
-        strip: bool = True,
-        min_length: int = 8,
-        require_uppercase: bool = True,
-        require_lowercase: bool = True,
-        require_digit: bool = True,
-        require_special: bool = True,
+        default: Any = None,
         validators: Optional[List[ValidatorFunc]] = None,
+        min_length: int = 8,
+        pattern: str = r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]+$",
+        **kwargs: Any,
     ) -> None:
         """Initialize field.
 
         Args:
             required: Whether field is required
+            unique: Whether field value must be unique
             default: Default value
-            index: Whether to create index
-            unique: Whether field should be unique
-            strip: Whether to strip whitespace
+            validators: List of validator functions
             min_length: Minimum password length
-            require_uppercase: Require uppercase letter
-            require_lowercase: Require lowercase letter
-            require_digit: Require digit
-            require_special: Require special character
-            validators: Additional validators
+            pattern: Regex pattern for password requirements
         """
-        # Build password pattern
-        pattern_parts: List[str] = []
-        if require_uppercase:
-            pattern_parts.append(r"(?=.*[A-Z])")
-        if require_lowercase:
-            pattern_parts.append(r"(?=.*[a-z])")
-        if require_digit:
-            pattern_parts.append(r"(?=.*\d)")
-        if require_special:
-            pattern_parts.append(r"(?=.*[!@#$%^&*(),.?\":{}|<>])")
-        pattern_parts.append(rf".{{{min_length},}}")
-        pattern = "".join(pattern_parts)
-
         super().__init__(
             required=required,
-            default=default,
-            index=index,
             unique=unique,
-            strip=strip,
+            default=default,
+            validators=validators,
             min_length=min_length,
             pattern=pattern,
-            validators=validators,
+            **kwargs,
         )
-        self.require_uppercase = require_uppercase
-        self.require_lowercase = require_lowercase
-        self.require_digit = require_digit
-        self.require_special = require_special

@@ -7,7 +7,7 @@ from bson import ObjectId
 from typing_extensions import Self
 
 from earnorm.base.types import FieldProtocol, ModelProtocol
-from earnorm.validators import ValidationError
+from earnorm.validators import ValidationError, validate_range
 
 T = TypeVar("T")
 M = TypeVar("M", bound=ModelProtocol)
@@ -100,6 +100,37 @@ class Field(FieldProtocol, Generic[T]):
 class IntegerField(Field[int]):
     """Integer field."""
 
+    def __init__(
+        self,
+        *,
+        required: bool = False,
+        unique: bool = False,
+        default: Any = None,
+        validators: Optional[List[ValidatorFunc]] = None,
+        min_value: Optional[int] = None,
+        max_value: Optional[int] = None,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize field.
+
+        Args:
+            required: Whether field is required
+            unique: Whether field value must be unique
+            default: Default value
+            validators: List of validator functions
+            min_value: Minimum allowed value
+            max_value: Maximum allowed value
+        """
+        super().__init__(
+            required=required,
+            unique=unique,
+            default=default,
+            validators=validators,
+            **kwargs,
+        )
+        if min_value is not None or max_value is not None:
+            self.validators.append(validate_range(min_value, max_value))
+
     def convert(self, value: Any) -> int:
         """Convert value to integer."""
         if value is None:
@@ -121,6 +152,37 @@ class IntegerField(Field[int]):
 
 class FloatField(Field[float]):
     """Float field."""
+
+    def __init__(
+        self,
+        *,
+        required: bool = False,
+        unique: bool = False,
+        default: Any = None,
+        validators: Optional[List[ValidatorFunc]] = None,
+        min_value: Optional[float] = None,
+        max_value: Optional[float] = None,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize field.
+
+        Args:
+            required: Whether field is required
+            unique: Whether field value must be unique
+            default: Default value
+            validators: List of validator functions
+            min_value: Minimum allowed value
+            max_value: Maximum allowed value
+        """
+        super().__init__(
+            required=required,
+            unique=unique,
+            default=default,
+            validators=validators,
+            **kwargs,
+        )
+        if min_value is not None or max_value is not None:
+            self.validators.append(validate_range(min_value, max_value))
 
     def convert(self, value: Any) -> float:
         """Convert value to float."""
