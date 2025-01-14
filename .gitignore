@@ -20,41 +20,28 @@ wheels/
 .installed.cfg
 *.egg
 
-# Virtual Environment
-.env
-.venv
-env/
-venv/
-ENV/
+# Poetry
+.venv/
+poetry.lock
+dist/
+
+# Coverage
+.coverage
+coverage.xml
+htmlcov/
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+
+# Environment
+.env
+env/
+venv/
+ENV/
+
+# Misc
 .DS_Store
-
-# Testing
-.coverage
-coverage.xml
-htmlcov/
-.pytest_cache/
-.mypy_cache/
-
-# Documentation
-docs/_build/
-site/
-
-# Logs
 *.log
-logs/
-
-# Cache
-.cache/
-.pytest_cache/
-.mypy_cache/
-
-# Local development
-local_settings.py
-db.sqlite3
-*.db
