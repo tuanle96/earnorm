@@ -165,9 +165,54 @@ Special thanks to:
 
 ## Examples
 
-EarnORM provides examples for integration with popular Python web frameworks:
+EarnORM provides examples for integration with popular Python web frameworks and common use cases:
 
-### FastAPI Example
+### Basic Example
+```python
+import asyncio
+import earnorm
+from earnorm import String, Email, Int, models
+
+async def main():
+    # Initialize EarnORM
+    await earnorm.init(
+        mongo_uri="mongodb://localhost:27017",
+        database="example"
+    )
+
+    class User(models.BaseModel):
+        """User model with basic fields."""
+        _collection = "users"
+        _name = "user" 
+        _indexes = [{"email": 1}]
+
+        name = String(required=True)
+        email = Email(required=True, unique=True) 
+        age = Int(required=True)
+
+    # Create a new user
+    user = User(name="John", email="john@example.com", age=25)
+    await user.save()
+
+    # Search users with domain expression
+    users = await User.search([("age", ">", 20)])
+    for user in users:
+        print(f"{user.name}: {user.age}")
+
+    # Find one user with exact match
+    user = await User.find_one([("email", "=", "john@example.com")])
+    if user.exists():
+        record = user.ensure_one()
+        print(f"Found user: {record.name}")
+
+    # Cleanup
+    await earnorm.close()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### FastAPI Integration
 ```python
 from contextlib import asynccontextmanager
 from typing import List, Optional
@@ -176,26 +221,23 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel as PydanticModel
 
 import earnorm
-from earnorm import BaseModel, Email, Int, String
+from earnorm import String, Email, Int, models
 
-
-class User(BaseModel):
-    """User model."""
+class User(models.BaseModel):
+    """User model with validation."""
     _collection = "users"
     _name = "user"
     _indexes = [{"email": 1}]
 
     name = String(required=True)
     email = Email(required=True, unique=True)
-    age = Int(required=True)
-
+    age = Int(required=True, min_value=0, max_value=150)
 
 class UserCreate(PydanticModel):
     """User creation schema."""
     name: str
     email: str
     age: int
-
 
 class UserResponse(PydanticModel):
     """User response schema."""
@@ -204,22 +246,22 @@ class UserResponse(PydanticModel):
     email: str
     age: int
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize EarnORM on startup and cleanup on shutdown."""
-    # Initialize EarnORM
     await earnorm.init(
         mongo_uri="mongodb://localhost:27017",
         database="earnorm_example",
+        min_pool_size=5,
+        max_pool_size=20,
+        pool_timeout=30.0,
+        pool_max_lifetime=3600,
+        pool_idle_timeout=300
     )
     yield
-    # Cleanup on shutdown if needed
     await earnorm.close()
 
-
 app = FastAPI(title="EarnORM FastAPI Example", lifespan=lifespan)
-
 
 @app.post("/users/", response_model=UserResponse)
 async def create_user(user: UserCreate):
@@ -236,7 +278,6 @@ async def create_user(user: UserCreate):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-
 @app.get("/users/", response_model=List[UserResponse])
 async def list_users(age_gt: Optional[int] = None):
     """List all users with optional age filter."""
@@ -252,7 +293,6 @@ async def list_users(age_gt: Optional[int] = None):
         for user in users
     ]
 
-
 @app.get("/users/{user_id}", response_model=UserResponse)
 async def get_user(user_id: str):
     """Get a user by ID."""
@@ -267,7 +307,6 @@ async def get_user(user_id: str):
         age=record.age,
     )
 
-
 @app.delete("/users/{user_id}")
 async def delete_user(user_id: str):
     """Delete a user by ID."""
@@ -276,43 +315,103 @@ async def delete_user(user_id: str):
         raise HTTPException(status_code=404, detail="User not found")
     await user.unlink()
     return {"message": "User deleted"}
+```
 
-### Simple Example
+### Connection Pool Management
 ```python
-from earnorm import BaseModel, String, Email, Int
+import asyncio
+import earnorm
+from earnorm import String, models
 
-class User(BaseModel):
-    _collection = "users"
-    _name = "user" 
-    _indexes = [{"email": 1}]
+async def monitor_pool():
+    """Monitor pool health and metrics."""
+    pool = earnorm.pool
+    
+    # Get detailed connection info
+    print("\nConnection Details:")
+    for conn in pool.get_connection_info():
+        print(f"""
+        Connection {conn.id}:
+        - Created: {conn.created_at}
+        - Last used: {conn.last_used_at}
+        - Idle time: {conn.idle_time}s
+        - Is stale: {conn.is_stale}
+        """)
 
-    name = String(required=True)
-    email = Email(required=True, unique=True) 
-    age = Int(required=True)
+    # Get pool metrics
+    metrics = pool.get_metrics()
+    print(f"""
+    Current Pool Metrics:
+    - Total: {metrics.total_connections}
+    - Active: {metrics.active_connections}
+    - Available: {metrics.available_connections}
+    - Acquiring: {metrics.acquiring_connections}
+    """)
 
-# Create user
-user = User(name="John", email="john@example.com", age=25)
-await user.save()
+    # Check pool health
+    health = await pool.get_health_check()
+    print(f"""
+    Pool Health Status:
+    - Status: {health['status']}
+    - Average idle time: {health['statistics']['average_idle_time']}s
+    - Average lifetime: {health['statistics']['average_lifetime']}s
+    - Stale connections: {health['statistics']['stale_connections']}
+    - Usage: {health['statistics']['connection_usage'] * 100}%
+    """)
 
-# Search users
-users = await User.search([("age", ">", 20)])
-for user in users:
-    print(f"{user.name}: {user.age}")
+async def main():
+    # Initialize with custom pool settings
+    await earnorm.init(
+        mongo_uri="mongodb://localhost:27017",
+        database="example",
+        min_pool_size=5,
+        max_pool_size=20,
+        pool_timeout=30.0,
+        pool_max_lifetime=3600,
+        pool_idle_timeout=300
+    )
 
-# Find one user
-user = await User.find_one([("email", "=", "john@example.com")])
-if user.exists():
-    record = user.ensure_one()
-    print(f"Found user: {record.name}")
+    class Task(models.BaseModel):
+        """Task model for batch operations."""
+        _collection = "tasks"
+        _name = "task"
+        
+        name = String(required=True)
+        status = String(choices=["pending", "done"])
+
+    # Create multiple tasks to demonstrate pool usage
+    tasks = []
+    for i in range(10):
+        task = Task(name=f"Task {i}", status="pending")
+        tasks.append(task)
+    
+    # Batch create to test connection pool
+    await Task.create(tasks)
+    
+    # Monitor pool status
+    await monitor_pool()
+    
+    # Cleanup resources
+    await earnorm.close()
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
 ### Framework Integration Examples
 
-The `examples` directory contains sample applications demonstrating EarnORM integration with:
+The `examples` directory contains complete sample applications demonstrating EarnORM integration with popular frameworks:
 
 - **FastAPI**: REST API with Pydantic models and dependency injection
 - **Django**: Async views with Django 3.1+ and URL routing
 - **Flask**: Class-based views with MethodView
+
+Each example includes:
+- Model definitions
+- CRUD operations
+- Connection pool configuration
+- Error handling
+- Best practices implementation
 
 See the respective example directories for complete implementations.
 
@@ -424,3 +523,91 @@ class User(BaseModel):
     email = Email(unique=True)
     status = String(choices=["active", "inactive"])
 ```
+
+## 🔌 Connection Pool & Metrics
+
+### Connection Pool Features
+
+- **Smart Connection Management**: Efficient connection pooling with configurable settings
+- **Auto-scaling**: Dynamic pool size adjustment based on load
+- **Health Checks**: Automatic connection validation and recovery
+- **Resource Cleanup**: Intelligent cleanup of stale connections
+- **Connection Lifecycle**: Full lifecycle management with creation, validation, and cleanup
+
+### Pool Configuration
+
+```python
+await earnorm.init(
+    mongo_uri="mongodb://localhost:27017",
+    database="example",
+    # Pool configuration
+    min_pool_size=5,      # Minimum connections
+    max_pool_size=20,     # Maximum connections
+    pool_timeout=30.0,    # Acquire timeout
+    max_lifetime=3600,    # Max connection lifetime
+    idle_timeout=300,     # Max idle time
+)
+```
+
+### Pool Metrics & Monitoring
+
+EarnORM provides comprehensive metrics and monitoring capabilities:
+
+#### Basic Metrics
+```python
+metrics = pool.get_metrics()
+print(f"""
+Total connections: {metrics.total_connections}
+Active connections: {metrics.active_connections}
+Available connections: {metrics.available_connections}
+Acquiring connections: {metrics.acquiring_connections}
+""")
+```
+
+#### Connection Details
+```python
+for conn in pool.get_connection_info():
+    print(f"""
+Connection ID: {conn.id}
+Created at: {conn.created_at}
+Last used: {conn.last_used_at}
+Idle time: {conn.idle_time}s
+Lifetime: {conn.lifetime}s
+Is stale: {conn.is_stale}
+Is available: {conn.is_available}
+""")
+```
+
+#### Health Check
+```python
+health = await pool.get_health_check()
+print(f"""
+Status: {health['status']}
+Average idle time: {health['statistics']['average_idle_time']}s
+Average lifetime: {health['statistics']['average_lifetime']}s
+Stale connections: {health['statistics']['stale_connections']}
+Connection usage: {health['statistics']['connection_usage'] * 100}%
+""")
+```
+
+### Pool Management
+
+#### Manual Cleanup
+```python
+# Cleanup stale connections
+cleaned = await pool.cleanup_stale()
+print(f"Cleaned up {cleaned} stale connections")
+```
+
+#### Connection Lifecycle
+- **Creation**: Automatic creation when pool is initialized or scaled up
+- **Validation**: Health checks on borrow and return
+- **Cleanup**: Automatic cleanup of stale connections
+- **Scaling**: Dynamic scaling based on demand
+
+#### Best Practices
+- Configure pool size based on application needs
+- Monitor connection usage and health
+- Set appropriate timeouts for your use case
+- Implement regular health checks
+- Clean up stale connections periodically

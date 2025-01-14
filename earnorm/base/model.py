@@ -1,8 +1,10 @@
 """Base model implementation."""
 
+import logging
 from typing import (
     Any,
     Callable,
+    ClassVar,
     Coroutine,
     Dict,
     Iterator,
@@ -21,9 +23,9 @@ from pymongo.cursor import Cursor
 
 from earnorm.base.domain import Domain, DomainParser
 from earnorm.base.recordset import RecordSet
-from earnorm.base.registry import Registry
 from earnorm.base.types import FieldProtocol, ModelProtocol, RecordSetProtocol
-from earnorm.di import container
+
+logger = logging.getLogger(__name__)
 
 # Type aliases
 IndexDict = Dict[str, Any]
@@ -50,9 +52,6 @@ ModelT = TypeVar("ModelT", bound="BaseModel")
 ValidatorFunc = Callable[[ModelT], Coroutine[Any, Any, None]]
 ConstraintFunc = Callable[[ModelT], Coroutine[Any, Any, None]]
 
-# Registry instance
-env: Registry = container.get("registry")
-
 
 class BaseModel(ModelProtocol):
     """Base model implementation."""
@@ -63,6 +62,29 @@ class BaseModel(ModelProtocol):
     _abstract: bool = False
     _data: Dict[str, Any] = {}
     _indexes: List[Dict[str, Any]] = []
+    _container: ClassVar[Optional[Any]] = None
+
+    @classmethod
+    def get_container(cls) -> Any:
+        """Get container instance.
+
+        Returns:
+            Container instance
+        """
+        if cls._container is None:
+            from earnorm.di import container
+
+            cls._container = container
+        return cls._container
+
+    @classmethod
+    def get_env(cls) -> Any:
+        """Get registry instance.
+
+        Returns:
+            Registry instance
+        """
+        return cls.get_container().registry
 
     def __init_subclass__(cls) -> None:
         """Initialize subclass annotations."""
@@ -93,7 +115,6 @@ class BaseModel(ModelProtocol):
     _cache: CacheConfig = {}
     _metrics: MetricsConfig = {}
     _json_encoders: JsonEncoders = {}
-    env: Registry = env
 
     @property
     def id(self) -> Optional[str]:
@@ -145,28 +166,40 @@ class BaseModel(ModelProtocol):
                 if value is not None:  # Only save non-None values
                     mongo_data[field_name] = field.to_mongo(value)
 
-        # Insert or update
-        if self.id:
-            update_result = await collection.update_one(
-                {"_id": ObjectId(self.id)}, {"$set": mongo_data}
-            )
-            if not update_result.modified_count:
-                raise ValueError("Document not found")
-            self._data.update(mongo_data)  # Update local data
-        else:
-            insert_result = await collection.insert_one(mongo_data)
-            mongo_data["_id"] = insert_result.inserted_id
-            self._data = mongo_data  # Update local data
+        # Get connection from pool
+        conn = await self.get_container().pool.acquire()
+        try:
+            # Insert or update
+            if self.id:
+                update_result = await collection.update_one(
+                    {"_id": ObjectId(self.id)}, {"$set": mongo_data}
+                )
+                if not update_result.modified_count:
+                    raise ValueError("Document not found")
+                self._data.update(mongo_data)  # Update local data
+            else:
+                insert_result = await collection.insert_one(mongo_data)
+                mongo_data["_id"] = insert_result.inserted_id
+                self._data = mongo_data  # Update local data
+        finally:
+            await self.get_container().pool.release(conn)
 
     async def delete(self) -> None:
         """Delete model from database."""
         if not self.id:
             return
 
+        # Get collection
         collection = await self._get_collection()
-        result = await collection.delete_one({"_id": ObjectId(self.id)})
-        if not result.deleted_count:
-            raise ValueError("Document not found")
+
+        # Get connection from pool
+        conn = await self.get_container().pool.acquire()
+        try:
+            result = await collection.delete_one({"_id": ObjectId(self.id)})
+            if not result.deleted_count:
+                raise ValueError("Document not found")
+        finally:
+            await self.get_container().pool.release(conn)
 
     @classmethod
     async def find_one(
@@ -175,10 +208,16 @@ class BaseModel(ModelProtocol):
         """Find single record and return as RecordSet."""
         query = DomainParser(domain).to_mongo_query()
         collection = await cls._get_collection()
-        data = await collection.find_one(query, **kwargs)
-        if data:
-            return RecordSet(cls, [cls(**data)])
-        return RecordSet(cls, [])
+
+        # Get connection from pool
+        conn = await cls.get_container().pool.acquire()
+        try:
+            data = await collection.find_one(query, **kwargs)
+            if data:
+                return RecordSet(cls, [cls(**data)])
+            return RecordSet(cls, [])
+        finally:
+            await cls.get_container().pool.release(conn)
 
     @classmethod
     async def find(
@@ -195,8 +234,14 @@ class BaseModel(ModelProtocol):
         """
         query = DomainParser(domain).to_mongo_query()
         collection = await cls._get_collection()
-        cursor = collection.find(query, **kwargs)
-        return [cls(**data) async for data in cursor]
+
+        # Get connection from pool
+        conn = await cls.get_container().pool.acquire()
+        try:
+            cursor = collection.find(query, **kwargs)
+            return [cls(**data) async for data in cursor]
+        finally:
+            await cls.get_container().pool.release(conn)
 
     @classmethod
     def _domain_to_query(
@@ -253,13 +298,19 @@ class BaseModel(ModelProtocol):
         return sort
 
     @classmethod
-    async def _get_collection(cls) -> Collection:
-        """Get MongoDB collection."""
-        # Get registry from container to ensure we have the latest instance
-        registry = container.get("registry")
-        if registry.db is None:
-            raise RuntimeError("Database not initialized")
-        return registry.db[cls._collection]
+    async def _get_collection(cls) -> AsyncIOMotorCollection[Dict[str, Any]]:
+        """Get MongoDB collection.
+
+        Returns:
+            Motor collection instance
+        """
+        # Get connection from pool
+        conn = await cls.get_container().pool.acquire()
+        try:
+            db = conn.client[cls.get_container().registry.db.name]
+            return db[cls.get_collection_name()]
+        finally:
+            await cls.get_container().pool.release(conn)
 
     @property
     def ids(self) -> List[Any]:
@@ -299,9 +350,15 @@ class BaseModel(ModelProtocol):
         """Search records and return RecordSet."""
         query = DomainParser(domain).to_mongo_query()
         collection = await cls._get_collection()
-        cursor = collection.find(query, **kwargs)
-        records = [cls(**data) async for data in cursor]
-        return RecordSet(cls, records)
+
+        # Get connection from pool
+        conn = await cls.get_container().pool.acquire()
+        try:
+            cursor = collection.find(query, **kwargs)
+            records = [cls(**data) async for data in cursor]
+            return RecordSet(cls, records)
+        finally:
+            await cls.get_container().pool.release(conn)
 
     @classmethod
     async def browse(cls: Type[ModelT], ids: List[str]) -> RecordSetProtocol[ModelT]:

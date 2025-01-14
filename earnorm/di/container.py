@@ -7,6 +7,7 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from earnorm.base.registry import Registry
 from earnorm.di.lifecycle import LifecycleManager
+from earnorm.pool.core.pool import ConnectionPool
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ class DIContainer:
     _instance: Optional["DIContainer"] = None
     _registry: Optional[Registry] = None
     _lifecycle: Optional[LifecycleManager] = None
+    _pool: Optional[ConnectionPool] = None
 
     def __new__(cls) -> "DIContainer":
         """Create singleton instance."""
@@ -86,27 +88,48 @@ class DIContainer:
         """Initialize container resources."""
         logger.info("Connecting to MongoDB: %s", mongo_uri)
         try:
-            self._client = AsyncIOMotorClient(mongo_uri)
-            # Test connection
-            await self._client.admin.command("ping")
-            logger.info("Connected to MongoDB successfully")
+            # Initialize connection pool
+            self._pool = ConnectionPool(
+                uri=mongo_uri,
+                database=database,
+                min_size=kwargs.get("min_pool_size", 5),
+                max_size=kwargs.get("max_pool_size", 20),
+                timeout=kwargs.get("pool_timeout", 30.0),
+                max_lifetime=kwargs.get("pool_max_lifetime", 3600),
+                idle_timeout=kwargs.get("pool_idle_timeout", 300),
+            )
+            await self._pool.init()
+            self._services["pool"] = self._pool
+            logger.info("Connection pool initialized")
 
-            self._db = self._client[database]
-            self._services["db"] = self._db
-            logger.info("Using database: %s", database)
+            # Get connection from pool
+            conn = await self._pool.acquire()
+            try:
+                self._client = conn.client
+                # Test connection
+                await self._client.admin.command("ping")
+                logger.info("Connected to MongoDB successfully")
 
-            # Initialize registry with database
-            registry = self._services["registry"]
-            await registry.init_db(self._db)
-            logger.info("Registry initialized with database")
+                self._db = self._client[database]
+                self._services["db"] = self._db
+                logger.info("Using database: %s", database)
+
+                # Initialize registry with database
+                registry = self._services["registry"]
+                await registry.init_db(self._db)
+                logger.info("Registry initialized with database")
+            finally:
+                await self._pool.release(conn)
+
         except Exception as e:
             logger.error("Failed to connect to MongoDB: %s", e)
             raise
 
     async def cleanup(self) -> None:
         """Cleanup container resources."""
-        if self._client:
-            self._client.close()
+        if self._pool:
+            await self._pool.close()
+            self._pool = None
             self._client = None
             self._db = None
 
@@ -121,6 +144,13 @@ class DIContainer:
     def get_lifecycle(self) -> LifecycleManager:
         """Get lifecycle manager."""
         return self._services["lifecycle"]
+
+    @property
+    def pool(self) -> ConnectionPool:
+        """Get connection pool."""
+        if self._pool is None:
+            raise RuntimeError("Connection pool not initialized")
+        return self._pool
 
 
 __all__ = ["Container", "DIContainer"]

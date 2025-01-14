@@ -52,6 +52,16 @@ class Registry(RegistryProtocol):
         self._db: Optional[AsyncIOMotorDatabase[dict[str, Any]]] = None
         self._discovered = False
         self._scan_paths: Set[str] = set()
+        self._container = None
+
+    @property
+    def container(self):
+        """Lazy load container to avoid circular import."""
+        if self._container is None:
+            from earnorm.di import container
+
+            self._container = container
+        return self._container
 
     def add_scan_path(self, package_name: str) -> None:
         """Add package to scan for models.
@@ -248,7 +258,17 @@ class Registry(RegistryProtocol):
                 collection = self._get_collection_name(model_cls)
                 indexes = [IndexModel(idx) for idx in model_cls.get_indexes()]
                 if indexes:
-                    await db[collection].create_indexes(indexes)
+                    # Get connection from pool
+                    conn = await self.container.pool.acquire()
+                    try:
+                        await self._db[collection].create_indexes(indexes)
+                        logger.info(
+                            "Created indexes for collection %s: %s",
+                            collection,
+                            [idx.document for idx in indexes],
+                        )
+                    finally:
+                        await self.container.pool.release(conn)
 
     @property
     def db(self) -> Optional[AsyncIOMotorDatabase[dict[str, Any]]]:
@@ -309,8 +329,10 @@ class Registry(RegistryProtocol):
         collection = self._get_collection_name(model)
         self._models[collection] = model
         logger.info(
-            f"Registered model {model.__name__} as {collection} "
-            f"({'abstract' if getattr(model, '_abstract', False) else 'concrete'})"
+            "Registered model %s as %s (%s)",
+            model.__name__,
+            collection,
+            "abstract" if getattr(model, "_abstract", False) else "concrete",
         )
 
     def get_model(self, model_name: str) -> Optional[Type[ModelProtocol]]:
