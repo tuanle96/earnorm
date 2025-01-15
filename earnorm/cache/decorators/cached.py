@@ -32,7 +32,10 @@ def _make_cached_decorator(
             if cache_manager is None:
                 from earnorm import di
 
-                cache_manager = di.get("cache_manager")
+                if di is None:
+                    return await func(*args, **kwargs)
+
+                cache_manager = di.get("cache_manager")  # type: ignore
 
             if (
                 not cache_manager
