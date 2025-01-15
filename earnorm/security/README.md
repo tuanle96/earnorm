@@ -409,101 +409,288 @@ class SecureBaseModel(BaseModel, SecurityMixin):
 
 ```python
 class User(SecureBaseModel):
-    """User model with security."""
+    """User model with security.
+    
+    This model uses dynamic security configurations from database:
+    - ACL rules from AccessControlRule collection
+    - Record rules from RecordRule collection
+    - Audit logging is handled by AuditLog collection
+    """
     _collection = "users"
     
-    # ACL config
-    _acl = {
-        "create": ["admin"],
-        "read": ["*"],  # Allow all
-        "write": ["admin", "user"],
-        "delete": ["admin"]
-    }
+    # Basic fields
+    username: str = StringField(
+        required=True,
+        min_length=3,
+        index=True,
+        unique=True
+    )
+    email: str = StringField(
+        required=True,
+        index=True,
+        unique=True
+    )
+    password: str = StringField(required=True)
+    is_active: bool = BooleanField(default=True)
     
-    # Record rules
-    _rules = {
-        "read": [
-            # Users can only read active records
-            ("is_active", "=", True),
-            # Users can only read records in their groups
-            ("groups", "overlap", "user.groups")
-        ],
-        "write": [
-            # Users can only edit their own record
-            ("id", "=", "user.id")
-        ]
-    }
+    # Metadata
+    created_at: datetime = DateTimeField(default_factory=datetime.utcnow)
+    updated_at: datetime = DateTimeField(default_factory=datetime.utcnow)
+    last_login: Optional[datetime] = DateTimeField(required=False)
     
-    # Audit config
-    _audit = {
-        "create": True,
-        "write": ["email", "groups", "roles", "is_active"],
-        "delete": True
-    }
-    
-    username: str = StringField(required=True)
-    email: str = StringField(required=True)
+    async def set_password(self, password: str) -> None:
+        """Set hashed password."""
+        from passlib.hash import pbkdf2_sha256
+        self.password = pbkdf2_sha256.hash(password)
+        
+    async def verify_password(self, password: str) -> bool:
+        """Verify password."""
+        from passlib.hash import pbkdf2_sha256
+        return pbkdf2_sha256.verify(password, self.password)
+        
+    async def update_last_login(self) -> None:
+        """Update last login time."""
+        self.last_login = datetime.utcnow()
+        await self.save()
 ```
 
-### 2. CRUD Operations
+### 2. Security Rules Setup
 
 ```python
-# Create - requires admin access
-user = await User.create({
-    "username": "test",
-    "email": "test@example.com"
+# 1. Create ACL rules
+await AccessControlRule.create({
+    "name": "User Create",
+    "description": "Only admin can create users",
+    "model": "users",
+    "operation": "create",
+    "groups": ["admin"],
+    "priority": 10,
+    "created_by": admin_id,
+    "updated_by": admin_id
 })
 
-# Read - filtered by rules
+await AccessControlRule.create({
+    "name": "User Read",
+    "description": "Everyone can read users",
+    "model": "users", 
+    "operation": "read",
+    "groups": ["*"],
+    "priority": 10,
+    "created_by": admin_id,
+    "updated_by": admin_id
+})
+
+await AccessControlRule.create({
+    "name": "User Write",
+    "description": "Admin and user can write",
+    "model": "users",
+    "operation": "write", 
+    "groups": ["admin", "user"],
+    "priority": 10,
+    "created_by": admin_id,
+    "updated_by": admin_id
+})
+
+await AccessControlRule.create({
+    "name": "User Delete",
+    "description": "Only admin can delete users",
+    "model": "users",
+    "operation": "delete",
+    "groups": ["admin"],
+    "priority": 10,
+    "created_by": admin_id,
+    "updated_by": admin_id
+})
+
+# 2. Create Record rules
+await RecordRule.create({
+    "name": "Active Users Only",
+    "description": "Users can only read active records",
+    "model": "users",
+    "operation": "read",
+    "rule_type": "domain",
+    "domain": [("is_active", "=", True)],
+    "priority": 10,
+    "created_by": admin_id,
+    "updated_by": admin_id
+})
+
+await RecordRule.create({
+    "name": "Same Group Users",
+    "description": "Users can only read records in their groups",
+    "model": "users", 
+    "operation": "read",
+    "rule_type": "domain",
+    "domain": [("groups", "overlap", "user.groups")],
+    "priority": 20,
+    "created_by": admin_id,
+    "updated_by": admin_id
+})
+
+await RecordRule.create({
+    "name": "Own Record Only",
+    "description": "Users can only edit their own record",
+    "model": "users",
+    "operation": "write",
+    "rule_type": "domain", 
+    "domain": [("id", "=", "user.id")],
+    "priority": 10,
+    "created_by": admin_id,
+    "updated_by": admin_id
+})
+```
+
+### 3. CRUD Operations
+
+```python
+# Create - requires admin access based on ACL rule
+user = await User.create({
+    "username": "test",
+    "email": "test@example.com",
+    "password": "secret123"
+})
+
+# Read - filtered by record rules automatically
 users = await User.search([
     ("email", "like", "%@example.com")
 ])
+# Final query will include:
+# - is_active = True (from Active Users Only rule)
+# - groups overlap with current user's groups (from Same Group Users rule)
 
 # Update - checks write access and rules
 user.email = "new@example.com"
 await user.save()
+# Will only succeed if:
+# - Current user has admin/user group (from ACL rule)
+# - Current user owns the record (from Own Record Only rule)
 
-# Delete - requires admin access
+# Delete - requires admin access based on ACL rule
 await user.delete()
 ```
 
-### 3. Security Groups
+### 4. Security Groups
 
 ```python
 # Create group
 sales_group = await SecurityGroup.create({
     "name": "Sales Team",
     "code": "sales",
-    "description": "Sales department users"
+    "description": "Sales department users",
+    "created_by": admin_id,
+    "updated_by": admin_id
+})
+
+# Create ACL rules for sales group
+await AccessControlRule.create({
+    "name": "Sales Product Access",
+    "description": "Sales team product permissions",
+    "model": "products",
+    "operation": "read",
+    "groups": ["sales"],
+    "priority": 10,
+    "created_by": admin_id,
+    "updated_by": admin_id
 })
 
 # Assign user to group
 await UserGroup.create({
     "user_id": user.id,
     "group_id": sales_group.id,
-    "granted_by": admin_user.id
+    "granted_by": admin_id
 })
 ```
 
-### 4. Security Roles
+### 5. Security Roles
 
 ```python
 # Create role
 sales_role = await SecurityRole.create({
     "name": "Sales Manager",
     "code": "sales_manager",
+    "description": "Sales team manager role",
     "model_permissions": {
         "products": ["read", "write"],
         "orders": ["read", "write", "approve"],
         "customers": ["read", "write"]
-    }
+    },
+    "created_by": admin_id,
+    "updated_by": admin_id
+})
+
+# Create ACL rules for sales manager role
+await AccessControlRule.create({
+    "name": "Sales Manager Order Approval",
+    "description": "Sales managers can approve orders",
+    "model": "orders",
+    "operation": "approve",
+    "roles": ["sales_manager"],
+    "conditions": {
+        "total": {"$lte": 10000}  # Can only approve orders up to $10,000
+    },
+    "priority": 10,
+    "created_by": admin_id,
+    "updated_by": admin_id
 })
 
 # Assign role to user
 await UserRole.create({
     "user_id": user.id,
     "role_id": sales_role.id,
-    "granted_by": admin_user.id
+    "granted_by": admin_id
+})
+```
+
+### 6. Complex Rules Example
+
+```python
+# Multi-condition rule
+await RecordRule.create({
+    "name": "Regional Sales Access",
+    "description": "Sales team can only access their region's data",
+    "model": "orders",
+    "operation": "read",
+    "rule_type": "domain",
+    "domain": [
+        "&",
+        ("region_id", "=", "user.region_id"),
+        "|",
+        ("status", "=", "approved"),
+        ("created_by", "=", "user.id")
+    ],
+    "priority": 10,
+    "created_by": admin_id,
+    "updated_by": admin_id
+})
+
+# Python code rule
+await RecordRule.create({
+    "name": "Complex Order Access",
+    "description": "Complex order access logic",
+    "model": "orders",
+    "operation": "write",
+    "rule_type": "python",
+    "python_code": """
+async def check_access(user, order):
+    # Check order status
+    if order.status == 'completed':
+        return False
+        
+    # Check user role
+    if 'sales_manager' in user.roles:
+        return True
+        
+    # Check order amount
+    if order.total > 1000 and 'sales' in user.groups:
+        return False
+        
+    # Check customer assignment
+    customer = await order.get_customer()
+    return customer.assigned_to == user.id
+    """,
+    "priority": 20,
+    "created_by": admin_id,
+    "updated_by": admin_id
 })
 ```
 
