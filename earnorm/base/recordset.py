@@ -107,10 +107,23 @@ class RecordSet(RecordSetProtocol[M]):
 
     async def write(self, values: Dict[str, Any]) -> bool:
         """Update records with values."""
+        import logging
+
+        logger = logging.getLogger(self.__class__.__name__)
+
+        logger.debug(f"Writing values to records: {values}")
         for record in self._records:
+            logger.debug(f"Updating record {record.id} with values")
+            # Update attributes and data
             for key, value in values.items():
+                logger.debug(f"Setting {key}={value}")
                 setattr(record, key, value)
+
+            # Save updated record
+            logger.debug(f"Saving record {record.id}")
             await record.save()
+            logger.debug(f"Record {record.id} saved successfully")
+
         return True
 
     async def unlink(self) -> bool:

@@ -6,9 +6,9 @@ import logging
 import os
 import pkgutil
 import sys
-from typing import Any, Dict, List, Optional, Set, Type, cast
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Type, cast
 
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
 from pymongo.operations import IndexModel
 
 from earnorm.base.recordset import RecordSet
@@ -359,3 +359,46 @@ class Registry(RegistryProtocol):
                 return model
 
         return None
+
+    async def _ensure_indexes(self, model_cls: Type[ModelProtocol]) -> None:
+        """Ensure indexes exist for model."""
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        collection: AsyncIOMotorCollection = await model_cls._get_collection()  # type: ignore
+        indexes = model_cls.get_indexes()  # type: ignore
+
+        for index in indexes:
+            try:
+                # Handle simple index format: {"field": 1}
+                if all(isinstance(v, int) for v in index.values()):
+                    keys: Sequence[Tuple[str, int]] = [(k, v) for k, v in index.items()]
+                    await collection.create_index(
+                        keys,
+                        unique=(
+                            True
+                            if any(
+                                hasattr(getattr(model_cls, k, None), "unique")
+                                for k in index.keys()
+                            )
+                            else False
+                        ),
+                    )
+                # Handle complex index format: {"keys": [("field", 1)], "unique": True}
+                elif "keys" in index:
+                    await collection.create_index(
+                        index["keys"],
+                        unique=index.get("unique", False),
+                        **{
+                            k: v
+                            for k, v in index.items()
+                            if k not in ["keys", "unique"]
+                        },
+                    )
+                logger.debug(f"Created index {index} for {model_cls.get_name()}")
+            except Exception as e:
+                logger.error(
+                    f"Failed to create index {index} for {model_cls.get_name()}: {str(e)}"
+                )
+                raise

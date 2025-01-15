@@ -1,6 +1,7 @@
 """Base model implementation."""
 
 import logging
+import traceback
 from typing import (
     Any,
     Callable,
@@ -64,6 +65,11 @@ class BaseModel(ModelProtocol):
     _indexes: List[Dict[str, Any]] = []
     _container: ClassVar[Optional[Any]] = None
 
+    # Cache configuration
+    _cache_enabled: bool = True  # Enable/disable caching for this model
+    _cache_ttl: int = 3600  # Default TTL in seconds
+    _cache_prefix: Optional[str] = None  # Custom prefix for this model
+
     @classmethod
     def get_container(cls) -> Any:
         """Get container instance.
@@ -85,6 +91,59 @@ class BaseModel(ModelProtocol):
             Registry instance
         """
         return cls.get_container().registry
+
+    @classmethod
+    def get_cache_manager(cls) -> Optional[Any]:
+        """Get cache manager instance.
+
+        Returns:
+            Cache manager instance if available
+        """
+        try:
+            return cls.get_container().get("cache_manager")
+        except Exception as e:
+            logger.error(f"Error getting cache manager: {str(e)}")
+            return None
+
+    @classmethod
+    def get_cache_key(cls, key: str) -> str:
+        """Get cache key with model prefix.
+
+        Args:
+            key: Base key
+
+        Returns:
+            Full cache key
+        """
+        prefix = cls._cache_prefix or f"{cls._name}:"
+        return f"{prefix}{key}"
+
+    @classmethod
+    def get_query_cache_key(cls, query: Dict[str, Any], **kwargs: Any) -> str:
+        """Generate cache key for a query.
+
+        Args:
+            query: MongoDB query
+            **kwargs: Additional query options
+
+        Returns:
+            Cache key
+        """
+        # Sort query and kwargs to ensure consistent keys
+        sorted_query = {k: query[k] for k in sorted(query.keys())}
+        sorted_kwargs = {k: kwargs[k] for k in sorted(kwargs.keys())}
+
+        # Create unique key based on query and options
+        key_parts = [str(sorted_query), str(sorted_kwargs)]
+        return cls.get_cache_key(":".join(key_parts))
+
+    async def invalidate_cache(self) -> None:
+        """Invalidate all cache entries for this record."""
+        cache = self.get_cache_manager()
+        if cache and self._cache_enabled:
+            # Clear all cache entries for this record
+            pattern = self.get_cache_key(f"*{self.id}*")
+            await cache.clear(pattern)
 
     def __init_subclass__(cls) -> None:
         """Initialize subclass annotations."""
@@ -145,42 +204,116 @@ class BaseModel(ModelProtocol):
         for constraint in self._constraints:
             await constraint(self)
 
+    async def verify_exists(self) -> bool:
+        """Verify record exists and handle cache inconsistency.
+
+        This method checks if record exists in both database and cache.
+        It also handles cache inconsistency:
+        1. If data exists in DB but not in cache -> rebuild cache
+        2. If data exists in cache but not in DB -> invalidate cache
+        3. If data exists in both -> return True
+        4. If data doesn't exist in both -> return False
+
+        Returns:
+            bool: True if record exists, False otherwise
+        """
+        import logging
+
+        logger = logging.getLogger(self.__class__.__name__)
+
+        if not self.id:
+            logger.debug("No record ID provided")
+            return False
+
+        try:
+            # Check database first
+            collection = await self._get_collection()
+            object_id = ObjectId(self.id)
+            query = {"_id": object_id}
+
+            doc = await collection.find_one(query)
+            db_exists = doc is not None
+            logger.debug(f"Database check: exists={db_exists}")
+
+            # For update operations, we only care about DB existence
+            # Cache will be handled by save() method
+            return db_exists
+
+        except Exception as e:
+            logger.error(f"Error verifying record: {str(e)}")
+            logger.error(traceback.format_exc())
+            return False
+
     async def save(self) -> None:
         """Save model to database.
 
         Raises:
             ValueError: If validation fails
         """
+        import logging
+
+        logger = logging.getLogger(self.__class__.__name__)
+
         # Validate data
+        logger.debug("Validating data")
         await self.validate()
+
+        # For existing records, verify existence in DB
+        if self.id:
+            exists = await self.verify_exists()
+            if not exists:
+                raise ValueError(f"Record {self.id} does not exist or has been deleted")
 
         # Get collection
         collection = await self._get_collection()
+        logger.debug(f"Using collection: {collection.name}")
 
         # Convert data to MongoDB format
         mongo_data: Dict[str, Any] = {}
+
+        # Include all data from _data
+        logger.debug(f"Current data: {self._data}")
+        mongo_data.update(self._data)
+        logger.debug(f"After including _data: {mongo_data}")
+
+        # Convert fields to MongoDB format
         for field_name, field in self.__class__.__dict__.items():
             if isinstance(field, FieldProtocol):
                 field.name = field_name  # Set field name
                 value = getattr(self, field_name)
                 if value is not None:  # Only save non-None values
                     mongo_data[field_name] = field.to_mongo(value)
+        logger.debug(f"Final mongo data: {mongo_data}")
 
         # Get connection from pool
         conn = await self.get_container().pool.acquire()
         try:
             # Insert or update
             if self.id:
+                # Remove _id from update data
+                update_data = {k: v for k, v in mongo_data.items() if k != "_id"}
+                logger.debug(f"Updating document {self.id} with data: {update_data}")
                 update_result = await collection.update_one(
-                    {"_id": ObjectId(self.id)}, {"$set": mongo_data}
+                    {"_id": ObjectId(self.id)}, {"$set": update_data}
                 )
-                if not update_result.modified_count:
+                logger.debug(
+                    f"Update result: matched={update_result.matched_count}, modified={update_result.modified_count}"
+                )
+                if not update_result.matched_count:
                     raise ValueError("Document not found")
-                self._data.update(mongo_data)  # Update local data
+                self._data.update(update_data)  # Update local data
+                logger.debug(f"Updated local data: {self._data}")
             else:
+                logger.debug(f"Inserting new document with data: {mongo_data}")
                 insert_result = await collection.insert_one(mongo_data)
                 mongo_data["_id"] = insert_result.inserted_id
                 self._data = mongo_data  # Update local data
+                logger.debug(f"Inserted document with ID: {insert_result.inserted_id}")
+
+            # Invalidate cache after save
+            logger.debug("Invalidating cache")
+            await self.invalidate_cache()
+
         finally:
             await self.get_container().pool.release(conn)
 
@@ -198,6 +331,10 @@ class BaseModel(ModelProtocol):
             result = await collection.delete_one({"_id": ObjectId(self.id)})
             if not result.deleted_count:
                 raise ValueError("Document not found")
+
+            # Invalidate cache after delete
+            await self.invalidate_cache()
+
         finally:
             await self.get_container().pool.release(conn)
 
@@ -206,15 +343,44 @@ class BaseModel(ModelProtocol):
         cls: Type[ModelT], domain: Optional[List[Any]] = None, **kwargs: Any
     ) -> RecordSetProtocol[ModelT]:
         """Find single record and return as RecordSet."""
-        query = DomainParser(domain).to_mongo_query()
-        collection = await cls._get_collection()
+        import logging
 
-        # Get connection from pool
+        logger = logging.getLogger(cls.__name__)
+
+        query = DomainParser(domain).to_mongo_query()
+        cache_key = cls.get_query_cache_key(query, limit=1, **kwargs)
+        logger.debug(f"Finding document with query: {query}, cache_key: {cache_key}")
+
+        # Try to get from cache
+        cache = cls.get_cache_manager()
+        if cache and cls._cache_enabled:
+            logger.debug("Cache enabled, trying to get from cache")
+            cached_data = await cache.get(cache_key)
+            if cached_data is not None:
+                logger.debug(f"Found in cache: {cached_data}")
+                if cached_data:  # If data exists
+                    return RecordSet(cls, [cls(**cached_data[0])])
+                return RecordSet(cls, [])
+            logger.debug("Not found in cache")
+
+        # Get from database
+        collection = await cls._get_collection()
         conn = await cls.get_container().pool.acquire()
         try:
+            logger.debug("Querying database")
             data = await collection.find_one(query, **kwargs)
-            if data:
-                return RecordSet(cls, [cls(**data)])
+            logger.debug(f"Database result: {data}")
+            result = [data] if data else []
+
+            # Cache the result
+            if cache and cls._cache_enabled:
+                logger.debug(f"Caching result: {result}")
+                await cache.set(cache_key, result, cls._cache_ttl)
+
+            if result:
+                logger.debug("Returning record from database")
+                return RecordSet(cls, [cls(**result[0])])
+            logger.debug("No record found in database")
             return RecordSet(cls, [])
         finally:
             await cls.get_container().pool.release(conn)
@@ -233,13 +399,27 @@ class BaseModel(ModelProtocol):
             List of model instances
         """
         query = DomainParser(domain).to_mongo_query()
-        collection = await cls._get_collection()
+        cache_key = cls.get_query_cache_key(query, **kwargs)
 
-        # Get connection from pool
+        # Try to get from cache
+        cache = cls.get_cache_manager()
+        if cache and cls._cache_enabled:
+            cached_data = await cache.get(cache_key)
+            if cached_data is not None:
+                return [cls(**data) for data in cached_data]
+
+        # Get from database
+        collection = await cls._get_collection()
         conn = await cls.get_container().pool.acquire()
         try:
             cursor = collection.find(query, **kwargs)
-            return [cls(**data) async for data in cursor]
+            result = [data async for data in cursor]
+
+            # Cache the result
+            if cache and cls._cache_enabled:
+                await cache.set(cache_key, result, cls._cache_ttl)
+
+            return [cls(**data) for data in result]
         finally:
             await cls.get_container().pool.release(conn)
 
@@ -349,20 +529,71 @@ class BaseModel(ModelProtocol):
     ) -> RecordSetProtocol[ModelT]:
         """Search records and return RecordSet."""
         query = DomainParser(domain).to_mongo_query()
-        collection = await cls._get_collection()
+        cache_key = cls.get_query_cache_key(query, **kwargs)
 
-        # Get connection from pool
+        # Try to get from cache
+        cache = cls.get_cache_manager()
+        if cache and cls._cache_enabled:
+            cached_data = await cache.get(cache_key)
+            if cached_data is not None:
+                return RecordSet(cls, [cls(**data) for data in cached_data])
+
+        # Get from database
+        collection = await cls._get_collection()
         conn = await cls.get_container().pool.acquire()
         try:
             cursor = collection.find(query, **kwargs)
-            records = [cls(**data) async for data in cursor]
-            return RecordSet(cls, records)
+            result = [data async for data in cursor]
+
+            # Cache the result
+            if cache and cls._cache_enabled:
+                await cache.set(cache_key, result, cls._cache_ttl)
+
+            return RecordSet(cls, [cls(**data) for data in result])
         finally:
             await cls.get_container().pool.release(conn)
 
     @classmethod
     async def browse(cls: Type[ModelT], ids: List[str]) -> RecordSetProtocol[ModelT]:
         """Browse records by IDs."""
+        # Try to get from cache first
+        cache = cls.get_cache_manager()
+        if cache and cls._cache_enabled:
+            # Try to get each record from cache
+            cached_records: List[ModelT] = []
+            missing_ids: List[str] = []
+
+            for id in ids:
+                cache_key = cls.get_cache_key(f"id:{id}")
+                cached_data = await cache.get(cache_key)
+                if cached_data is not None:
+                    cached_records.append(cls(**cached_data))
+                else:
+                    missing_ids.append(id)
+
+            # If all records were cached, return them
+            if not missing_ids:
+                return RecordSet(cls, cached_records)
+
+            # Otherwise, fetch missing records
+            domain = [("_id", "in", [ObjectId(id) for id in missing_ids])]
+            missing_records = await cls.search(domain)
+
+            # Cache the missing records
+            for record in missing_records:
+                cache_key = cls.get_cache_key(f"id:{record.id}")
+                await cache.set(cache_key, record.data, cls._cache_ttl)
+
+            # Combine cached and missing records
+            all_records = cached_records + list(missing_records)
+
+            # Sort records to match original ID order
+            id_map = {str(record.id): record for record in all_records}
+            sorted_records = [id_map[id] for id in ids if id in id_map]
+
+            return RecordSet(cls, sorted_records)
+
+        # If cache is disabled, just search by IDs
         domain = [("_id", "in", [ObjectId(id) for id in ids])]
         return await cls.search(domain)
 
@@ -371,3 +602,42 @@ class BaseModel(ModelProtocol):
         if name in self._data:
             return self._data[name]
         raise AttributeError(f"'{self.__class__.__name__}' has no attribute '{name}'")
+
+    async def get_collection(self) -> Collection:
+        """Get collection for this model.
+
+        Returns:
+            AsyncIOMotorCollection instance
+        """
+        return await self._get_collection()
+
+    async def write(self, values: Dict[str, Any]) -> bool:
+        """Update record with values.
+
+        Args:
+            values: Dictionary of field values to update
+
+        Returns:
+            True if update successful
+
+        Raises:
+            ValueError: If validation fails
+        """
+        import logging
+
+        logger = logging.getLogger(self.__class__.__name__)
+
+        logger.debug(f"Writing values to record: {values}")
+
+        # Update attributes and data
+        for key, value in values.items():
+            logger.debug(f"Setting {key}={value}")
+            setattr(self, key, value)
+            self._data[key] = value
+
+        # Save updated record
+        logger.debug("Saving record")
+        await self.save()
+        logger.debug("Record saved successfully")
+
+        return True
