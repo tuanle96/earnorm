@@ -1,12 +1,16 @@
 """EarnORM - Async MongoDB ORM."""
 
-from typing import Any, Optional, Type
+import logging
+from typing import Any, Dict, Optional, Type, cast
 
 from earnorm import fields
 from earnorm.base import model as models
 from earnorm.cache import CacheManager
 from earnorm.di import Container, DIContainer
+from earnorm.events import EventBus
 from earnorm.pool.core.connection import Connection
+
+logger = logging.getLogger(__name__)
 
 # Global variables
 env = None
@@ -14,6 +18,7 @@ registry = None
 di = None
 pool = None
 cache = None
+event_bus = None
 
 # Global container instance
 container = DIContainer()
@@ -39,7 +44,8 @@ async def init(
     pool_max_lifetime: int = 3600,
     pool_idle_timeout: int = 300,
     cache_config: Optional[dict[str, Any]] = None,
-    **kwargs: Any,
+    event_config: Optional[dict[str, Any]] = None,
+    **kwargs: Dict[str, Any],
 ) -> None:
     """Initialize EarnORM with configuration.
 
@@ -58,9 +64,15 @@ async def init(
             - max_retries: Max reconnection attempts (default: 3)
             - retry_delay: Initial delay between retries (default: 1.0)
             - health_check_interval: Health check interval in seconds (default: 30.0)
-        **kwargs: Additional configuration options
+        event_config: Event configuration options
+            - queue_name: Event queue name (default: "earnorm:events")
+            - batch_size: Event batch size (default: 100)
+            - poll_interval: Event poll interval in seconds (default: 1.0)
+            - max_retries: Event max retries (default: 3)
+            - retry_delay: Event retry delay in seconds (default: 5.0)
+            - num_workers: Event worker count (default: 1)
     """
-    global env, registry, di, pool, cache
+    global env, registry, di, pool, cache, event_bus
 
     # Initialize container with pool configuration
     await container.init(
@@ -80,8 +92,10 @@ async def init(
     registry = env
     pool = container.pool
 
-    # Initialize cache manager if Redis URI provided
+    # Initialize services as needed
     if redis_uri:
+
+        # Initialize cache manager
         cache_config = cache_config or {}
         cache_manager = CacheManager(
             redis_uri=redis_uri,
@@ -94,6 +108,22 @@ async def init(
         await cache_manager.connect()
         cache = cache_manager
         di.register("cache_manager", cache_manager)
+        logger.info("Cache system initialized")
+
+        # Initialize event bus
+        event_config = event_config or {}
+        event_bus = EventBus(
+            redis_uri=redis_uri,
+            queue_name=event_config.get("queue_name", "earnorm:events"),
+            batch_size=event_config.get("batch_size", 100),
+            poll_interval=event_config.get("poll_interval", 1.0),
+            max_retries=event_config.get("max_retries", 3),
+            retry_delay=event_config.get("retry_delay", 5.0),
+            num_workers=event_config.get("num_workers", 1),
+        )
+        await event_bus.connect()
+        di.register("event_bus", event_bus)
+        logger.info("Event system initialized")
 
     # Get all subclasses of BaseModel
     for model_cls in get_all_subclasses(models.BaseModel):
@@ -137,4 +167,6 @@ __all__ = [
     # Cache
     "cache",
     "CacheManager",
+    # Events
+    "event_bus",
 ]
