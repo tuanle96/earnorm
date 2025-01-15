@@ -13,8 +13,6 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Topic :: Database",
@@ -24,18 +22,19 @@ classifiers = [
 ]
 
 [tool.poetry.dependencies]
-python = "^3.9"
-motor = "3.3.2"
-pymongo = "4.6.1"
-pydantic = "^2.0.0"
-dependency-injector = "^4.41.0"
-typing-extensions = "^4.8.0"
-python-dotenv = "^1.0.0"
-PyYAML = "^6.0.1"
-redis = "^5.0.0"
-prometheus-client = "^0.19.0"
-structlog = "^24.1.0"
-phonenumbers = "^8.13.26"
+python = "^3.10"
+motor = "^3.6.1"
+pymongo = "4.9.2"
+pydantic = "^2.10.5"
+dependency-injector = "^4.45.0"
+typing-extensions = "^4.12.2"
+python-dotenv = "^1.0.1"
+PyYAML = "^6.0.2"
+redis = "^5.2.1"
+prometheus-client = "^0.21.1"
+structlog = "^24.4.0"
+phonenumbers = "^8.13.52"
+bullmq = "^2.11.0"
 
 [tool.poetry.group.test]
 optional = true
@@ -64,7 +63,7 @@ earnorm = "earnorm.cli:main"
 
 [tool.black]
 line-length = 88
-target-version = ['py39']
+target-version = ['py310']
 include = '\.pyi?$'
 
 [tool.isort]
@@ -73,7 +72,7 @@ multi_line_output = 3
 line_length = 88
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
