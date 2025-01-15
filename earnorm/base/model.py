@@ -18,7 +18,11 @@ from typing import (
 )
 
 from bson import ObjectId
-from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
+from motor.motor_asyncio import (
+    AsyncIOMotorCollection,
+    AsyncIOMotorCursor,
+    AsyncIOMotorDatabase,
+)
 from pymongo.cursor import Cursor
 
 from earnorm.base.domain import Domain, DomainParser
@@ -635,7 +639,7 @@ class BaseModel(ModelProtocol):
                     # Verify all cached records exist in DB
                     collection = await cls._get_collection()
                     all_exist = True
-                    invalid_ids = []
+                    invalid_ids: List[str] = []
 
                     for record in cached_data:
                         record_id = record.get("_id")
@@ -665,8 +669,10 @@ class BaseModel(ModelProtocol):
         conn = await cls.get_container().pool.acquire()
         try:
             logger.debug("Querying database")
-            cursor = collection.find(query, **kwargs)
-            data = await cursor.to_list(length=None)
+            cursor: AsyncIOMotorCursor[Dict[str, Any]] = collection.find(
+                query, **kwargs
+            )
+            data: List[Dict[str, Any]] = await cursor.to_list(length=None)  # type: ignore[assignment]
             logger.debug(f"Database result: {data}")
 
             # Cache the result

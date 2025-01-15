@@ -6,7 +6,7 @@ import logging
 import os
 import pkgutil
 import sys
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Type, cast
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Type, Union, cast
 
 from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
 from pymongo.operations import IndexModel
@@ -373,8 +373,10 @@ class Registry(RegistryProtocol):
             try:
                 # Handle simple index format: {"field": 1}
                 if all(isinstance(v, int) for v in index.values()):
-                    keys: Sequence[Tuple[str, int]] = [(k, v) for k, v in index.items()]
-                    await collection.create_index(
+                    keys: Sequence[Tuple[str, Union[int, str, Dict[str, Any]]]] = [
+                        (k, v) for k, v in index.items()
+                    ]
+                    await collection.create_index(  # type: ignore[arg-type]
                         keys,
                         unique=(
                             True
@@ -387,7 +389,7 @@ class Registry(RegistryProtocol):
                     )
                 # Handle complex index format: {"keys": [("field", 1)], "unique": True}
                 elif "keys" in index:
-                    await collection.create_index(
+                    await collection.create_index(  # type: ignore[arg-type]
                         index["keys"],
                         unique=index.get("unique", False),
                         **{

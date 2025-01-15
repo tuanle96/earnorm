@@ -9,18 +9,7 @@ import logging
 import random
 import time
 from dataclasses import dataclass
-from typing import (
-    Any,
-    Awaitable,
-    Callable,
-    Dict,
-    Iterable,
-    List,
-    Optional,
-    Set,
-    TypeVar,
-    cast,
-)
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, TypeVar, cast
 
 import redis.asyncio as redis
 from bson import ObjectId
@@ -32,7 +21,9 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 
-def with_retry(max_retries: int = 3, delay: float = 0.1) -> Callable[..., Awaitable[T]]:
+def with_retry(
+    max_retries: int = 3, delay: float = 0.1
+) -> Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
     """Retry decorator for cache operations.
 
     Args:
@@ -64,7 +55,7 @@ def with_retry(max_retries: int = 3, delay: float = 0.1) -> Callable[..., Awaita
                     current_delay *= 2  # Exponential backoff
 
                     # Try to reconnect
-                    self._connected = False
+                    self.connected = False
                     await self.connect()
 
             return cast(T, None)
@@ -217,16 +208,19 @@ class BatchInvalidator:
             return
 
         # Get lock
-        async with DistributedLock(self.cache_manager._client, "batch_invalidate"):
+        if not self.cache_manager.client:
+            raise RedisError("No Redis client available")
+
+        async with DistributedLock(self.cache_manager.client, "batch_invalidate"):
             # Delete keys
             if self.keys:
-                await self.cache_manager._client.delete(*self.keys)
+                await self.cache_manager.client.delete(*self.keys)
 
             # Delete patterns
             for pattern in self.patterns:
-                keys = await self.cache_manager._client.keys(pattern)
+                keys: List[str] = await self.cache_manager.client.keys(pattern)  # type: ignore[no-any-return]
                 if keys:
-                    await self.cache_manager._client.delete(*keys)
+                    await self.cache_manager.client.delete(*keys)  # type: ignore[no-any-return]
 
             # Reset batch
             self.reset()
@@ -319,7 +313,7 @@ class MetricsCollector:
 
     def to_prometheus(self) -> str:
         """Export metrics in Prometheus format."""
-        lines = []
+        lines: List[str] = []
         metrics = self.get_metrics()
 
         # Add metric help and type
@@ -414,12 +408,15 @@ class CacheManager:
         while retries < self.max_retries:
             try:
                 # Create Redis client
-                self._client = redis.Redis.from_url(
+                if not self.redis_uri:
+                    raise RedisError("Redis URI not provided")
+
+                self._client = redis.Redis.from_url(  # type: ignore[misc]
                     self.redis_uri, decode_responses=True, encoding="utf-8"
                 )
 
                 # Test connection
-                await self._client.ping()
+                await self._client.ping()  # type: ignore[no-any-return]
                 self._connected = True
 
                 # Start health check
@@ -473,7 +470,7 @@ class CacheManager:
                 if self._client is None:
                     raise RedisError("No Redis client")
 
-                await self._client.ping()
+                await self._client.ping()  # type: ignore[no-any-return]
 
             except RedisError as e:
                 logger.warning(f"Redis health check failed: {str(e)}")
@@ -501,7 +498,7 @@ class CacheManager:
                 self._metrics.record_hit()
                 return json.loads(value)
             self._metrics.record_miss()
-        except RedisError as e:
+        except RedisError:
             self._metrics.record_error()
             raise
 
@@ -520,7 +517,7 @@ class CacheManager:
                 ex=ttl or self.ttl,
             )
             return True
-        except RedisError as e:
+        except RedisError:
             self._metrics.record_error()
             raise
 
@@ -541,7 +538,7 @@ class CacheManager:
 
         # Get all keys matching pattern
         pattern_with_prefix = self._make_key(pattern)
-        keys = await self._client.keys(pattern_with_prefix)
+        keys = await self._client.keys(pattern_with_prefix)  # type: ignore[no-any-return]
 
         if keys:
             # Delete all matched keys
@@ -563,7 +560,7 @@ class CacheManager:
             return False
 
         try:
-            keys = await self._client.keys(self._make_key(pattern))
+            keys = await self._client.keys(self._make_key(pattern))  # type: ignore[no-any-return]
             if keys:
                 await self._client.delete(*keys)
             return True
@@ -587,7 +584,7 @@ class CacheManager:
 
         try:
             return bool(await self._client.exists(self._make_key(key)))
-        except RedisError as e:
+        except RedisError:
             self._metrics.record_error()
             raise
 
@@ -600,6 +597,16 @@ class CacheManager:
     def connected(self) -> bool:
         """Whether connected to Redis."""
         return self._connected
+
+    @connected.setter
+    def connected(self, value: bool) -> None:
+        """Set connection status."""
+        self._connected = value
+
+    @property
+    def client(self) -> Optional[Redis]:
+        """Get Redis client."""
+        return self._client
 
     def batch(self) -> BatchInvalidator:
         """Get batch invalidator."""
@@ -638,7 +645,7 @@ class CacheManager:
         try:
             # Get keys with prefix
             pattern_with_prefix = self._make_key(pattern)
-            keys = await self._client.keys(pattern_with_prefix)
+            keys = await self._client.keys(pattern_with_prefix)  # type: ignore[no-any-return]
 
             # Remove prefix from keys before returning
             prefix_len = len(self.prefix)

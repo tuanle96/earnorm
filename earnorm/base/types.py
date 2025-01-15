@@ -42,6 +42,11 @@ class ModelProtocol(Protocol):
         ...
 
     @classmethod
+    def get_name(cls) -> str:
+        """Get model name."""
+        ...
+
+    @classmethod
     def get_indexes(cls) -> List[Dict[str, Any]]:
         """Get model indexes."""
         ...

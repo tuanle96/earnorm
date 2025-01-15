@@ -107,7 +107,7 @@ class DIContainer:
             try:
                 self._client = conn.client
                 # Test connection
-                await self._client.admin.command("ping")
+                await self._client.admin.command("ping")  # type: ignore[no-any-return]
                 logger.info("Connected to MongoDB successfully")
 
                 self._db = self._client[database]
