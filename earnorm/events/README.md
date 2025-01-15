@@ -54,6 +54,8 @@ from earnorm.events.decorators import (
 )
 
 class User(BaseModel):
+    """User model with lifecycle hooks."""
+    
     _collection = "users"
 
     email = StringField(required=True)
@@ -63,6 +65,7 @@ class User(BaseModel):
 
     @before_create
     async def validate_email(self):
+        """Validate email before creating user."""
         if not await self.is_valid_email():
             raise ValueError("Invalid email format")
         if await self.email_exists():
@@ -70,11 +73,13 @@ class User(BaseModel):
 
     @after_write
     async def invalidate_cache(self):
+        """Clear user cache after write operations."""
         await self.env.cache.delete(f"user:{self.id}")
         await self.env.cache.delete_pattern("users:*")
 
     @before_delete
     async def check_dependencies(self):
+        """Check dependencies before deleting user."""
         if await self.has_active_orders():
             raise ValueError("Cannot delete user with active orders")
         if await self.has_active_subscriptions():
@@ -95,12 +100,16 @@ from earnorm.events.core.types import EventData
 from earnorm.events.decorators import event
 
 class OrderItem(EventData):
+    """Order item data for events."""
+    
     product_id: str
     name: str
     quantity: int
     price: float
 
 class OrderCreatedEvent(EventData):
+    """Event data for order creation."""
+    
     order_id: str
     customer_id: str
     total: float
@@ -109,6 +118,8 @@ class OrderCreatedEvent(EventData):
     created_at: str
 
 class Order(BaseModel):
+    """Order model with event handling."""
+    
     _collection = "orders"
 
     customer_id = ObjectIdField(required=True)
@@ -119,10 +130,11 @@ class Order(BaseModel):
     created_at = DateTimeField(auto_now=True)
 
     async def create(self, **data):
+        """Create order and publish event."""
         await super().create(**data)
         
         # Publish order created event
-        await self.event_bus.publish(
+        await self.env.event.publish(
             "order.created",
             OrderCreatedEvent(
                 order_id=str(self.id),
@@ -136,6 +148,7 @@ class Order(BaseModel):
 
     @event("order.created", data_class=OrderCreatedEvent)
     async def send_confirmation(self, data: OrderCreatedEvent):
+        """Send order confirmation email."""
         customer = await self.env.users.find_one([("_id", "=", data.customer_id)])
         if customer:
             await self.env.mail_service.send_order_confirmation(
@@ -157,6 +170,8 @@ from earnorm.events.core.types import EventData
 from datetime import datetime
 
 class PaymentEvent(EventData):
+    """Event data for payment events."""
+    
     payment_id: str
     order_id: str
     amount: float
@@ -167,6 +182,7 @@ class PaymentEvent(EventData):
 
 @event_handler("payment.failed")
 async def notify_admin(data: PaymentEvent):
+    """Notify admin on high value payment failures."""
     if data.amount > 1000:
         await env.slack.send_message(
             channel="#payments-alerts",
@@ -192,6 +208,8 @@ from earnorm.fields import StringField, DateTimeField, DictField
 from datetime import datetime
 
 class SecurityLog(BaseModel):
+    """Security log model for tracking security events."""
+    
     _collection = "security_logs"
 
     event_type = StringField(required=True)
@@ -201,6 +219,7 @@ class SecurityLog(BaseModel):
 
 @model_event_handler(SecurityLog, "user.password_changed")
 async def log_password_change(data: dict):
+    """Log password change events."""
     await SecurityLog.create(
         event_type="password_changed",
         user_id=data["user_id"],
@@ -214,7 +233,7 @@ async def log_password_change(data: dict):
 
 ### Publishing Events from Models
 
-Each model instance has access to `event_bus` for publishing events:
+Each model instance has access to event publishing through `self.env.event`:
 
 ```python
 from earnorm.base import BaseModel
@@ -226,6 +245,8 @@ from earnorm.events.core.types import EventData
 from datetime import datetime, timedelta
 
 class SubscriptionEvent(EventData):
+    """Event data for subscription events."""
+    
     subscription_id: str
     user_id: str
     plan: str
@@ -233,6 +254,8 @@ class SubscriptionEvent(EventData):
     is_trial: bool = False
 
 class Subscription(BaseModel):
+    """Subscription model with event handling."""
+    
     _collection = "subscriptions"
 
     user_id = ObjectIdField(required=True)
@@ -242,12 +265,13 @@ class Subscription(BaseModel):
     created_at = DateTimeField(auto_now=True)
 
     async def create(self, **data):
+        """Create subscription and schedule renewal reminder."""
         await super().create(**data)
         
         # Schedule renewal reminder 7 days before expiry
         reminder_date = self.expires_at - timedelta(days=7)
         
-        await self.event_bus.publish(
+        await self.env.event.publish(
             "subscription.renewal_reminder",
             SubscriptionEvent(
                 subscription_id=str(self.id),
@@ -261,6 +285,7 @@ class Subscription(BaseModel):
 
     @event("subscription.renewal_reminder", data_class=SubscriptionEvent)
     async def send_reminder(self, data: SubscriptionEvent):
+        """Send renewal reminder email."""
         user = await self.env.users.find_one([("_id", "=", data.user_id)])
         if user:
             await self.env.mail_service.send_renewal_reminder(

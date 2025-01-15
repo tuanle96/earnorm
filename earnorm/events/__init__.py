@@ -30,9 +30,13 @@ Basic usage:
         print(f"User created: {event.data}")
 
     # Publish event
-    from earnorm import event_bus
+    from earnorm.base import BaseModel
     from earnorm.events import Event
-    await event_bus.publish(Event(name="user.created", data={"id": "123"}))
+
+    class User(BaseModel):
+        async def create(self, **data):
+            await super().create(**data)
+            await self.env.event.publish(Event(name="user.created", data={"id": str(self.id)}))
     ```
 
 For model events:

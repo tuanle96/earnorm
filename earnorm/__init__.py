@@ -123,6 +123,7 @@ async def init(
         )
         await event_bus.connect()
         di.register("event_bus", event_bus)
+        di.register("event", event_bus)
         logger.info("Event system initialized")
 
     # Get all subclasses of BaseModel
