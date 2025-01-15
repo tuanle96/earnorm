@@ -1,8 +1,7 @@
 """Core event system components."""
 
-from .bus import EventBus, EventHandler
-from .event import Event
-from .queue import RedisEventQueue
-from .worker import Worker
+from earnorm.events.core.event import Event
 
-__all__ = ["Event", "RedisEventQueue", "Worker", "EventHandler", "EventBus"]
+from .bus import EventBus, EventHandler
+
+__all__ = ["Event", "EventHandler", "EventBus"]

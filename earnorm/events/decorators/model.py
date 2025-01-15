@@ -1,165 +1,127 @@
-"""Model event decorators."""
+"""Model lifecycle decorators."""
 
 import functools
-from typing import Any, Callable, Optional, TypeVar, cast
-
-from ..core import Event
+from typing import Any, Callable, TypeVar, cast
 
 T = TypeVar("T", bound=Callable[..., Any])
 
 
-def before_save(event_name: Optional[str] = None) -> Callable[[T], T]:
-    """Decorator for triggering events before saving a model.
+def before_create(func: T) -> T:
+    """Decorator for before create hook.
 
-    Args:
-        event_name: Optional custom event name
-
-    Returns:
-        Decorator function
+    Called before creating a new record.
     """
 
-    def decorator(func: T) -> T:
-        @functools.wraps(func)
-        async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
-            # Generate event name if not provided
-            name = event_name or f"{self.__class__.__name__}.before_save"
+    @functools.wraps(func)
+    async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        return await func(self, *args, **kwargs)
 
-            # Create event with model data
-            event = Event(
-                name=name,
-                data=self.to_dict(),
-                metadata={
-                    "model": self.__class__.__name__,
-                    "model_id": str(self.id) if hasattr(self, "id") else None,
-                },
-            )
-
-            # Publish event if event bus is configured
-            if hasattr(self, "_env") and hasattr(self._env, "event_bus"):
-                await self._env.event_bus.publish(event)
-
-            # Call original method
-            return await func(self, *args, **kwargs)
-
-        return cast(T, wrapper)
-
-    return decorator
+    # Mark as lifecycle hook
+    setattr(wrapper, "_is_lifecycle_hook", True)
+    setattr(wrapper, "_hook_type", "before_create")
+    return cast(T, wrapper)
 
 
-def after_save(event_name: Optional[str] = None) -> Callable[[T], T]:
-    """Decorator for triggering events after saving a model.
+def after_create(func: T) -> T:
+    """Decorator for after create hook.
 
-    Args:
-        event_name: Optional custom event name
-
-    Returns:
-        Decorator function
+    Called after successful creation.
     """
 
-    def decorator(func: T) -> T:
-        @functools.wraps(func)
-        async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
-            # Call original method first
-            result = await func(self, *args, **kwargs)
+    @functools.wraps(func)
+    async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        return await func(self, *args, **kwargs)
 
-            # Generate event name if not provided
-            name = event_name or f"{self.__class__.__name__}.after_save"
-
-            # Create event with model data
-            event = Event(
-                name=name,
-                data=self.to_dict(),
-                metadata={
-                    "model": self.__class__.__name__,
-                    "model_id": str(self.id) if hasattr(self, "id") else None,
-                },
-            )
-
-            # Publish event if event bus is configured
-            if hasattr(self, "_env") and hasattr(self._env, "event_bus"):
-                await self._env.event_bus.publish(event)
-
-            return result
-
-        return cast(T, wrapper)
-
-    return decorator
+    setattr(wrapper, "_is_lifecycle_hook", True)
+    setattr(wrapper, "_hook_type", "after_create")
+    return cast(T, wrapper)
 
 
-def before_delete(event_name: Optional[str] = None) -> Callable[[T], T]:
-    """Decorator for triggering events before deleting a model.
+def before_write(func: T) -> T:
+    """Decorator for before write hook.
 
-    Args:
-        event_name: Optional custom event name
-
-    Returns:
-        Decorator function
+    Called before any write operation (create/update).
     """
 
-    def decorator(func: T) -> T:
-        @functools.wraps(func)
-        async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
-            # Generate event name if not provided
-            name = event_name or f"{self.__class__.__name__}.before_delete"
+    @functools.wraps(func)
+    async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        return await func(self, *args, **kwargs)
 
-            # Create event with model data
-            event = Event(
-                name=name,
-                data=self.to_dict(),
-                metadata={
-                    "model": self.__class__.__name__,
-                    "model_id": str(self.id) if hasattr(self, "id") else None,
-                },
-            )
-
-            # Publish event if event bus is configured
-            if hasattr(self, "_env") and hasattr(self._env, "event_bus"):
-                await self._env.event_bus.publish(event)
-
-            # Call original method
-            return await func(self, *args, **kwargs)
-
-        return cast(T, wrapper)
-
-    return decorator
+    setattr(wrapper, "_is_lifecycle_hook", True)
+    setattr(wrapper, "_hook_type", "before_write")
+    return cast(T, wrapper)
 
 
-def after_delete(event_name: Optional[str] = None) -> Callable[[T], T]:
-    """Decorator for triggering events after deleting a model.
+def after_write(func: T) -> T:
+    """Decorator for after write hook.
 
-    Args:
-        event_name: Optional custom event name
-
-    Returns:
-        Decorator function
+    Called after any write operation.
     """
 
-    def decorator(func: T) -> T:
-        @functools.wraps(func)
-        async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
-            # Store model data before deletion
-            model_data = self.to_dict()
-            model_id = str(self.id) if hasattr(self, "id") else None
+    @functools.wraps(func)
+    async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        return await func(self, *args, **kwargs)
 
-            # Call original method
-            result = await func(self, *args, **kwargs)
+    setattr(wrapper, "_is_lifecycle_hook", True)
+    setattr(wrapper, "_hook_type", "after_write")
+    return cast(T, wrapper)
 
-            # Generate event name if not provided
-            name = event_name or f"{self.__class__.__name__}.after_delete"
 
-            # Create event with stored model data
-            event = Event(
-                name=name,
-                data=model_data,
-                metadata={"model": self.__class__.__name__, "model_id": model_id},
-            )
+def before_update(func: T) -> T:
+    """Decorator for before update hook.
 
-            # Publish event if event bus is configured
-            if hasattr(self, "_env") and hasattr(self._env, "event_bus"):
-                await self._env.event_bus.publish(event)
+    Called before updating an existing record.
+    """
 
-            return result
+    @functools.wraps(func)
+    async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        return await func(self, *args, **kwargs)
 
-        return cast(T, wrapper)
+    setattr(wrapper, "_is_lifecycle_hook", True)
+    setattr(wrapper, "_hook_type", "before_update")
+    return cast(T, wrapper)
 
-    return decorator
+
+def after_update(func: T) -> T:
+    """Decorator for after update hook.
+
+    Called after successful update.
+    """
+
+    @functools.wraps(func)
+    async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        return await func(self, *args, **kwargs)
+
+    setattr(wrapper, "_is_lifecycle_hook", True)
+    setattr(wrapper, "_hook_type", "after_update")
+    return cast(T, wrapper)
+
+
+def before_delete(func: T) -> T:
+    """Decorator for before delete hook.
+
+    Called before deleting a record.
+    """
+
+    @functools.wraps(func)
+    async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        return await func(self, *args, **kwargs)
+
+    setattr(wrapper, "_is_lifecycle_hook", True)
+    setattr(wrapper, "_hook_type", "before_delete")
+    return cast(T, wrapper)
+
+
+def after_delete(func: T) -> T:
+    """Decorator for after delete hook.
+
+    Called after successful deletion.
+    """
+
+    @functools.wraps(func)
+    async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        return await func(self, *args, **kwargs)
+
+    setattr(wrapper, "_is_lifecycle_hook", True)
+    setattr(wrapper, "_hook_type", "after_delete")
+    return cast(T, wrapper)

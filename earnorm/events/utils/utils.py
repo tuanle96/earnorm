@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Callable, List, Optional, Type, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Type, TypeVar, Union
 
 from earnorm.base import BaseModel
 from earnorm.events.core import Event, EventBus
@@ -10,9 +10,10 @@ from earnorm.events.core import Event, EventBus
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
+F = TypeVar("F", bound=Callable[..., Any])
 
 
-def event_handler(event_name: str) -> Callable:
+def event_handler(event_name: str) -> Callable[[F], F]:
     """Decorator to register event handler.
 
     Args:
@@ -22,7 +23,7 @@ def event_handler(event_name: str) -> Callable:
         Decorated function
     """
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: F) -> F:
         # Mark function as event handler
         setattr(func, "_is_event_handler", True)
         setattr(func, "_event_name", event_name)
@@ -31,7 +32,7 @@ def event_handler(event_name: str) -> Callable:
     return decorator
 
 
-def model_event_handler(model_cls: Type[T], event_name: str) -> Callable:
+def model_event_handler(model_cls: Type[T], event_name: str) -> Callable[[F], F]:
     """Decorator to register model event handler.
 
     Args:
@@ -48,7 +49,7 @@ def model_event_handler(model_cls: Type[T], event_name: str) -> Callable:
 async def dispatch_event(
     event_bus: EventBus,
     event_name: str,
-    data: Optional[T] = None,
+    data: Optional[Union[Dict[str, Any], T]] = None,
     delay: Optional[float] = None,
 ) -> None:
     """Dispatch event to event bus.
@@ -59,7 +60,8 @@ async def dispatch_event(
         data: Event data
         delay: Optional delay in seconds
     """
-    event = Event(name=event_name, data=data or {})
+    event_data = data.dict() if isinstance(data, BaseModel) else (data or {})
+    event = Event(name=event_name, data=event_data)
     await event_bus.publish(event, delay=delay)
 
 
@@ -82,9 +84,9 @@ async def dispatch_model_event(
         delay: Optional delay in seconds
     """
     full_event_name = f"{model_cls.__name__}.{event_name}"
-    event_data = {"id": model_id} if model_id else {}
+    event_data: Dict[str, Any] = {"id": model_id} if model_id else {}
     if data:
-        event_data["data"] = data
+        event_data["data"] = data.dict()
     await dispatch_event(event_bus, full_event_name, event_data, delay)
 
 

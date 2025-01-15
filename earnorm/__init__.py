@@ -1,7 +1,11 @@
 """EarnORM - Async MongoDB ORM."""
 
+__version__ = "0.1.0"
+__author__ = "EarnORM"
+__credits__ = "EarnORM"
+
 import logging
-from typing import Any, Dict, Optional, Type, cast
+from typing import Any, Dict, Optional, Type
 
 from earnorm import fields
 from earnorm.base import model as models
@@ -13,12 +17,12 @@ from earnorm.pool.core.connection import Connection
 logger = logging.getLogger(__name__)
 
 # Global variables
-env = None
-registry = None
-di = None
-pool = None
-cache = None
-event_bus = None
+env: Any = None
+registry: Any = None
+di: Optional[DIContainer] = None
+pool: Any = None
+cache: Optional[CacheManager] = None
+event_bus: Optional[EventBus] = None
 
 # Global container instance
 container = DIContainer()
@@ -115,11 +119,7 @@ async def init(
         event_bus = EventBus(
             redis_uri=redis_uri,
             queue_name=event_config.get("queue_name", "earnorm:events"),
-            batch_size=event_config.get("batch_size", 100),
-            poll_interval=event_config.get("poll_interval", 1.0),
-            max_retries=event_config.get("max_retries", 3),
-            retry_delay=event_config.get("retry_delay", 5.0),
-            num_workers=event_config.get("num_workers", 1),
+            **event_config,
         )
         await event_bus.connect()
         di.register("event_bus", event_bus)

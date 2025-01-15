@@ -1,124 +1,136 @@
-"""Built-in event handlers for model lifecycle events."""
+"""Model event handlers."""
 
-import logging
-from typing import Any, Type
+import inspect
+from typing import Any, Dict, Optional, Type
 
 from earnorm.base import BaseModel
 from earnorm.events.core import Event
 
-logger = logging.getLogger(__name__)
-
 
 class ModelEventHandler:
-    """Base class for model event handlers."""
+    """Handler for model events."""
 
-    def __init__(self, model_cls: Type[BaseModel]) -> None:
-        """Initialize model event handler.
+    def __init__(self) -> None:
+        """Initialize model event handler."""
+        self._models: Dict[str, Type[BaseModel]] = {}
+
+    async def _run_hook(self, model: BaseModel, hook_name: str) -> None:
+        """Run lifecycle hook on model.
 
         Args:
-            model_cls: Model class to handle events for
+            model: Model instance
+            hook_name: Name of hook to run
         """
-        self.model_cls = model_cls
+        hook = getattr(model, hook_name, None)
+        if hook and inspect.iscoroutinefunction(hook):
+            await hook()
 
-    async def handle_create(self, event: Event) -> None:
+    async def _run_event_handler(
+        self,
+        model: BaseModel,
+        handler: Any,
+        event_data: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Run event handler on model.
+
+        Args:
+            model: Model instance
+            handler: Event handler method
+            event_data: Optional event data
+        """
+        # Get event data class if specified
+        data_class = getattr(handler, "_event_data_class", None)
+
+        # Validate and pass event data
+        if data_class and event_data:
+            data = data_class(**event_data)
+            await handler(data)
+        else:
+            await handler(event_data)
+
+    async def handle_create(self, model: BaseModel) -> None:
         """Handle model create event.
 
         Args:
-            event: Create event containing model data
+            model: Model instance
         """
-        logger.debug(f"Handling create event for {self.model_cls.__name__}")
-        data = event.data.get("data", {})
+        await self._run_hook(model, "_before_create")
+        await self._run_hook(model, "_after_create")
 
-        # Create new model instance
-        model = self.model_cls(**data)
-
-        # Run before_create hooks
-        if hasattr(model, "before_create"):
-            await model.before_create()
-
-        # Save model
-        await model.save()
-
-        # Run after_create hooks
-        if hasattr(model, "after_create"):
-            await model.after_create()
-
-    async def handle_update(self, event: Event) -> None:
+    async def handle_update(self, model: BaseModel, data: Dict[str, Any]) -> None:
         """Handle model update event.
 
         Args:
-            event: Update event containing model ID and data
+            model: Model instance
+            data: Update data
         """
-        logger.debug(f"Handling update event for {self.model_cls.__name__}")
-        model_id = event.data.get("id")
-        data = event.data.get("data", {})
+        await self._run_hook(model, "_before_update")
+        await self._run_hook(model, "_after_update")
 
-        if not model_id:
-            logger.error("Update event missing model ID")
-            return
-
-        # Find existing model
-        result = await self.model_cls.find_one([model_id])
-        if not result:
-            logger.error(f"Model {model_id} not found")
-            return
-
-        model = result[0]
-
-        # Run before_update hooks
-        if hasattr(model, "before_update"):
-            await model.before_update()
-
-        # Update model
-        await model.write(data)
-
-        # Run after_update hooks
-        if hasattr(model, "after_update"):
-            await model.after_update()
-
-    async def handle_delete(self, event: Event) -> None:
+    async def handle_delete(self, model: BaseModel) -> None:
         """Handle model delete event.
 
         Args:
-            event: Delete event containing model ID
+            model: Model instance
         """
-        logger.debug(f"Handling delete event for {self.model_cls.__name__}")
-        model_id = event.data.get("id")
+        await self._run_hook(model, "_before_delete")
+        await self._run_hook(model, "_after_delete")
 
-        if not model_id:
-            logger.error("Delete event missing model ID")
+    async def handle_event(self, event: Event) -> None:
+        """Handle custom event.
+
+        Args:
+            event: Event instance
+        """
+        # Get model class and ID from event data
+        model_id = event.data.get("id")
+        model_name = event.data.get("model")
+
+        if not model_id or not model_name:
             return
 
-        # Find existing model
-        result = await self.model_cls.find_one([model_id])
+        # Get model class and instance
+        model_cls = self._models.get(model_name)
+        if not model_cls:
+            return
+
+        # Get model instance
+        result = await model_cls.find_one([model_id])  # type: ignore
         if not result:
-            logger.error(f"Model {model_id} not found")
             return
 
         model = result[0]
 
-        # Run before_delete hooks
-        if hasattr(model, "before_delete"):
-            await model.before_delete()
+        # Find and run event handler
+        for _, method in inspect.getmembers(model):
+            if (
+                getattr(method, "_is_event_handler", False)
+                and getattr(method, "_event_name", None) == event.name
+            ):
+                await self._run_event_handler(model, method, event.data)
 
-        # Delete model
-        await model.delete()
+    def register_model(self, model_cls: Type[BaseModel]) -> None:
+        """Register model class.
 
-        # Run after_delete hooks
-        if hasattr(model, "after_delete"):
-            await model.after_delete()
+        Args:
+            model_cls: Model class to register
+        """
+        self._models[model_cls.__name__] = model_cls
 
+    def register_model_handlers(self, event_bus: Any) -> None:
+        """Register model event handlers.
 
-def register_model_handlers(model_cls: Type[BaseModel], event_bus: Any) -> None:
-    """Register model event handlers.
+        Args:
+            event_bus: Event bus instance
+        """
+        # Register built-in handlers
+        event_bus.subscribe("model.created", self.handle_create)
+        event_bus.subscribe("model.updated", self.handle_update)
+        event_bus.subscribe("model.deleted", self.handle_delete)
 
-    Args:
-        model_cls: Model class to register handlers for
-        event_bus: Event bus instance
-    """
-    handler = ModelEventHandler(model_cls)
-
-    # Register handlers for model events
-    event_bus.subscribe(f"{model_cls.__name__}.create", handler.handle_create)
-    event_bus.subscribe(f"{model_cls.__name__}.update", handler.handle_update)
-    event_bus.subscribe(f"{model_cls.__name__}.delete", handler.handle_delete)
+        # Register custom event handlers
+        for model_cls in self._models.values():
+            for _, method in inspect.getmembers(model_cls):
+                if getattr(method, "_is_event_handler", False):
+                    event_name = getattr(method, "_event_name")
+                    event_bus.subscribe(event_name, self.handle_event)

@@ -5,7 +5,19 @@ from typing import Any, Dict, Optional
 
 
 class Event:
-    """Base event class."""
+    """Base event class for handling events in the system.
+
+    This class represents an event that can be published and processed by the event system.
+    It is designed to be compatible with BullMQ while maintaining the existing functionality.
+
+    Attributes:
+        name: Event name/type
+        data: Event payload data
+        metadata: Additional event metadata
+        error: Error message if event processing failed
+        created_at: Event creation timestamp
+        failed_at: Event failure timestamp if failed
+    """
 
     def __init__(
         self,
@@ -15,16 +27,18 @@ class Event:
         error: Optional[str] = None,
         created_at: Optional[datetime] = None,
         failed_at: Optional[datetime] = None,
+        job_id: Optional[str] = None,
     ):
         """Initialize event.
 
         Args:
-            name: Event name
-            data: Event data
+            name: Event name/type
+            data: Event payload data
             metadata: Optional event metadata
             error: Optional error message
             created_at: Optional creation timestamp
             failed_at: Optional failure timestamp
+            job_id: Optional BullMQ job ID
         """
         self.name = name
         self.data = data
@@ -32,12 +46,13 @@ class Event:
         self.error = error
         self.created_at = created_at or datetime.now()
         self.failed_at = failed_at
+        self.job_id = job_id
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert event to dictionary.
+        """Convert event to dictionary format for serialization.
 
         Returns:
-            Event as dictionary
+            Event data as dictionary
         """
         return {
             "name": self.name,
@@ -46,11 +61,12 @@ class Event:
             "error": self.error,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "failed_at": self.failed_at.isoformat() if self.failed_at else None,
+            "job_id": self.job_id,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Event":
-        """Create event from dictionary.
+        """Create event instance from dictionary data.
 
         Args:
             data: Event data dictionary
@@ -74,10 +90,11 @@ class Event:
             error=data.get("error"),
             created_at=created_at,
             failed_at=failed_at,
+            job_id=data.get("job_id"),
         )
 
     def __str__(self) -> str:
-        """String representation of event.
+        """Get string representation of event.
 
         Returns:
             Event string
@@ -85,7 +102,7 @@ class Event:
         return f"Event(name={self.name}, data={self.data})"
 
     def __repr__(self) -> str:
-        """Detailed string representation of event.
+        """Get detailed string representation of event.
 
         Returns:
             Detailed event string
@@ -93,5 +110,6 @@ class Event:
         return (
             f"Event(name={self.name}, data={self.data}, "
             f"metadata={self.metadata}, error={self.error}, "
-            f"created_at={self.created_at}, failed_at={self.failed_at})"
+            f"created_at={self.created_at}, failed_at={self.failed_at}, "
+            f"job_id={self.job_id})"
         )
