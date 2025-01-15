@@ -841,3 +841,12 @@ class BaseModel(ModelProtocol):
 
         except Exception as e:
             logger.error(f"Failed to cleanup orphaned cache: {str(e)}")
+
+    @property
+    def event_bus(self) -> Any:
+        """Get event bus instance.
+
+        Returns:
+            Event bus instance from container
+        """
+        return self.get_container().event_bus

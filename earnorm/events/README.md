@@ -1,245 +1,9 @@
-# Event System
+# Event System for EarnORM
 
-Event system for EarnORM, using Celery as the message broker. Events are processed asynchronously and can be delayed, retried, and monitored.
+EarnORM provides a powerful event system that allows asynchronous processing of model events and custom events.
 
-## Installation
+## Features
 
-Event system is built into EarnORM. To use it, you need:
-1. Redis server for message broker
-2. Celery worker for processing events
-
-## Initialization
-
-Event system is automatically initialized when you initialize EarnORM with Redis URI:
-
-```python
-from earnorm import init
-
-await init(
-    mongo_uri="mongodb://localhost:27017",
-    database="earnbase",
-    redis_uri="redis://localhost:6379/0",
-    event_config={
-        "queue_name": "my_app:events",
-        "retry_policy": {
-            "max_retries": 3,
-            "interval_start": 0,
-            "interval_step": 0.2,
-            "interval_max": 0.5,
-        }
-    }
-)
-```
-
-## Basic Usage
-
-### Define Event Handler
-
-```python
-from earnorm.events import event_handler
-
-@event_handler("user.created")
-async def handle_user_created(event):
-    print(f"User created: {event.data}")
-```
-
-### Publish Event
-
-```python
-from earnorm import event_bus
-from earnorm.events import Event
-
-await event_bus.publish(
-    Event(
-        name="user.created",
-        data={"id": "123", "email": "user@example.com"}
-    )
-)
-
-# Publish with delay
-await event_bus.publish(
-    Event(
-        name="user.welcome_email",
-        data={"email": "user@example.com"}
-    ),
-    delay=60  # delay 60 seconds
-)
-```
-
-## Model Events
-
-### Model Lifecycle Hooks
-
-EarnORM provides simple decorators for model lifecycle hooks:
-
-```python
-from datetime import datetime
-from earnorm.base import BaseModel
-from earnorm.events.decorators import before_create, after_write, before_delete
-
-class User(BaseModel):
-    """User model with lifecycle hooks."""
-    
-    _collection = "users"
-    
-    username: str
-    email: str
-    status: str = "inactive"
-    created_at: datetime
-    updated_at: datetime
-
-    @before_create
-    async def _before_create(self):
-        """Validate and prepare data before creating user."""
-        self.created_at = datetime.utcnow()
-        await self.validate_email()
-    
-    @after_write
-    async def _after_write(self):
-        """Update cache and search index after any write operation."""
-        await self.invalidate_cache()
-        await self.index_search()
-    
-    @before_delete
-    async def _before_delete(self):
-        """Check if user can be deleted."""
-        if self.has_active_orders():
-            raise ValueError("Cannot delete user with active orders")
-
-    async def validate_email(self):
-        """Validate email format and uniqueness."""
-        if not is_valid_email(self.email):
-            raise ValueError("Invalid email format")
-        
-        # Check uniqueness
-        existing = await User.find_one({"email": self.email})
-        if existing and existing.id != self.id:
-            raise ValueError("Email already exists")
-
-    async def invalidate_cache(self):
-        """Invalidate user cache."""
-        cache_key = f"user:{self.id}"
-        await self._env.cache.delete(cache_key)
-
-    async def index_search(self):
-        """Update search index."""
-        await self._env.search.index_document(
-            "users",
-            self.id,
-            {
-                "username": self.username,
-                "email": self.email,
-                "status": self.status
-            }
-        )
-
-    def has_active_orders(self) -> bool:
-        """Check if user has any active orders."""
-        return Order.count({"user_id": self.id, "status": "active"}) > 0
-
-### Available Lifecycle Hooks
-
-1. **Create Hooks**
-   - `@before_create`: Called before creating a new record
-   - `@after_create`: Called after successful creation
-
-2. **Write Hooks**
-   - `@before_write`: Called before any write operation (create/update)
-   - `@after_write`: Called after any write operation
-
-3. **Update Hooks**
-   - `@before_update`: Called before updating an existing record
-   - `@after_update`: Called after successful update
-
-4. **Delete Hooks**
-   - `@before_delete`: Called before deleting a record
-   - `@after_delete`: Called after successful deletion
-
-### Best Practices for Lifecycle Hooks
-
-1. **Naming Convention**
-   - Prefix internal hooks with underscore (e.g. `_before_create`)
-   - Use descriptive names for business logic methods
-
-2. **Validation**
-   - Use `before_create` and `before_write` for data validation
-   - Raise clear validation errors with meaningful messages
-
-3. **Side Effects**
-   - Use `after_write` for cache invalidation
-   - Use `after_write` for search indexing
-   - Use `after_delete` for cleanup tasks
-
-4. **Error Handling**
-   - Handle errors gracefully in hooks
-   - Rollback changes if needed
-   - Log errors for debugging
-
-5. **Performance**
-   - Keep hooks lightweight
-   - Use async operations when possible
-   - Batch operations when dealing with multiple records
-
-## Configuration
-
-Event system can be configured through `event_config` in `earnorm.init()`:
-
-```python
-event_config = {
-    # Queue name for events
-    "queue_name": "my_app:events",
-
-    # Retry policy for failed events
-    "retry_policy": {
-        # Maximum number of retries
-        "max_retries": 3,
-        # Initial delay in seconds
-        "interval_start": 0,
-        # Delay increment in seconds
-        "interval_step": 0.2,
-        # Maximum delay in seconds
-        "interval_max": 0.5,
-    }
-}
-```
-
-## Best Practices
-
-### Event Naming
-
-- Use lowercase and dots for namespace separation
-- Format: `<namespace>.<resource>.<action>`
-- Examples: `user.created`, `order.payment.completed`
-
-### Event Data
-
-- Include only necessary data for event handlers
-- Use IDs instead of entire objects
-- Add metadata like timestamp, version when needed
-
-### Error Handling
-
-- Always have retry policies for critical events
-- Log errors with full context
-- Have fallback plans for failed events
-
-### Performance
-
-- Use batch events when possible
-- Consider delays for non-critical events
-- Monitor queue size and processing time
-
-### Monitoring
-
-- Monitor failed jobs through `event_bus.get_failed_jobs()`
-- Retry failed jobs with `event_bus.retry_job(job_id)`
-- Remove stuck jobs with `event_bus.remove_job(job_id)`
-
-## Event System for EarnORM
-
-Event system provides asynchronous event processing capabilities for EarnORM models.
-
-### Features
 - Asynchronous event processing
 - Event handlers with decorators
 - Model lifecycle events
@@ -248,176 +12,299 @@ Event system provides asynchronous event processing capabilities for EarnORM mod
 - Retry policies for failed events
 - Event monitoring and management
 
-### Installation
+## Installation
 
-Events are included in EarnORM by default. No additional installation required.
+Events are built into EarnORM. No additional installation required.
 
-### Usage
+## Usage
 
-#### Initialize Event System
+### Initialization
+
+The event system is automatically initialized when initializing EarnORM:
 
 ```python
-from earnorm import init
+import earnorm
 
-await init(
+await earnorm.init(
     mongodb_uri="mongodb://localhost:27017",
     redis_uri="redis://localhost:6379/0",
     event_config={
         "queue_name": "my_app:events",
         "retry_policy": {
             "max_retries": 3,
-            "interval_start": 0,
-            "interval_step": 0.2,
-            "interval_max": 0.5,
+            "interval_start": 60,  # seconds
+            "interval_step": 60,   # seconds
+            "interval_max": 3600,  # seconds
         }
     }
 )
 ```
 
-#### Using Events in Models
+### Model Lifecycle Hooks
+
+Model lifecycle hooks allow you to run code before or after model operations:
 
 ```python
-from datetime import datetime
-from typing import Optional
-
 from earnorm.base import BaseModel
-from earnorm.events.decorators import before_save, after_save, before_delete
-from earnorm.events.utils import dispatch_model_event
-
+from earnorm.fields import StringField, BooleanField, DateTimeField
+from earnorm.events.decorators import (
+    before_create, after_create,
+    before_write, after_write,
+    before_delete, after_delete
+)
 
 class User(BaseModel):
-    """User model with event handling."""
-    
     _collection = "users"
-    
-    username: str
-    email: str
-    status: str = "inactive"
-    last_login: Optional[datetime] = None
-    created_at: datetime = datetime.utcnow()
-    updated_at: datetime = datetime.utcnow()
 
-    @before_save("user.before_create")
-    async def create(self) -> None:
-        """Create a new user.
-        
-        Emits events:
-        - user.before_create: Before user is created
-        - user.created: After user is created
-        - user.welcome_email: After user is created (delayed)
-        """
-        self.created_at = datetime.utcnow()
-        self.updated_at = datetime.utcnow()
-        
-        # Save user
-        await super().create()
-        
-        # Emit created event
-        await dispatch_model_event(
-            self._env.event_bus,
-            User,
-            "created",
-            str(self.id),
-            self
-        )
-        
-        # Schedule welcome email
-        await dispatch_model_event(
-            self._env.event_bus,
-            User,
-            "welcome_email",
-            str(self.id),
-            self,
-            delay=60  # Send after 60 seconds
-        )
+    email = StringField(required=True)
+    username = StringField(required=True)
+    is_active = BooleanField(default=True)
+    last_login = DateTimeField()
 
-    @before_save("user.before_update")
-    async def update_status(self, new_status: str) -> None:
-        """Update user status.
-        
-        Emits events:
-        - user.before_update: Before status is updated
-        - user.status_changed: After status is changed
-        """
-        old_status = self.status
-        self.status = new_status
-        self.updated_at = datetime.utcnow()
-        
-        await super().save()
-        
-        # Emit status changed event
-        if old_status != new_status:
-            await dispatch_model_event(
-                self._env.event_bus,
-                User,
-                "status_changed",
-                str(self.id),
-                self
-            )
+    @before_create
+    async def validate_email(self):
+        if not await self.is_valid_email():
+            raise ValueError("Invalid email format")
+        if await self.email_exists():
+            raise ValueError("Email already exists")
 
-    @after_save("user.login")
-    async def record_login(self) -> None:
-        """Record user login.
-        
-        Emits events:
-        - user.login: After login is recorded
-        """
-        self.last_login = datetime.utcnow()
-        self.updated_at = datetime.utcnow()
-        await super().save()
+    @after_write
+    async def invalidate_cache(self):
+        await self.env.cache.delete(f"user:{self.id}")
+        await self.env.cache.delete_pattern("users:*")
+
+    @before_delete
+    async def check_dependencies(self):
+        if await self.has_active_orders():
+            raise ValueError("Cannot delete user with active orders")
+        if await self.has_active_subscriptions():
+            raise ValueError("Cannot delete user with active subscriptions")
 ```
 
-#### Handle Model Events
+### Custom Events with Event Data
+
+You can define custom events with strongly typed data using Pydantic models:
 
 ```python
-from earnorm.events import model_event_handler
+from earnorm.base import BaseModel
+from earnorm.fields import (
+    StringField, FloatField, ListField, DictField, 
+    ObjectIdField, DateTimeField
+)
+from earnorm.events.core.types import EventData
+from earnorm.events.decorators import event
 
-@model_event_handler("User", "created")
-async def handle_user_created(event):
-    """Handle user created event."""
-    user_data = event.data
-    # Send welcome email
-    await send_welcome_email(user_data["email"])
+class OrderItem(EventData):
+    product_id: str
+    name: str
+    quantity: int
+    price: float
 
-@model_event_handler("User", "status_changed")
-async def handle_user_status_changed(event):
-    """Handle user status changed event."""
-    user_data = event.data
-    # Update cache
-    await update_user_cache(user_data["id"], user_data["status"])
+class OrderCreatedEvent(EventData):
+    order_id: str
+    customer_id: str
+    total: float
+    items: list[OrderItem]
+    shipping_address: dict
+    created_at: str
 
-@model_event_handler("User", "login")
-async def handle_user_login(event):
-    """Handle user login event."""
-    user_data = event.data
-    # Log login activity
-    await log_user_login(user_data["id"], user_data["last_login"])
+class Order(BaseModel):
+    _collection = "orders"
+
+    customer_id = ObjectIdField(required=True)
+    items = ListField(DictField(), required=True)
+    total = FloatField(required=True)
+    shipping_address = DictField(required=True)
+    status = StringField(default="pending")
+    created_at = DateTimeField(auto_now=True)
+
+    async def create(self, **data):
+        await super().create(**data)
+        
+        # Publish order created event
+        await self.event_bus.publish(
+            "order.created",
+            OrderCreatedEvent(
+                order_id=str(self.id),
+                customer_id=str(self.customer_id),
+                total=self.total,
+                items=[OrderItem(**item) for item in self.items],
+                shipping_address=self.shipping_address,
+                created_at=self.created_at.isoformat()
+            )
+        )
+
+    @event("order.created", data_class=OrderCreatedEvent)
+    async def send_confirmation(self, data: OrderCreatedEvent):
+        customer = await self.env.users.find_one([("_id", "=", data.customer_id)])
+        if customer:
+            await self.env.mail_service.send_order_confirmation(
+                customer.email,
+                order_id=data.order_id,
+                total=data.total,
+                items=data.items,
+                shipping_address=data.shipping_address
+            )
 ```
 
-### Best Practices
+### Event Handlers
 
-1. **Event Naming**
-- Use lowercase and dots for namespace separation
-- Format: `<namespace>.<resource>.<action>`
-- Examples: `user.created`, `user.status_changed`, `user.login`
+You can also create standalone event handlers:
 
-2. **Event Data**
-- Include only necessary data for event handlers
-- Use IDs instead of entire objects when possible
-- Add metadata like timestamp, version when needed
+```python
+from earnorm.events.decorators import event_handler
+from earnorm.events.core.types import EventData
+from datetime import datetime
 
-3. **Error Handling**
-- Always have retry policies for critical events
-- Log errors with full context
-- Have fallback plans for failed events
+class PaymentEvent(EventData):
+    payment_id: str
+    order_id: str
+    amount: float
+    status: str
+    error_code: str = None
+    error_message: str = None
+    timestamp: str
 
-4. **Performance**
-- Use batch events for bulk operations
-- Set appropriate retry intervals
+@event_handler("payment.failed")
+async def notify_admin(data: PaymentEvent):
+    if data.amount > 1000:
+        await env.slack.send_message(
+            channel="#payments-alerts",
+            text=(
+                f"🚨 High value payment failed!\n"
+                f"Payment ID: {data.payment_id}\n"
+                f"Order ID: {data.order_id}\n"
+                f"Amount: ${data.amount:,.2f}\n"
+                f"Error: [{data.error_code}] {data.error_message}\n"
+                f"Time: {data.timestamp}"
+            )
+        )
+```
+
+### Model Event Handlers
+
+To handle events for a specific model:
+
+```python
+from earnorm.events.decorators import model_event_handler
+from earnorm.base import BaseModel
+from earnorm.fields import StringField, DateTimeField, DictField
+from datetime import datetime
+
+class SecurityLog(BaseModel):
+    _collection = "security_logs"
+
+    event_type = StringField(required=True)
+    user_id = StringField(required=True)
+    metadata = DictField(default_factory=dict)
+    created_at = DateTimeField(auto_now=True)
+
+@model_event_handler(SecurityLog, "user.password_changed")
+async def log_password_change(data: dict):
+    await SecurityLog.create(
+        event_type="password_changed",
+        user_id=data["user_id"],
+        metadata={
+            "ip_address": data["ip_address"],
+            "user_agent": data["user_agent"],
+            "location": data["location"]
+        }
+    )
+```
+
+### Publishing Events from Models
+
+Each model instance has access to `event_bus` for publishing events:
+
+```python
+from earnorm.base import BaseModel
+from earnorm.fields import (
+    StringField, FloatField, DateTimeField, 
+    ObjectIdField, BooleanField
+)
+from earnorm.events.core.types import EventData
+from datetime import datetime, timedelta
+
+class SubscriptionEvent(EventData):
+    subscription_id: str
+    user_id: str
+    plan: str
+    expires_at: str
+    is_trial: bool = False
+
+class Subscription(BaseModel):
+    _collection = "subscriptions"
+
+    user_id = ObjectIdField(required=True)
+    plan = StringField(required=True)
+    is_trial = BooleanField(default=False)
+    expires_at = DateTimeField(required=True)
+    created_at = DateTimeField(auto_now=True)
+
+    async def create(self, **data):
+        await super().create(**data)
+        
+        # Schedule renewal reminder 7 days before expiry
+        reminder_date = self.expires_at - timedelta(days=7)
+        
+        await self.event_bus.publish(
+            "subscription.renewal_reminder",
+            SubscriptionEvent(
+                subscription_id=str(self.id),
+                user_id=str(self.user_id),
+                plan=self.plan,
+                expires_at=self.expires_at.isoformat(),
+                is_trial=self.is_trial
+            ),
+            delay=(reminder_date - datetime.utcnow()).total_seconds()
+        )
+
+    @event("subscription.renewal_reminder", data_class=SubscriptionEvent)
+    async def send_reminder(self, data: SubscriptionEvent):
+        user = await self.env.users.find_one([("_id", "=", data.user_id)])
+        if user:
+            await self.env.mail_service.send_renewal_reminder(
+                email=user.email,
+                subscription_id=data.subscription_id,
+                plan=data.plan,
+                expires_at=data.expires_at,
+                is_trial=data.is_trial
+            )
+```
+
+## Best Practices
+
+### Event Naming
+
+- Use lowercase with dots for namespacing (e.g. `user.created`, `order.payment.failed`)
+- Be descriptive and specific
+- Use past tense for lifecycle events
+- Use present tense for commands/actions
+
+### Data Handling
+
+- Define event data classes using Pydantic models
+- Include all necessary data in the event
+- Keep event data serializable
+- Validate data at both publish and handle time
+
+### Error Handling
+
+- Use retry policies for transient failures
+- Log failed events for debugging
+- Consider fallback handlers for critical events
+- Validate event data before processing
+
+### Performance
+
+- Keep event handlers lightweight
+- Use batch processing for high volume events
+- Consider event priorities
 - Monitor queue size and processing time
 
-5. **Monitoring**
-- Track failed events
-- Monitor queue latency
-- Set up alerts for critical failures
-- Keep event logs for debugging 
+### Monitoring
+
+- Log event processing metrics
+- Set up alerts for failed events
+- Monitor queue length and processing time
+- Track retry attempts and failures 
