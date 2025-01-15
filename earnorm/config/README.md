@@ -1,190 +1,252 @@
 # Configuration Components
 
-Configuration management for EarnORM.
+Configuration management for EarnORM with MongoDB backend storage.
 
 ## Purpose
 
 The config module provides configuration capabilities:
-- Configuration management
-- Environment management
-- Feature flags
-- Settings validation
-- Dynamic configuration
-- Configuration versioning
+- Database-backed configuration storage
+- Environment-specific configuration
+- Dynamic configuration updates
+- Configuration versioning and history
+- Type-safe configuration classes
+- Multi-environment support
+- Security and access control
 
-## Concepts & Examples
+## Core Components
 
-### Basic Configuration
+### 1. Config Model
+
+The core model for storing configurations in MongoDB:
+
 ```python
-# Configuration definition
-@config
+class ConfigModel(BaseModel):
+    """Config model for MongoDB storage"""
+    
+    _collection = "system.config"
+    _indexes = [
+        {"keys": [("key", 1)], "unique": True},
+        {"keys": [("environment", 1), ("key", 1)], "unique": True}
+    ]
+    
+    key: str = String(required=True)
+    value: Any = Dict(required=True)
+    environment: str = String(required=True)
+    description: str = String(required=False)
+    created_at: datetime = DateTime(default_factory=datetime.utcnow)
+    updated_at: datetime = DateTime(default_factory=datetime.utcnow)
+    version: int = Int(default=1)
+    is_active: bool = Bool(default=True)
+```
+
+### 2. Config Manager
+
+Central configuration management:
+
+```python
+class ConfigManager:
+    """Configuration manager"""
+    
+    async def init(self) -> None:
+        """Initialize config manager"""
+        configs = await ConfigModel.search([
+            ("is_active", "=", True),
+            ("environment", "=", Environment.current())
+        ])
+        for config in configs:
+            self._cache[config.key] = config.value
+            
+    async def get(self, key: str, default: Any = None) -> Any:
+        """Get config value"""
+        if not self._initialized:
+            await self.init()
+        return self._cache.get(key, default)
+        
+    async def set(
+        self,
+        key: str,
+        value: Any,
+        description: Optional[str] = None
+    ) -> None:
+        """Set config value"""
+        await ConfigModel.set_config(key, value, description)
+        self._cache[key] = value
+```
+
+## Usage Examples
+
+### 1. Basic Configuration
+
+```python
+# Define configuration class
 class DatabaseConfig(BaseConfig):
-    host: str = "localhost"
-    port: int = 27017
-    database: str = "test"
-    username: str = Field(env="DB_USER")
-    password: str = Field(env="DB_PASS")
+    """Database configuration"""
+    uri: str = Field(..., description="MongoDB connection URI")
+    database: str = Field(..., description="Database name")
+    min_pool_size: int = Field(5, ge=1, le=100)
+    max_pool_size: int = Field(20, ge=1, le=1000)
     
     class Config:
-        env_prefix = "EARNORM_"
-        case_sensitive = False
+        env_prefix = "EARNORM_DB_"
 
 # Load configuration
-config = DatabaseConfig.load()
-print(f"Database URL: mongodb://{config.host}:{config.port}")
+config_manager = ConfigManager()
+await config_manager.init()
+db_config = await config_manager.load_config(DatabaseConfig)
+
+# Use configuration
+print(f"Database URI: {db_config.uri}")
+print(f"Pool Size: {db_config.min_pool_size}-{db_config.max_pool_size}")
 ```
 
-### Environment Management
-```python
-# Environment configuration
-@environment
-class Environment:
-    DEVELOPMENT = "development"
-    STAGING = "staging"
-    PRODUCTION = "production"
-    
-    @classmethod
-    def is_production(cls):
-        return cls.current() == cls.PRODUCTION
-    
-    @classmethod
-    def load_config(cls):
-        return ConfigFactory.for_environment(cls.current())
+### 2. Environment-Specific Config
 
-# Environment-specific config
-class ProductionConfig(BaseConfig):
-    debug: bool = False
-    cache_ttl: int = 3600
-    pool_size: int = 100
+```python
+# Set environment-specific config
+await ConfigModel.set_config(
+    key="databaseconfig",
+    value={
+        "uri": "mongodb://prod:27017",
+        "database": "earnbase_prod",
+        "min_pool_size": 10,
+        "max_pool_size": 50
+    },
+    environment="production",
+    description="Production database config"
+)
+
+# Load environment config
+env = Environment.current()
+db_config = await config_manager.load_config(DatabaseConfig)
 ```
 
-### Feature Flags
+### 3. Dynamic Updates
+
 ```python
-# Feature flag definition
-@feature_flags
-class Features:
-    NEW_QUERY_BUILDER = Flag(
-        name="new_query_builder",
-        default=False,
-        description="Use new query builder"
-    )
-    
-    ASYNC_CACHE = Flag(
-        name="async_cache",
-        default=True,
-        description="Use async cache backend"
-    )
-
-# Feature checking
-if Features.NEW_QUERY_BUILDER.enabled:
-    query = NewQueryBuilder()
-else:
-    query = LegacyQueryBuilder()
-```
-
-### Dynamic Configuration
-```python
-# Dynamic settings
-@dynamic_config
-class CacheConfig(BaseConfig):
-    ttl: int = 3600
-    max_size: int = 1000
-    
-    @on_change("ttl")
-    def update_ttl(self, old_value, new_value):
-        cache.set_ttl(new_value)
-        
-    @validate("max_size")
-    def validate_size(self, value):
-        if value < 100:
-            raise ValueError("max_size must be >= 100")
-
 # Update configuration
-config.update({
-    "ttl": 7200,
-    "max_size": 2000
-})
+await config_manager.set(
+    key="cacheconfig",
+    value={
+        "ttl": 7200,
+        "max_size": 1000
+    },
+    description="Updated cache settings"
+)
+
+# Configuration will be updated without restart
+cache_config = await config_manager.load_config(CacheConfig)
 ```
 
-### Configuration Validation
-```python
-# Validation rules
-class MongoConfig(BaseConfig):
-    uri: str = Field(regex=r"mongodb://.*")
-    pool_size: int = Field(ge=1, le=1000)
-    timeout: float = Field(gt=0)
-    
-    @validator("uri")
-    def validate_uri(cls, v):
-        try:
-            urlparse(v)
-            return v
-        except Exception:
-            raise ValueError("Invalid MongoDB URI")
+### 4. Version History
 
-# Load and validate
-try:
-    config = MongoConfig.parse_file("config.json")
-except ValidationError as e:
-    print(f"Invalid configuration: {e}")
+```python
+# Get config history
+history = await ConfigModel.search([
+    ("key", "=", "databaseconfig"),
+    ("environment", "=", Environment.current())
+], order_by=[("version", -1)])
+
+# Rollback to previous version
+if len(history) > 1:
+    previous = history[1]
+    await config_manager.set(
+        key="databaseconfig",
+        value=previous.value,
+        description="Rollback to version " + str(previous.version)
+    )
 ```
 
 ## Best Practices
 
-1. **Configuration Design**
-- Use type hints
-- Validate inputs
-- Document options
-- Handle defaults
-- Support overrides
+### 1. Configuration Design
 
-2. **Security**
-- Protect secrets
-- Use environment vars
-- Encrypt sensitive data
-- Control access
-- Audit changes
+- Use type hints for all config fields
+- Add field descriptions and validation rules
+- Keep configurations focused and modular
+- Use environment-specific defaults
+- Document all configuration options
 
-3. **Maintenance**
-- Version configs
-- Backup settings
-- Monitor changes
-- Clean up old configs
-- Document updates
+### 2. Security
 
-4. **Integration**
-- Support multiple formats
-- Handle migrations
-- Validate changes
-- Notify services
-- Log updates
+- Store sensitive data encrypted
+- Use environment variables for secrets
+- Implement access control for config changes
+- Audit all configuration changes
+- Validate configuration values
+
+### 3. Performance
+
+- Use caching for frequently accessed configs
+- Batch load configurations on startup
+- Implement lazy loading for large configs
+- Monitor configuration access patterns
+- Optimize database queries
+
+### 4. Operations
+
+- Backup configurations regularly
+- Monitor configuration changes
+- Implement health checks
+- Set up alerts for critical changes
+- Document operational procedures
+
+### 5. Development
+
+- Use type checking tools
+- Write tests for configurations
+- Follow naming conventions
+- Document configuration dependencies
+- Use version control
 
 ## Future Features
 
-1. **Configuration Features**
-- [ ] Schema evolution
-- [ ] Config migration
-- [ ] Config templates
-- [ ] Config inheritance
-- [ ] Config validation
+### 1. Configuration Features
 
-2. **Management Features**
-- [ ] UI management
-- [ ] Version control
-- [ ] Change tracking
-- [ ] Rollback support
+- [ ] Schema evolution support
+- [ ] Configuration templates
+- [ ] Configuration inheritance
+- [ ] Default value management
+- [ ] Configuration validation rules
+
+### 2. Security Features
+
+- [ ] Field-level encryption
+- [ ] Role-based access control
 - [ ] Audit logging
+- [ ] Secret rotation
+- [ ] Compliance reporting
 
-3. **Integration Features**
-- [ ] Service discovery
-- [ ] Config server
-- [ ] Change notifications
-- [ ] Health checks
-- [ ] Metrics collection
+### 3. Management Features
 
-4. **Security Features**
-- [ ] Encryption
-- [ ] Access control
-- [ ] Audit trails
-- [ ] Secret management
-- [ ] Compliance checks 
+- [ ] Web UI for configuration
+- [ ] Bulk configuration updates
+- [ ] Import/export functionality
+- [ ] Search and filtering
+- [ ] Configuration comparison
+
+### 4. Integration Features
+
+- [ ] Service discovery integration
+- [ ] Configuration events
+- [ ] External system notifications
+- [ ] API endpoints
+- [ ] Webhook support
+
+### 5. Monitoring Features
+
+- [ ] Usage analytics
+- [ ] Performance metrics
+- [ ] Health monitoring
+- [ ] Alert management
+- [ ] Dashboard integration
+
+## Contributing
+
+1. Fork the repository
+2. Create your feature branch
+3. Add tests for new features
+4. Submit a pull request
+
+## License
+
+This module is part of EarnORM and is licensed under the same terms. 
