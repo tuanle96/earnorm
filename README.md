@@ -2,7 +2,7 @@
 
 [![Project Status: Prototype](https://img.shields.io/badge/Project%20Status-Prototype-yellow.svg)]()
 [![License: CC BY-NC](https://img.shields.io/badge/License-CC%20BY--NC-lightgrey.svg)]()
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)]()
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)]()
 [![PyPI version](https://badge.fury.io/py/earnorm.svg)](https://badge.fury.io/py/earnorm)
 
 EarnORM is a high-performance, async-first MongoDB ORM for Python, designed to maximize throughput in I/O-bound applications. Built on top of Motor and Pydantic, it leverages the full power of async/await to handle thousands of database operations concurrently while maintaining type safety and data validation.
