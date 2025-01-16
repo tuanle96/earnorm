@@ -1,65 +1,70 @@
-"""Connection management for EarnORM."""
+"""Base connection implementation."""
 
 import time
-from typing import Any, Dict
+from typing import Any
 
-from motor.motor_asyncio import AsyncIOMotorClient
+from earnorm.pool.protocols.connection import ConnectionProtocol
 
 
-class Connection:
-    """MongoDB connection wrapper."""
+class BaseConnection(ConnectionProtocol):
+    """Base connection implementation."""
 
-    def __init__(
-        self,
-        client: AsyncIOMotorClient[Dict[str, Any]],
-        created_at: float = 0,
-        last_used_at: float = 0,
-    ) -> None:
-        """Initialize connection.
+    def __init__(self) -> None:
+        """Initialize connection."""
+        self._created_at = time.time()
+        self._last_used_at = self._created_at
+        self._is_closed = False
 
-        Args:
-            client: Motor client instance
-            created_at: Creation timestamp
-            last_used_at: Last usage timestamp
-        """
-        self.client = client
-        self.created_at = created_at or time.time()
-        self.last_used_at = last_used_at or self.created_at
-        self.is_closed = False
+    @property
+    def created_at(self) -> float:
+        """Get connection creation timestamp."""
+        return self._created_at
+
+    @property
+    def last_used_at(self) -> float:
+        """Get last used timestamp."""
+        return self._last_used_at
 
     @property
     def idle_time(self) -> float:
-        """Get connection idle time in seconds."""
-        return time.time() - self.last_used_at
+        """Get idle time in seconds."""
+        return time.time() - self._last_used_at
 
     @property
     def lifetime(self) -> float:
-        """Get connection lifetime in seconds."""
-        return time.time() - self.created_at
+        """Get lifetime in seconds."""
+        return time.time() - self._created_at
 
     @property
     def is_stale(self) -> bool:
         """Check if connection is stale."""
-        return self.is_closed or not self.client
+        return self._is_closed
+
+    def touch(self) -> None:
+        """Update last used timestamp."""
+        self._last_used_at = time.time()
 
     async def ping(self) -> bool:
-        """Ping connection to check health.
+        """Check connection health.
 
         Returns:
             True if connection is healthy
         """
-        try:
-            await self.client.admin.command("ping")
-            return True
-        except Exception:
-            return False
+        raise NotImplementedError
 
     async def close(self) -> None:
         """Close connection."""
-        if not self.is_closed:
-            self.client.close()
-            self.is_closed = True
+        self._is_closed = True
 
-    def touch(self) -> None:
-        """Update last used timestamp."""
-        self.last_used_at = time.time()
+    async def execute(self, operation: str, *args: Any, **kwargs: Any) -> Any:
+        """Execute database operation.
+
+        Args:
+            operation: Operation to execute
+            *args: Positional arguments
+            **kwargs: Keyword arguments
+
+        Returns:
+            Operation result
+        """
+        raise NotImplementedError

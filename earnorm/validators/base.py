@@ -1,42 +1,74 @@
-"""Base validator implementation."""
+"""Base validator implementation.
 
-import re
+This module provides the base classes and exceptions for all validators in EarnORM.
+"""
+
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Optional, Pattern, TypeVar, Union
+from typing import Any, Callable, Coroutine, Optional, Union
 
-T = TypeVar("T")
+# Type alias for validator functions
+ValidatorFunc = Callable[[Any], None]
+ValidationResult = Union[None, Coroutine[Any, Any, None]]
 
 
 class ValidationError(Exception):
-    """Validation error."""
+    """Validation error.
+
+    This exception is raised when validation fails. It contains a message
+    describing why the validation failed.
+
+    Examples:
+        ```python
+        raise ValidationError("Email is invalid")
+        raise ValidationError("Value must be positive")
+        ```
+    """
 
     def __init__(self, message: str) -> None:
         """Initialize validation error.
 
         Args:
-            message: Error message
+            message: Error message describing why validation failed
         """
         self.message = message
         super().__init__(message)
 
 
 class BaseValidator(ABC):
-    """Base validator class."""
+    """Base validator class.
+
+    All validators should inherit from this class and implement the __call__ method.
+    The __call__ method should validate the value and raise ValidationError if validation fails.
+
+    Examples:
+        ```python
+        class EmailValidator(BaseValidator):
+            def __call__(self, value: Any) -> None:
+                if not isinstance(value, str):
+                    raise ValidationError("Value must be a string")
+                if "@" not in value:
+                    raise ValidationError("Invalid email address")
+        ```
+    """
 
     def __init__(self, message: Optional[str] = None) -> None:
         """Initialize validator.
 
         Args:
-            message: Custom error message
+            message: Custom error message to use when validation fails.
+                    If not provided, a default message will be used.
         """
         self.message = message
 
     @abstractmethod
-    def __call__(self, value: Any) -> None:
+    def __call__(self, value: Any) -> ValidationResult:
         """Validate value.
 
         Args:
             value: Value to validate
+
+        Returns:
+            None for sync validation, Coroutine for async validation
 
         Raises:
             ValidationError: If validation fails
@@ -44,82 +76,36 @@ class BaseValidator(ABC):
         pass
 
 
-def validate_email(value: str) -> None:
-    """Validate email address.
+def create_validator(check: Callable[[Any], bool], message: str) -> ValidatorFunc:
+    """Create a validator function.
+
+    This is a helper function to create simple validators without defining a new class.
+    The check function should return True if validation passes, False otherwise.
 
     Args:
-        value: Email address to validate
-
-    Raises:
-        ValidationError: If email is invalid
-    """
-    if not value:
-        raise ValidationError("Email is required")
-
-    pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
-    if not re.match(pattern, value):
-        raise ValidationError("Invalid email address")
-
-
-def validate_length(
-    min_length: Optional[int] = None, max_length: Optional[int] = None
-) -> Callable[[str], None]:
-    """Create length validator.
-
-    Args:
-        min_length: Minimum length
-        max_length: Maximum length
+        check: Function that checks if value is valid
+        message: Error message to use when validation fails
 
     Returns:
-        Validator function
+        A validator function that raises ValidationError with the given message
+        when validation fails
+
+    Examples:
+        ```python
+        # Create a validator that checks if value is positive
+        validate_positive = create_validator(
+            lambda x: x > 0,
+            "Value must be positive"
+        )
+
+        # Use the validator
+        validate_positive(5)  # OK
+        validate_positive(-1)  # Raises ValidationError
+        ```
     """
 
-    def validator(value: str) -> None:
-        if min_length is not None and len(value) < min_length:
-            raise ValidationError(f"Length must be at least {min_length}")
-        if max_length is not None and len(value) > max_length:
-            raise ValidationError(f"Length must be at most {max_length}")
-
-    return validator
-
-
-def validate_range(
-    min_value: Optional[Union[int, float]] = None,
-    max_value: Optional[Union[int, float]] = None,
-) -> Callable[[Union[int, float]], None]:
-    """Create range validator.
-
-    Args:
-        min_value: Minimum value
-        max_value: Maximum value
-
-    Returns:
-        Validator function
-    """
-
-    def validator(value: Union[int, float]) -> None:
-        if min_value is not None and value < min_value:
-            raise ValidationError(f"Value must be at least {min_value}")
-        if max_value is not None and value > max_value:
-            raise ValidationError(f"Value must be at most {max_value}")
-
-    return validator
-
-
-def validate_regex(pattern: Union[str, Pattern[str]]) -> Callable[[str], None]:
-    """Create regex validator.
-
-    Args:
-        pattern: Regex pattern
-
-    Returns:
-        Validator function
-    """
-    if isinstance(pattern, str):
-        pattern = re.compile(pattern)
-
-    def validator(value: str) -> None:
-        if not pattern.match(value):
-            raise ValidationError("Value does not match pattern")
+    def validator(value: Any) -> None:
+        if not check(value):
+            raise ValidationError(message)
 
     return validator

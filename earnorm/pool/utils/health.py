@@ -1,96 +1,147 @@
-"""Health checking utilities."""
+"""Pool health check implementation."""
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Set, cast
 
-from earnorm.pool.core.pool import ConnectionPool
+from earnorm.pool.protocols.connection import ConnectionProtocol
+from earnorm.pool.protocols.pool import PoolProtocol
+from earnorm.pool.utils.metrics import (
+    ConnectionMetrics,
+    calculate_connection_metrics,
+    calculate_health_check,
+    calculate_pool_metrics,
+)
 
 logger = logging.getLogger(__name__)
 
 
-class HealthChecker:
-    """Connection pool health checker."""
+async def check_pool_health(pool: PoolProtocol[Any]) -> Dict[str, Any]:
+    """Check pool health.
 
-    def __init__(
-        self,
-        pool: ConnectionPool,
-        check_interval: float = 60.0,
-        max_failures: int = 3,
-    ) -> None:
-        """Initialize health checker.
+    Args:
+        pool: Pool instance
 
-        Args:
-            pool: Connection pool to check
-            check_interval: Interval between checks in seconds
-            max_failures: Maximum consecutive failures before marking unhealthy
-        """
-        self.pool = pool
-        self.check_interval = check_interval
-        self.max_failures = max_failures
-        self._failures = 0
-        self._last_check: Optional[float] = None
-        self._metrics: Dict[str, Any] = {}
+    Returns:
+        Health check data
 
-    async def check_health(self) -> bool:
-        """Check pool health.
+    Examples:
+        >>> from earnorm.pool.backends.mongo import MongoPool
+        >>> pool = MongoPool(
+        ...     uri="mongodb://localhost:27017",
+        ...     database="test",
+        ...     min_size=5,
+        ...     max_size=20
+        ... )
+        >>> await pool.init()
+        >>> health = await check_pool_health(pool)
+        >>> health["status"]
+        "healthy"
+        >>> health["metrics"]["total_connections"]
+        5
+        >>> await pool.close()
+    """
+    # Get pool metrics
+    metrics = calculate_pool_metrics(
+        backend_type=pool.backend_type,
+        total_connections=pool.size,
+        active_connections=pool.size - pool.available,
+        available_connections=pool.available,
+        acquiring_connections=0,  # TODO: Add acquiring count to pool protocol
+        min_size=getattr(pool, "_min_size", 0),
+        max_size=getattr(pool, "_max_size", 0),
+        timeout=getattr(pool, "_timeout", 0.0),
+        max_lifetime=getattr(pool, "_max_lifetime", 0),
+        idle_timeout=getattr(pool, "_idle_timeout", 0),
+    )
 
-        Returns:
-            True if pool is healthy
-        """
-        try:
-            # Get connection
-            conn = await self.pool.acquire()
-            try:
-                # Ping connection
-                is_healthy = await conn.ping()
-                if is_healthy:
-                    self._failures = 0
-                    self._update_metrics(healthy=True)
-                    return True
-                else:
-                    self._failures += 1
-                    self._update_metrics(healthy=False)
-                    return False
-            finally:
-                await self.pool.release(conn)
-        except Exception as e:
-            logger.error("Health check failed: %s", e)
-            self._failures += 1
-            self._update_metrics(healthy=False)
-            return False
+    # Get connection metrics
+    connections: List[ConnectionMetrics] = []
+    empty_set: Set[ConnectionProtocol] = set()
+    empty_list: List[ConnectionProtocol] = []
+    pool_connections = cast(
+        Set[ConnectionProtocol], getattr(pool, "_connections", empty_set)
+    )
+    pool_available = cast(
+        List[ConnectionProtocol], getattr(pool, "_available", empty_list)
+    )
 
-    @property
-    def is_healthy(self) -> bool:
-        """Check if pool is considered healthy.
-
-        Returns:
-            True if pool is healthy
-        """
-        return self._failures < self.max_failures
-
-    @property
-    def metrics(self) -> Dict[str, Any]:
-        """Get health check metrics.
-
-        Returns:
-            Dict of metrics
-        """
-        return self._metrics.copy()
-
-    def _update_metrics(self, healthy: bool) -> None:
-        """Update health check metrics.
-
-        Args:
-            healthy: Whether check was successful
-        """
-        self._metrics.update(
-            {
-                "failures": self._failures,
-                "max_failures": self.max_failures,
-                "is_healthy": self.is_healthy,
-                "last_check_healthy": healthy,
-                "pool_size": self.pool.size,
-                "pool_active": self.pool.active,
-                "pool_available": self.pool.available,
-            }
+    for conn in pool_connections:
+        connections.append(
+            calculate_connection_metrics(
+                id=str(id(conn)),
+                created_at=conn.created_at,
+                last_used_at=conn.last_used_at,
+                is_stale=conn.is_stale,
+                is_available=conn in pool_available,
+            )
         )
+
+    # Calculate health check
+    health = calculate_health_check(
+        status="healthy" if not getattr(pool, "_closed", False) else "closed",
+        metrics=metrics,
+        connections=connections,
+    )
+
+    return health.to_dict()
+
+
+async def cleanup_stale_connections(pool: PoolProtocol[Any]) -> int:
+    """Cleanup stale connections.
+
+    Args:
+        pool: Pool instance
+
+    Returns:
+        Number of connections cleaned up
+
+    Examples:
+        >>> from earnorm.pool.backends.mongo import MongoPool
+        >>> pool = MongoPool(
+        ...     uri="mongodb://localhost:27017",
+        ...     database="test",
+        ...     min_size=5,
+        ...     max_size=20
+        ... )
+        >>> await pool.init()
+        >>> cleaned = await cleanup_stale_connections(pool)
+        >>> print(f"Cleaned up {cleaned} connections")
+        Cleaned up 0 connections
+        >>> await pool.close()
+    """
+    cleaned = 0
+    lock = getattr(pool, "_lock", None)
+
+    if not lock:
+        logger.warning("Pool does not have a lock, skipping cleanup")
+        return cleaned
+
+    async with lock:
+        # Check available connections
+        empty_set: Set[ConnectionProtocol] = set()
+        empty_list: List[ConnectionProtocol] = []
+        available = cast(
+            List[ConnectionProtocol], getattr(pool, "_available", empty_list)
+        )
+        connections = cast(
+            Set[ConnectionProtocol], getattr(pool, "_connections", empty_set)
+        )
+
+        for conn in list(available):
+            if conn.is_stale:
+                available.remove(conn)
+                connections.remove(conn)
+                await conn.close()
+                cleaned += 1
+
+        # Create new connections if needed
+        min_size = getattr(pool, "_min_size", 0)
+        create_connection = getattr(pool, "_create_connection", None)
+
+        if create_connection and len(connections) < min_size:
+            while len(connections) < min_size:
+                conn = await create_connection()
+                connections.add(conn)
+                available.append(conn)
+
+    return cleaned

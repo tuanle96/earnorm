@@ -1,335 +1,284 @@
-# Event System for EarnORM
+# Event System
 
-EarnORM provides a powerful event system that allows asynchronous processing of model events and custom events.
+The Event System module provides a robust and flexible event handling system for EarnORM.
+It enables asynchronous event processing, reliable message delivery, and extensible event handling.
 
 ## Features
 
-- Asynchronous event processing
-- Event handlers with decorators
-- Model lifecycle events
-- Batch event processing
-- Delayed event execution
-- Retry policies for failed events
-- Event monitoring and management
+- **Event Bus**: Central coordinator for event publishing and handling
+- **Redis Backend**: Reliable message broker using Redis Pub/Sub
+- **Event Handlers**: Flexible handlers for processing events
+- **Transaction Support**: Atomic operations with automatic rollback
+- **Retry Logic**: Configurable retry policies with exponential backoff
+- **Health Checks**: System health monitoring and reporting
+- **Metrics Collection**: Performance metrics and insights
+- **Pattern Matching**: Glob-style event pattern matching
+- **Event Filtering**: Flexible event filtering and routing
+- **Event Batching**: Efficient batch processing of events
 
 ## Installation
 
-Events are built into EarnORM. No additional installation required.
+The Event System is included with EarnORM. No additional installation is required.
 
-## Usage
-
-### Initialization
-
-The event system is automatically initialized when initializing EarnORM:
+## Quick Start
 
 ```python
-import earnorm
+from earnorm.events import Event, EventBus, event_handler
 
-await earnorm.init(
-    mongodb_uri="mongodb://localhost:27017",
+# Initialize event bus
+bus = await EventBus.create(
     redis_uri="redis://localhost:6379/0",
-    event_config={
-        "queue_name": "my_app:events",
-        "retry_policy": {
-            "max_retries": 3,
-            "interval_start": 60,  # seconds
-            "interval_step": 60,   # seconds
-            "interval_max": 3600,  # seconds
-        }
-    }
+    queue_name="myapp"
 )
+
+# Define event handler
+@event_handler("user.created")
+async def handle_user_created(event: Event) -> None:
+    user = event.data
+    await send_welcome_email(user)
+
+# Register handler
+await bus.register_handler(handle_user_created)
+
+# Publish event
+event = Event(
+    name="user.created",
+    data={"id": "123", "email": "user@example.com"}
+)
+await bus.publish(event)
 ```
 
-### Model Lifecycle Hooks
+## Components
 
-Model lifecycle hooks allow you to run code before or after model operations:
+### Event Bus
 
-```python
-from earnorm.base import BaseModel
-from earnorm.fields import StringField, BooleanField, DateTimeField
-from earnorm.events.decorators import (
-    before_create, after_create,
-    before_write, after_write,
-    before_delete, after_delete
-)
-
-class User(BaseModel):
-    """User model with lifecycle hooks."""
-    
-    _collection = "users"
-
-    email = StringField(required=True)
-    username = StringField(required=True)
-    is_active = BooleanField(default=True)
-    last_login = DateTimeField()
-
-    @before_create
-    async def validate_email(self):
-        """Validate email before creating user."""
-        if not await self.is_valid_email():
-            raise ValueError("Invalid email format")
-        if await self.email_exists():
-            raise ValueError("Email already exists")
-
-    @after_write
-    async def invalidate_cache(self):
-        """Clear user cache after write operations."""
-        await self.env.cache.delete(f"user:{self.id}")
-        await self.env.cache.delete_pattern("users:*")
-
-    @before_delete
-    async def check_dependencies(self):
-        """Check dependencies before deleting user."""
-        if await self.has_active_orders():
-            raise ValueError("Cannot delete user with active orders")
-        if await self.has_active_subscriptions():
-            raise ValueError("Cannot delete user with active subscriptions")
-```
-
-### Custom Events with Event Data
-
-You can define custom events with strongly typed data using Pydantic models:
+The Event Bus is the central coordinator for event processing:
 
 ```python
-from earnorm.base import BaseModel
-from earnorm.fields import (
-    StringField, FloatField, ListField, DictField, 
-    ObjectIdField, DateTimeField
+from earnorm.events import EventBus
+
+# Create event bus
+bus = await EventBus.create(
+    redis_uri="redis://localhost:6379/0",
+    queue_name="myapp",
+    min_size=5,
+    max_size=20
 )
-from earnorm.events.core.types import EventData
-from earnorm.events.decorators import event
 
-class OrderItem(EventData):
-    """Order item data for events."""
-    
-    product_id: str
-    name: str
-    quantity: int
-    price: float
+# Start processing
+await bus.start()
 
-class OrderCreatedEvent(EventData):
-    """Event data for order creation."""
-    
-    order_id: str
-    customer_id: str
-    total: float
-    items: list[OrderItem]
-    shipping_address: dict
-    created_at: str
-
-class Order(BaseModel):
-    """Order model with event handling."""
-    
-    _collection = "orders"
-
-    customer_id = ObjectIdField(required=True)
-    items = ListField(DictField(), required=True)
-    total = FloatField(required=True)
-    shipping_address = DictField(required=True)
-    status = StringField(default="pending")
-    created_at = DateTimeField(auto_now=True)
-
-    async def create(self, **data):
-        """Create order and publish event."""
-        await super().create(**data)
-        
-        # Publish order created event
-        await self.env.event.publish(
-            "order.created",
-            OrderCreatedEvent(
-                order_id=str(self.id),
-                customer_id=str(self.customer_id),
-                total=self.total,
-                items=[OrderItem(**item) for item in self.items],
-                shipping_address=self.shipping_address,
-                created_at=self.created_at.isoformat()
-            )
-        )
-
-    @event("order.created", data_class=OrderCreatedEvent)
-    async def send_confirmation(self, data: OrderCreatedEvent):
-        """Send order confirmation email."""
-        customer = await self.env.users.find_one([("_id", "=", data.customer_id)])
-        if customer:
-            await self.env.mail_service.send_order_confirmation(
-                customer.email,
-                order_id=data.order_id,
-                total=data.total,
-                items=data.items,
-                shipping_address=data.shipping_address
-            )
+# Stop processing
+await bus.stop()
 ```
 
 ### Event Handlers
 
-You can also create standalone event handlers:
+Event handlers process specific types of events:
 
 ```python
-from earnorm.events.decorators import event_handler
-from earnorm.events.core.types import EventData
-from datetime import datetime
+from earnorm.events import Event, event_handler
 
-class PaymentEvent(EventData):
-    """Event data for payment events."""
-    
-    payment_id: str
-    order_id: str
-    amount: float
-    status: str
-    error_code: str = None
-    error_message: str = None
-    timestamp: str
+@event_handler("user.*")
+async def handle_user_events(event: Event) -> None:
+    if event.name == "user.created":
+        await handle_user_created(event)
+    elif event.name == "user.updated":
+        await handle_user_updated(event)
 
-@event_handler("payment.failed")
-async def notify_admin(data: PaymentEvent):
-    """Notify admin on high value payment failures."""
-    if data.amount > 1000:
-        await env.slack.send_message(
-            channel="#payments-alerts",
-            text=(
-                f"🚨 High value payment failed!\n"
-                f"Payment ID: {data.payment_id}\n"
-                f"Order ID: {data.order_id}\n"
-                f"Amount: ${data.amount:,.2f}\n"
-                f"Error: [{data.error_code}] {data.error_message}\n"
-                f"Time: {data.timestamp}"
-            )
-        )
+@event_handler("order.created", retry=True)
+async def handle_order_created(event: Event) -> None:
+    order = event.data
+    await process_order(order)
 ```
 
-### Model Event Handlers
+### Transaction Support
 
-To handle events for a specific model:
+Wrap handlers in transactions for atomic operations:
 
 ```python
-from earnorm.events.decorators import model_event_handler
-from earnorm.base import BaseModel
-from earnorm.fields import StringField, DateTimeField, DictField
-from datetime import datetime
+from earnorm.events import Event
+from earnorm.events.decorators import transactional
 
-class SecurityLog(BaseModel):
-    """Security log model for tracking security events."""
-    
-    _collection = "security_logs"
-
-    event_type = StringField(required=True)
-    user_id = StringField(required=True)
-    metadata = DictField(default_factory=dict)
-    created_at = DateTimeField(auto_now=True)
-
-@model_event_handler(SecurityLog, "user.password_changed")
-async def log_password_change(data: dict):
-    """Log password change events."""
-    await SecurityLog.create(
-        event_type="password_changed",
-        user_id=data["user_id"],
-        metadata={
-            "ip_address": data["ip_address"],
-            "user_agent": data["user_agent"],
-            "location": data["location"]
-        }
-    )
+@transactional
+async def handle_user_created(event: Event) -> None:
+    # All operations are atomic
+    user = await create_user(event.data)
+    await create_profile(user)
+    await send_welcome_email(user)
 ```
 
-### Publishing Events from Models
+### Retry Logic
 
-Each model instance has access to event publishing through `self.env.event`:
+Add retry logic to handlers for reliability:
 
 ```python
-from earnorm.base import BaseModel
-from earnorm.fields import (
-    StringField, FloatField, DateTimeField, 
-    ObjectIdField, BooleanField
+from earnorm.events import Event
+from earnorm.events.decorators import retry
+
+@retry(max_attempts=3, backoff=2.0)
+async def handle_payment(event: Event) -> None:
+    # Will retry up to 3 times with exponential backoff
+    await process_payment(event.data)
+```
+
+### Health Checks
+
+Monitor system health:
+
+```python
+from earnorm.events import EventBus
+from earnorm.events.core.health import HealthChecker
+
+# Create health checker
+checker = HealthChecker(
+    event_bus,
+    check_interval=60.0,
+    timeout=5.0
 )
-from earnorm.events.core.types import EventData
-from datetime import datetime, timedelta
 
-class SubscriptionEvent(EventData):
-    """Event data for subscription events."""
-    
-    subscription_id: str
-    user_id: str
-    plan: str
-    expires_at: str
-    is_trial: bool = False
+# Start health checks
+await checker.start()
 
-class Subscription(BaseModel):
-    """Subscription model with event handling."""
-    
-    _collection = "subscriptions"
+# Get health status
+status = await checker.check()
+print(f"System health: {status}")
+```
 
-    user_id = ObjectIdField(required=True)
-    plan = StringField(required=True)
-    is_trial = BooleanField(default=False)
-    expires_at = DateTimeField(required=True)
-    created_at = DateTimeField(auto_now=True)
+### Metrics Collection
 
-    async def create(self, **data):
-        """Create subscription and schedule renewal reminder."""
-        await super().create(**data)
-        
-        # Schedule renewal reminder 7 days before expiry
-        reminder_date = self.expires_at - timedelta(days=7)
-        
-        await self.env.event.publish(
-            "subscription.renewal_reminder",
-            SubscriptionEvent(
-                subscription_id=str(self.id),
-                user_id=str(self.user_id),
-                plan=self.plan,
-                expires_at=self.expires_at.isoformat(),
-                is_trial=self.is_trial
-            ),
-            delay=(reminder_date - datetime.utcnow()).total_seconds()
-        )
+Track system metrics:
 
-    @event("subscription.renewal_reminder", data_class=SubscriptionEvent)
-    async def send_reminder(self, data: SubscriptionEvent):
-        """Send renewal reminder email."""
-        user = await self.env.users.find_one([("_id", "=", data.user_id)])
-        if user:
-            await self.env.mail_service.send_renewal_reminder(
-                email=user.email,
-                subscription_id=data.subscription_id,
-                plan=data.plan,
-                expires_at=data.expires_at,
-                is_trial=data.is_trial
-            )
+```python
+from earnorm.events import EventBus
+from earnorm.events.core.metrics import MetricsCollector
+
+# Create metrics collector
+collector = MetricsCollector(event_bus)
+
+# Get metrics
+metrics = await collector.get_metrics()
+print(f"Success rate: {metrics.success_rate}")
+
+# Get detailed report
+report = await collector.get_report()
+print(f"Metrics: {report}")
 ```
 
 ## Best Practices
 
-### Event Naming
+1. **Event Names**:
+   - Use dot notation for event names (e.g. "user.created")
+   - Keep names descriptive and consistent
+   - Use past tense for state changes
 
-- Use lowercase with dots for namespacing (e.g. `user.created`, `order.payment.failed`)
-- Be descriptive and specific
-- Use past tense for lifecycle events
-- Use present tense for commands/actions
+2. **Event Data**:
+   - Include minimal necessary data
+   - Use JSON-serializable types
+   - Include event metadata when useful
 
-### Data Handling
+3. **Event Handlers**:
+   - Keep handlers focused and single-purpose
+   - Use transactions for atomic operations
+   - Add retry logic for reliability
+   - Log errors and important state changes
 
-- Define event data classes using Pydantic models
-- Include all necessary data in the event
-- Keep event data serializable
-- Validate data at both publish and handle time
+4. **Error Handling**:
+   - Handle expected errors gracefully
+   - Use retry logic for transient failures
+   - Log errors with context
+   - Monitor error rates
 
-### Error Handling
+5. **Performance**:
+   - Use event batching for high volume
+   - Monitor processing times
+   - Scale connection pool as needed
+   - Clean up resources properly
 
-- Use retry policies for transient failures
-- Log failed events for debugging
-- Consider fallback handlers for critical events
-- Validate event data before processing
+6. **Monitoring**:
+   - Enable health checks
+   - Collect metrics
+   - Monitor error rates
+   - Track processing times
 
-### Performance
+## Configuration
 
-- Keep event handlers lightweight
-- Use batch processing for high volume events
-- Consider event priorities
-- Monitor queue size and processing time
+The Event System can be configured through the following settings:
 
-### Monitoring
+```python
+# Event Bus settings
+EVENT_BUS_CONFIG = {
+    "redis_uri": "redis://localhost:6379/0",
+    "queue_name": "myapp",
+    "min_size": 5,
+    "max_size": 20,
+    "timeout": 30.0,
+    "retry_policy": {
+        "max_attempts": 3,
+        "backoff": 2.0
+    }
+}
 
-- Log event processing metrics
-- Set up alerts for failed events
-- Monitor queue length and processing time
-- Track retry attempts and failures 
+# Health check settings
+HEALTH_CHECK_CONFIG = {
+    "check_interval": 60.0,
+    "timeout": 5.0
+}
+
+# Metrics settings
+METRICS_CONFIG = {
+    "max_samples": 1000
+}
+```
+
+## Error Handling
+
+The Event System provides several exception types:
+
+- `EventError`: Base exception for all event errors
+- `PublishError`: Error publishing an event
+- `HandlerError`: Error in event handler
+- `ValidationError`: Event validation error
+- `ConnectionError`: Backend connection error
+
+Example error handling:
+
+```python
+from earnorm.events.core.exceptions import EventError
+
+try:
+    await bus.publish(event)
+except EventError as e:
+    logger.error(f"Failed to publish event: {e}")
+    # Handle error appropriately
+```
+
+## Testing
+
+The Event System includes utilities for testing:
+
+```python
+from earnorm.events.utils.testing import MockBackend
+
+# Create mock backend
+backend = MockBackend()
+
+# Create test bus
+bus = await EventBus.create(backend=backend)
+
+# Test event handling
+event = Event("test.event", {"data": "test"})
+await bus.publish(event)
+
+# Verify event was processed
+assert len(backend.published_events) == 1
+assert backend.published_events[0].name == "test.event"
+```
+
+## Contributing
+
+Contributions are welcome! Please read our contributing guidelines and submit pull requests to our repository.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details. 

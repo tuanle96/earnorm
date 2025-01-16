@@ -1,35 +1,174 @@
-"""EarnORM - Async MongoDB ORM."""
+"""EarnORM - Async MongoDB ORM.
 
-__version__ = "0.1.0"
+This module provides the main entry point for EarnORM, including:
+- Initialization and configuration
+- Connection pool management with multiple backend support (MongoDB, Redis)
+- Dependency injection
+- Registry management
+- Cache system
+- Event system
+
+Examples:
+    ```python
+    import earnorm
+    from earnorm import fields, models
+    from earnorm.pool import PoolFactory, ConnectionContext
+
+    # Define model
+    class User(models.BaseModel):
+        # Collection configuration
+        _collection = "users"
+        _name = "user"
+        _indexes = [{"email": 1}]
+
+        # Fields
+        name = fields.String(required=True)
+        email = fields.Email(required=True, unique=True)
+        age = fields.Int(required=True)
+
+    # Initialize with MongoDB and Redis
+    await earnorm.init(
+        pools=[
+            await PoolFactory.create_mongo_pool(
+                uri="mongodb://localhost:27017",
+                database="earnorm_example",
+                min_size=5,
+                max_size=20
+            ),
+            await PoolFactory.create_redis_pool(
+                host="localhost",
+                port=6379,
+                db=0,
+                min_size=5,
+                max_size=20
+            )
+        ],
+        cache_config={
+            "ttl": 3600,
+            "prefix": "earnorm:",
+            "max_retries": 3
+        },
+        event_config={
+            "queue_name": "earnorm:events",
+            "batch_size": 100
+        }
+    )
+
+    # Create users
+    users = [
+        User(name="John Doe", email="john@example.com", age=30),
+        User(name="Jane Smith", email="jane@example.com", age=25),
+        User(name="Bob Wilson", email="bob@example.com", age=35),
+    ]
+    async with ConnectionContext(earnorm.pool_registry.get("mongodb")) as conn:
+        for user in users:
+            await user.save()
+
+    # Search users using domain
+    users = await User.search([("age", ">", 25)])
+    for user in users:
+        print(f"{user.name} ({user.email}, {user.age} years old)")
+
+    # Find single user
+    user = await User.find_one([("email", "=", "john@example.com")])
+    if user.exists():
+        record = user.ensure_one()
+        print(f"Found user: {record.name}, {record.age} years old")
+
+    # Update user
+    if user.exists():
+        record = user.ensure_one()
+        await record.write({"age": 31})
+        print(f"Updated age to: {record.age}")
+
+    # Delete users
+    all_users = await User.search([])
+    for user in all_users:
+        await user.delete()
+
+    # Use Redis for caching
+    async with ConnectionContext(earnorm.pool_registry.get("redis")) as conn:
+        await conn.execute("set", "user:count", len(users))
+        count = await conn.execute("get", "user:count")
+        print(f"Total users: {count}")
+    ```
+"""
+
 __author__ = "EarnORM"
 __credits__ = "EarnORM"
 
 import logging
-from typing import Any, Dict, Optional, Type
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, Dict, List, Optional, Type, Union, cast
 
-from earnorm import fields
+# Core imports
+from earnorm.base import fields
 from earnorm.base import model as models
+from earnorm.base.registry import Registry
+
+# Cache imports
 from earnorm.cache import CacheManager
-from earnorm.di import Container, DIContainer
-from earnorm.events import EventBus
-from earnorm.pool.core.connection import Connection
+from earnorm.cache.backends.redis import RedisBackend
+
+# DI imports
+from earnorm.di import Container
+
+# Event imports
+from earnorm.events.manager import EventManager
+
+# Pool imports
+from earnorm.pool import (
+    MongoConnection,
+    MongoPool,
+    PoolFactory,
+    PoolRegistry,
+    RedisConnection,
+    RedisPool,
+)
+from earnorm.pool.core import BaseConnection, BasePool
 
 logger = logging.getLogger(__name__)
 
 # Global variables
-env: Any = None
-registry: Any = None
-di: Optional[DIContainer] = None
-pool: Any = None
+env: Optional[Registry] = None
+registry: Optional[Registry] = None
+di: Optional[Container] = None
+pool_registry: Optional[PoolRegistry] = None
+pool_factory: Optional[PoolFactory] = None
 cache: Optional[CacheManager] = None
-event_bus: Optional[EventBus] = None
+events: Optional[EventManager] = None
 
 # Global container instance
-container = DIContainer()
+container: Container = Container()
 
 
 def get_all_subclasses(cls: Type[models.BaseModel]) -> list[Type[models.BaseModel]]:
-    """Get all subclasses of a class recursively."""
+    """Get all subclasses of a class recursively.
+
+    This function traverses the inheritance tree of a class and returns all its subclasses.
+    It is used internally to register all model classes with the registry.
+
+    Args:
+        cls: Base class to get subclasses for
+
+    Returns:
+        List of all subclasses
+
+    Examples:
+        ```python
+        class BaseModel:
+            pass
+
+        class User(BaseModel):
+            pass
+
+        class Admin(User):
+            pass
+
+        subclasses = get_all_subclasses(BaseModel)
+        # Returns [User, Admin]
+        ```
+    """
     all_subclasses: list[Type[models.BaseModel]] = []
     for subclass in cls.__subclasses__():
         all_subclasses.append(subclass)
@@ -37,129 +176,222 @@ def get_all_subclasses(cls: Type[models.BaseModel]) -> list[Type[models.BaseMode
     return all_subclasses
 
 
-async def init(
-    mongo_uri: str,
-    database: str,
-    *,
-    redis_uri: Optional[str] = None,
-    min_pool_size: int = 5,
-    max_pool_size: int = 20,
-    pool_timeout: float = 30.0,
-    pool_max_lifetime: int = 3600,
-    pool_idle_timeout: int = 300,
-    cache_config: Optional[dict[str, Any]] = None,
-    event_config: Optional[dict[str, Any]] = None,
+async def _init_container(
+    pools: List[Union[MongoPool, RedisPool]],
     **kwargs: Dict[str, Any],
 ) -> None:
-    """Initialize EarnORM with configuration.
+    """Initialize container and core services.
 
     Args:
-        mongo_uri: MongoDB connection URI
-        database: Database name
-        redis_uri: Redis connection URI for caching (optional)
-        min_pool_size: Minimum connection pool size
-        max_pool_size: Maximum connection pool size
-        pool_timeout: Connection acquire timeout
-        pool_max_lifetime: Maximum connection lifetime
-        pool_idle_timeout: Maximum idle time
-        cache_config: Cache configuration options
-            - ttl: Default TTL in seconds (default: 3600)
-            - prefix: Key prefix (default: "earnorm:")
-            - max_retries: Max reconnection attempts (default: 3)
-            - retry_delay: Initial delay between retries (default: 1.0)
-            - health_check_interval: Health check interval in seconds (default: 30.0)
-        event_config: Event configuration options
-            - queue_name: Event queue name (default: "earnorm:events")
-            - batch_size: Event batch size (default: 100)
-            - poll_interval: Event poll interval in seconds (default: 1.0)
-            - max_retries: Event max retries (default: 3)
-            - retry_delay: Event retry delay in seconds (default: 5.0)
-            - num_workers: Event worker count (default: 1)
+        pools: List of connection pools to initialize
+        **kwargs: Additional configuration options
     """
-    global env, registry, di, pool, cache, event_bus
+    global di, env, registry, pool_registry, pool_factory
 
-    # Initialize container with pool configuration
+    # Initialize pool registry and factory
+    pool_registry = PoolRegistry()
+    pool_factory = PoolFactory()
+
+    # Initialize and register pools
+    for pool in pools:
+        if isinstance(pool, MongoPool):
+            await pool_registry.create_and_register(
+                "mongodb",
+                "mongodb",
+                uri=pool.uri,
+                database=pool.database,
+                min_size=pool.min_size,
+                max_size=pool.max_size,
+                timeout=pool.timeout,
+                max_lifetime=pool.max_lifetime,
+                idle_timeout=pool.idle_timeout,
+            )
+        else:  # RedisPool case
+            await pool_registry.create_and_register(
+                "redis",
+                "redis",
+                host=pool.host,
+                port=pool.port,
+                db=pool.db,
+                min_size=pool.min_size,
+                max_size=pool.max_size,
+                timeout=pool.timeout,
+                max_lifetime=pool.max_lifetime,
+                idle_timeout=pool.idle_timeout,
+            )
+
+    # Initialize container
     await container.init(
-        mongo_uri=mongo_uri,
-        database=database,
-        min_pool_size=min_pool_size,
-        max_pool_size=max_pool_size,
-        pool_timeout=pool_timeout,
-        pool_max_lifetime=pool_max_lifetime,
-        pool_idle_timeout=pool_idle_timeout,
+        pool_registry=pool_registry,
+        pool_factory=pool_factory,
         **kwargs,
     )
 
     # Update global instances
     di = container
-    env = container.registry
+    env = cast(Registry, await container.get("registry"))
     registry = env
-    pool = container.pool
-
-    # Initialize services as needed
-    if redis_uri:
-
-        # Initialize cache manager
-        cache_config = cache_config or {}
-        cache_manager = CacheManager(
-            redis_uri=redis_uri,
-            ttl=cache_config.get("ttl", 3600),
-            prefix=cache_config.get("prefix", "earnorm:"),
-            max_retries=cache_config.get("max_retries", 3),
-            retry_delay=cache_config.get("retry_delay", 1.0),
-            health_check_interval=cache_config.get("health_check_interval", 30.0),
-        )
-        await cache_manager.connect()
-        cache = cache_manager
-        di.register("cache_manager", cache_manager)
-        logger.info("Cache system initialized")
-
-        # Initialize event bus
-        event_config = event_config or {}
-        event_bus = EventBus(
-            redis_uri=redis_uri,
-            queue_name=event_config.get("queue_name", "earnorm:events"),
-            **event_config,
-        )
-        await event_bus.connect()
-        di.register("event_bus", event_bus)
-        di.register("event", event_bus)
-        logger.info("Event system initialized")
-
-    # Get all subclasses of BaseModel
-    for model_cls in get_all_subclasses(models.BaseModel):
-        registry.register_model(model_cls)
 
 
-async def get_connection() -> Connection:
-    """Get connection from pool.
-
-    Returns:
-        Connection instance
-    """
-    if pool is None:
-        raise RuntimeError("EarnORM not initialized")
-    return await pool.acquire()
-
-
-async def release_connection(conn: Connection) -> None:
-    """Release connection back to pool.
+async def _init_cache(redis_pool: RedisPool, cache_config: Dict[str, Any]) -> None:
+    """Initialize cache system.
 
     Args:
-        conn: Connection to release
+        redis_pool: Redis pool instance
+        cache_config: Cache configuration options
     """
-    if pool is None:
+    global cache, di
+
+    # Create Redis backend with pool
+    redis_backend = RedisBackend(pool=redis_pool)
+
+    # Initialize cache manager
+    cache = CacheManager(
+        backend=redis_backend,
+        **cache_config,
+    )
+
+    # Register with container
+    if di is not None:
+        container.register("cache", cache)
+
+
+async def _init_events(redis_pool: RedisPool, event_config: Dict[str, Any]) -> None:
+    """Initialize event system.
+
+    Args:
+        redis_pool: Redis pool instance
+        event_config: Event configuration options
+    """
+    global events, di, env
+
+    if env is None:
+        raise RuntimeError("Environment not initialized")
+
+    # Initialize event manager with env
+    events = EventManager(env)
+
+    # Configure event manager
+    await events.init(
+        backend={
+            "host": redis_pool.host,
+            "port": redis_pool.port,
+            "db": redis_pool.db,
+        },
+        **event_config,
+    )
+
+    # Register with container
+    if di is not None:
+        container.register("events", events)
+
+
+async def init(
+    pools: List[Union[MongoPool, RedisPool]],
+    cache_config: Optional[Dict[str, Any]] = None,
+    event_config: Optional[Dict[str, Any]] = None,
+    **kwargs: Dict[str, Any],
+) -> None:
+    """Initialize EarnORM.
+
+    Args:
+        pools: List of connection pools to initialize
+        cache_config: Cache configuration options
+        event_config: Event configuration options
+        **kwargs: Additional configuration options
+    """
+    # Initialize container and core services
+    await _init_container(pools, **kwargs)
+
+    # Initialize cache if configured
+    if cache_config and pool_registry:
+        redis_pool = pool_registry.get("redis")
+        if not redis_pool:
+            raise ValueError("Redis pool required for cache system")
+        if isinstance(redis_pool, RedisPool):
+            await _init_cache(redis_pool, cache_config)
+
+    # Initialize events if configured
+    if event_config and pool_registry:
+        redis_pool = pool_registry.get("redis")
+        if not redis_pool:
+            raise ValueError("Redis pool required for event system")
+        if isinstance(redis_pool, RedisPool):
+            await _init_events(redis_pool, event_config)
+
+    # Register all model classes
+    if env:
+        for model_cls in get_all_subclasses(models.BaseModel):
+            env.register_model(model_cls)
+
+    logger.info("EarnORM initialized successfully")
+
+
+@asynccontextmanager
+async def get_connection(
+    backend: str = "mongodb",
+) -> AsyncIterator[Union[MongoConnection, RedisConnection]]:
+    """Get connection from pool.
+
+    This function acquires a connection from the specified backend pool.
+    The connection will be automatically released when the context exits.
+
+    Args:
+        backend: Backend type ("mongodb" or "redis", default: "mongodb")
+
+    Returns:
+        Connection instance from the pool
+
+    Raises:
+        RuntimeError: If EarnORM is not initialized
+        ValueError: If backend type is invalid
+        KeyError: If pool for specified backend is not found
+
+    Examples:
+        ```python
+        # Get MongoDB connection
+        async with earnorm.get_connection("mongodb") as conn:
+            await conn.client.find_one(...)
+
+        # Get Redis connection
+        async with earnorm.get_connection("redis") as conn:
+            await conn.execute("get", "key")
+        ```
+    """
+    if pool_registry is None:
         raise RuntimeError("EarnORM not initialized")
-    await pool.release(conn)
+
+    pool = pool_registry.get(backend)
+    if pool is None:
+        raise KeyError(f"Pool for backend '{backend}' not found")
+
+    conn = await pool.acquire()
+    try:
+        yield conn
+    finally:
+        # Type check to ensure correct connection type
+        if backend == "mongodb" and isinstance(conn, MongoConnection):
+            await cast(MongoPool, pool).release(conn)
+        elif backend == "redis" and isinstance(conn, RedisConnection):
+            await cast(RedisPool, pool).release(conn)
+        else:
+            logger.error(f"Invalid connection type for backend {backend}")
 
 
+# Public API
 __all__ = [
-    "models",
+    # Core
     "init",
+    "models",
     "fields",
     # Pool
     "get_connection",
-    "release_connection",
+    "BasePool",
+    "BaseConnection",
+    "MongoPool",
+    "MongoConnection",
+    "RedisPool",
+    "RedisConnection",
     # DI and Registry
     "di",
     "env",
@@ -169,5 +401,6 @@ __all__ = [
     "cache",
     "CacheManager",
     # Events
-    "event_bus",
+    "events",
+    "EventManager",
 ]

@@ -1,136 +1,287 @@
-"""Model event handlers."""
+"""Model event handler implementation.
 
-import inspect
-from typing import Any, Dict, Optional, Type
+This module provides event handling for model events.
+It handles model lifecycle events like created, updated, deleted.
 
-from earnorm.base import BaseModel
-from earnorm.events.core import Event
+Features:
+- Model event handling
+- Automatic event publishing
+- Event validation
+- Error handling
+- Event tracking
+
+Examples:
+    ```python
+    from earnorm.events.handlers.model import ModelEventHandler
+    from earnorm.models import Model
+
+    # Create model handler
+    handler = ModelEventHandler[User](
+        model_cls=User,
+        pattern="user.*"
+    )
+
+    # Handle model events
+    @handler.on_created
+    async def handle_user_created(user: User) -> None:
+        await send_welcome_email(user.email)
+
+    @handler.on_updated
+    async def handle_user_updated(user: User) -> None:
+        await notify_profile_updated(user)
+
+    @handler.on_deleted
+    async def handle_user_deleted(user: User) -> None:
+        await cleanup_user_data(user)
+    ```
+"""
+
+import logging
+from typing import Any, Awaitable, Callable, Generic, Optional, Type, TypeVar
+
+from earnorm.base.models.base import Model
+from earnorm.events.core.event import Event
+from earnorm.events.core.exceptions import HandlerError
+from earnorm.events.handlers.base import EventHandler
+
+logger = logging.getLogger(__name__)
+
+M = TypeVar("M", bound=Model)
 
 
-class ModelEventHandler:
-    """Handler for model events."""
+class ModelEventHandler(EventHandler, Generic[M]):
+    """Model event handler.
 
-    def __init__(self) -> None:
-        """Initialize model event handler."""
-        self._models: Dict[str, Type[BaseModel]] = {}
+    This class handles events for a specific model type.
+    It provides decorators for handling model lifecycle events.
 
-    async def _run_hook(self, model: BaseModel, hook_name: str) -> None:
-        """Run lifecycle hook on model.
+    Attributes:
+        model_cls: Model class to handle events for
+        pattern: Event pattern to match (e.g. "user.*")
+        created_handler: Handler for created events
+        updated_handler: Handler for updated events
+        deleted_handler: Handler for deleted events
 
-        Args:
-            model: Model instance
-            hook_name: Name of hook to run
-        """
-        hook = getattr(model, hook_name, None)
-        if hook and inspect.iscoroutinefunction(hook):
-            await hook()
+    Examples:
+        ```python
+        # Create handler for User model
+        handler = ModelEventHandler[User](
+            model_cls=User,
+            pattern="user.*"
+        )
 
-    async def _run_event_handler(
+        # Register event handlers
+        @handler.on_created
+        async def handle_created(user: User) -> None:
+            await send_welcome_email(user)
+
+        @handler.on_updated
+        async def handle_updated(user: User) -> None:
+            await notify_profile_updated(user)
+
+        @handler.on_deleted
+        async def handle_deleted(user: User) -> None:
+            await cleanup_user_data(user)
+        ```
+    """
+
+    def __init__(
         self,
-        model: BaseModel,
-        handler: Any,
-        event_data: Optional[Dict[str, Any]] = None,
+        model_cls: Type[M],
+        pattern: str,
     ) -> None:
-        """Run event handler on model.
+        """Initialize model event handler.
 
         Args:
-            model: Model instance
-            handler: Event handler method
-            event_data: Optional event data
+            model_cls: Model class to handle events for
+            pattern: Event pattern to match
         """
-        # Get event data class if specified
-        data_class = getattr(handler, "_event_data_class", None)
+        super().__init__()
+        self._pattern = pattern
+        self.model_cls = model_cls
+        self.created_handler: Optional[Callable[[M], Awaitable[None]]] = None
+        self.updated_handler: Optional[Callable[[M], Awaitable[None]]] = None
+        self.deleted_handler: Optional[Callable[[M], Awaitable[None]]] = None
 
-        # Validate and pass event data
-        if data_class and event_data:
-            data = data_class(**event_data)
-            await handler(data)
-        else:
-            await handler(event_data)
+    @property
+    def id(self) -> str:
+        """Get handler ID."""
+        return f"model_handler_{self.model_cls.__name__}_{self._pattern}"
 
-    async def handle_create(self, model: BaseModel) -> None:
-        """Handle model create event.
+    @property
+    def data(self) -> dict[str, Any]:
+        """Get handler data."""
+        return {
+            "model": self.model_cls.__name__,
+            "pattern": self._pattern,
+        }
+
+    def on_created(
+        self, func: Callable[[M], Awaitable[None]]
+    ) -> Callable[[M], Awaitable[None]]:
+        """Decorator for handling created events.
 
         Args:
-            model: Model instance
-        """
-        await self._run_hook(model, "_before_create")
-        await self._run_hook(model, "_after_create")
+            func: Handler function
 
-    async def handle_update(self, model: BaseModel, data: Dict[str, Any]) -> None:
-        """Handle model update event.
+        Returns:
+            Decorated function
+
+        Examples:
+            ```python
+            @handler.on_created
+            async def handle_created(user: User) -> None:
+                await send_welcome_email(user)
+            ```
+        """
+        self.created_handler = func
+        return func
+
+    def on_updated(
+        self, func: Callable[[M], Awaitable[None]]
+    ) -> Callable[[M], Awaitable[None]]:
+        """Decorator for handling updated events.
 
         Args:
-            model: Model instance
-            data: Update data
-        """
-        await self._run_hook(model, "_before_update")
-        await self._run_hook(model, "_after_update")
+            func: Handler function
 
-    async def handle_delete(self, model: BaseModel) -> None:
-        """Handle model delete event.
+        Returns:
+            Decorated function
+
+        Examples:
+            ```python
+            @handler.on_updated
+            async def handle_updated(user: User) -> None:
+                await notify_profile_updated(user)
+            ```
+        """
+        self.updated_handler = func
+        return func
+
+    def on_deleted(
+        self, func: Callable[[M], Awaitable[None]]
+    ) -> Callable[[M], Awaitable[None]]:
+        """Decorator for handling deleted events.
 
         Args:
-            model: Model instance
-        """
-        await self._run_hook(model, "_before_delete")
-        await self._run_hook(model, "_after_delete")
+            func: Handler function
 
-    async def handle_event(self, event: Event) -> None:
-        """Handle custom event.
+        Returns:
+            Decorated function
+
+        Examples:
+            ```python
+            @handler.on_deleted
+            async def handle_deleted(user: User) -> None:
+                await cleanup_user_data(user)
+            ```
+        """
+        self.deleted_handler = func
+        return func
+
+    async def handle(self, event: Event) -> None:
+        """Handle model event.
+
+        This method routes events to the appropriate handler based on
+        the event name.
 
         Args:
-            event: Event instance
+            event: Event to handle
+
+        Raises:
+            HandlerError: If event handling fails
         """
-        # Get model class and ID from event data
-        model_id = event.data.get("id")
-        model_name = event.data.get("model")
+        try:
+            # Get model instance from event data
+            model = self.model_cls(**event.data)
 
-        if not model_id or not model_name:
-            return
+            # Route to appropriate handler
+            if event.name.endswith(".created") and self.created_handler:
+                await self.created_handler(model)
+            elif event.name.endswith(".updated") and self.updated_handler:
+                await self.updated_handler(model)
+            elif event.name.endswith(".deleted") and self.deleted_handler:
+                await self.deleted_handler(model)
+            else:
+                logger.warning(f"No handler for event: {event.name}")
 
-        # Get model class and instance
-        model_cls = self._models.get(model_name)
-        if not model_cls:
-            return
+        except Exception as e:
+            raise HandlerError(f"Failed to handle model event: {str(e)}")
 
-        # Get model instance
-        result = await model_cls.find_one([model_id])  # type: ignore
-        if not result:
-            return
 
-        model = result[0]
+def model_events(
+    pattern: str,
+    *,
+    publish_created: bool = True,
+    publish_updated: bool = True,
+    publish_deleted: bool = True,
+) -> Callable[[Type[M]], Type[M]]:
+    """Decorator for enabling model events.
 
-        # Find and run event handler
-        for _, method in inspect.getmembers(model):
-            if (
-                getattr(method, "_is_event_handler", False)
-                and getattr(method, "_event_name", None) == event.name
-            ):
-                await self._run_event_handler(model, method, event.data)
+    This decorator adds event publishing to model lifecycle methods.
 
-    def register_model(self, model_cls: Type[BaseModel]) -> None:
-        """Register model class.
+    Args:
+        pattern: Event pattern prefix (e.g. "user")
+        publish_created: Whether to publish created events
+        publish_updated: Whether to publish updated events
+        publish_deleted: Whether to publish deleted events
 
-        Args:
-            model_cls: Model class to register
-        """
-        self._models[model_cls.__name__] = model_cls
+    Returns:
+        Decorated model class
 
-    def register_model_handlers(self, event_bus: Any) -> None:
-        """Register model event handlers.
+    Examples:
+        ```python
+        @model_events("user")
+        class User(Model):
+            name: str
+            email: str
 
-        Args:
-            event_bus: Event bus instance
-        """
-        # Register built-in handlers
-        event_bus.subscribe("model.created", self.handle_create)
-        event_bus.subscribe("model.updated", self.handle_update)
-        event_bus.subscribe("model.deleted", self.handle_delete)
+        # Events will be published automatically:
+        user = await User.create(name="Test", email="test@example.com")
+        # Publishes: user.created
 
-        # Register custom event handlers
-        for model_cls in self._models.values():
-            for _, method in inspect.getmembers(model_cls):
-                if getattr(method, "_is_event_handler", False):
-                    event_name = getattr(method, "_event_name")
-                    event_bus.subscribe(event_name, self.handle_event)
+        await user.update(name="Updated")
+        # Publishes: user.updated
+
+        await user.delete()
+        # Publishes: user.deleted
+        ```
+    """
+
+    def decorator(model_cls: Type[M]) -> Type[M]:
+        # Store original methods
+        original_save = getattr(model_cls, "save")
+        original_delete = getattr(model_cls, "delete")
+
+        # Add event publishing
+        async def save(self: M, *args: Any, **kwargs: Any) -> None:
+            is_new = not self.id
+            await original_save(self, *args, **kwargs)
+
+            # Publish event
+            if is_new and publish_created:
+                await self.publish_event(f"{pattern}.created")
+            elif not is_new and publish_updated:
+                await self.publish_event(f"{pattern}.updated")
+
+        async def delete(self: M, *args: Any, **kwargs: Any) -> None:
+            await original_delete(self, *args, **kwargs)
+            if publish_deleted:
+                await self.publish_event(f"{pattern}.deleted")
+
+        # Add event publishing method
+        async def publish_event(self: M, name: str) -> None:
+            event = Event(
+                name=name,
+                data=self.to_dict(),
+            )
+            await self.env.events.publish(event)
+
+        # Update model class
+        model_cls.save = save  # type: ignore
+        model_cls.delete = delete  # type: ignore
+        model_cls.publish_event = publish_event  # type: ignore
+
+        return model_cls
+
+    return decorator

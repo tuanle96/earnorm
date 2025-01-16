@@ -1,21 +1,39 @@
-"""Base field types for EarnORM."""
+"""Base field types for EarnORM.
+
+This module provides the base field class that all field types inherit from.
+It implements the core functionality for field validation, conversion, and serialization.
+"""
 
 from abc import abstractmethod
-from typing import Any, Callable, Dict, Generic, List, Optional, Type, TypeVar, Union
+from typing import Any, Callable, Generic, List, Optional, Type, TypeVar, Union
 
-from bson import ObjectId
 from typing_extensions import Self
 
-from earnorm.base.types import FieldProtocol, ModelProtocol
-from earnorm.validators import ValidationError, validate_range
+from earnorm.base.fields.metadata import FieldMetadata
+from earnorm.di import container
+from earnorm.types import FieldProtocol, ModelInterface
+from earnorm.validators import ValidationError
 
 T = TypeVar("T")
-M = TypeVar("M", bound=ModelProtocol)
+M = TypeVar("M", bound=ModelInterface)
 ValidatorFunc = Callable[[Any], None]
 
 
 class Field(FieldProtocol, Generic[T]):
-    """Base field class."""
+    """Base field class.
+
+    This class implements the FieldProtocol and provides the core functionality
+    for all field types. It handles field validation, conversion between Python
+    and MongoDB types, and serialization.
+
+    Type Parameters:
+        T: The Python type this field represents
+
+    Attributes:
+        name: Name of the field
+        _metadata: Field metadata containing configuration
+        _cache_manager: Cache manager for caching field operations
+    """
 
     def __init__(
         self,
@@ -24,14 +42,51 @@ class Field(FieldProtocol, Generic[T]):
         unique: bool = False,
         default: Any = None,
         validators: Optional[List[ValidatorFunc]] = None,
+        index: bool = False,
+        description: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
-        """Initialize field."""
-        self.required = required
-        self.unique = unique
-        self.default = default
-        self.validators = validators or []
+        """Initialize field.
+
+        Args:
+            required: Whether the field is required
+            unique: Whether the field value must be unique
+            default: Default value for the field
+            validators: List of validator functions
+            index: Whether to create an index for this field
+            description: Field description
+            **kwargs: Additional field options
+        """
         self.name: str = ""
+        self._metadata = FieldMetadata(
+            name=self.name,
+            field_type=self._get_field_type(),
+            required=required,
+            unique=unique,
+            default=default,
+            validators=validators or [],
+            index=index,
+            description=description,
+            options=kwargs,
+        )
+        self._cache_manager = container.get("cache_lifecycle_manager")
+
+    def _get_field_type(self) -> Type[Any]:
+        """Get field type.
+
+        Returns:
+            Type object representing this field's type
+        """
+        return type(Any)
+
+    @property
+    def metadata(self) -> FieldMetadata:
+        """Get field metadata.
+
+        Returns:
+            FieldMetadata object containing field configuration
+        """
+        return self._metadata
 
     def validate(self, value: Any) -> None:
         """Validate field value.
@@ -42,26 +97,37 @@ class Field(FieldProtocol, Generic[T]):
         Raises:
             ValidationError: If validation fails
         """
-        if self.required and value is None:
-            raise ValidationError(f"Field {self.name} is required")
-
-        if value is not None:
-            for validator in self.validators:
-                validator(value)
+        try:
+            self._metadata.validate(value)
+        except (ValueError, TypeError) as e:
+            raise ValidationError(str(e))
 
     def __get__(
-        self, instance: Optional[ModelProtocol], owner: Type[ModelProtocol]
+        self, instance: Optional[ModelInterface], owner: Type[ModelInterface]
     ) -> Union[Self, T]:
-        """Get field value."""
+        """Get field value.
+
+        Args:
+            instance: Model instance
+            owner: Model class
+
+        Returns:
+            Field value if instance is provided, otherwise returns self
+        """
         if instance is None:
             return self
-        value = instance.data.get(self.name)
+        value = instance.data.get(self.name)  # type: ignore
         if value is None:
-            return self.convert(self.default)
+            return self.convert(self._metadata.default)
         return self.from_mongo(value)
 
-    def __set__(self, instance: Optional[ModelProtocol], value: Any) -> None:
-        """Set field value."""
+    def __set__(self, instance: Optional[ModelInterface], value: Any) -> None:
+        """Set field value.
+
+        Args:
+            instance: Model instance
+            value: Value to set
+        """
         if instance is None:
             return
 
@@ -69,269 +135,61 @@ class Field(FieldProtocol, Generic[T]):
         self.validate(value)
 
         if isinstance(value, Field):
-            instance.data[self.name] = self.convert(value.default)
+            instance.data[self.name] = self.convert(value._metadata.default)  # type: ignore
         else:
-            instance.data[self.name] = self.convert(value)
+            instance.data[self.name] = self.convert(value)  # type: ignore
 
-    def __delete__(self, instance: Optional[ModelProtocol]) -> None:
-        """Delete field value."""
+    def __delete__(self, instance: Optional[ModelInterface]) -> None:
+        """Delete field value.
+
+        Args:
+            instance: Model instance
+        """
         if instance is None:
             return
-        instance.data.pop(self.name, None)
+        instance.data.pop(self.name, None)  # type: ignore
 
     @abstractmethod
     def convert(self, value: Any) -> T:
-        """Convert value to field type."""
+        """Convert value to field type.
+
+        Args:
+            value: Value to convert
+
+        Returns:
+            Converted value of type T
+        """
         pass
 
     def to_dict(self, value: Optional[T]) -> Any:
-        """Convert value to dict representation."""
+        """Convert value to dict representation.
+
+        Args:
+            value: Value to convert
+
+        Returns:
+            Dict representation of value
+        """
         return value
 
     def to_mongo(self, value: Optional[T]) -> Any:
-        """Convert Python value to MongoDB value."""
+        """Convert Python value to MongoDB value.
+
+        Args:
+            value: Value to convert
+
+        Returns:
+            MongoDB representation of value
+        """
         return value
 
     def from_mongo(self, value: Any) -> T:
-        """Convert MongoDB value to Python value."""
+        """Convert MongoDB value to Python value.
+
+        Args:
+            value: Value to convert
+
+        Returns:
+            Python value of type T
+        """
         return self.convert(value)
-
-
-class IntegerField(Field[int]):
-    """Integer field."""
-
-    def __init__(
-        self,
-        *,
-        required: bool = False,
-        unique: bool = False,
-        default: Any = None,
-        validators: Optional[List[ValidatorFunc]] = None,
-        min_value: Optional[int] = None,
-        max_value: Optional[int] = None,
-        **kwargs: Any,
-    ) -> None:
-        """Initialize field.
-
-        Args:
-            required: Whether field is required
-            unique: Whether field value must be unique
-            default: Default value
-            validators: List of validator functions
-            min_value: Minimum allowed value
-            max_value: Maximum allowed value
-        """
-        super().__init__(
-            required=required,
-            unique=unique,
-            default=default,
-            validators=validators,
-            **kwargs,
-        )
-        if min_value is not None or max_value is not None:
-            self.validators.append(validate_range(min_value, max_value))
-
-    def convert(self, value: Any) -> int:
-        """Convert value to integer."""
-        if value is None:
-            return 0
-        return int(value)
-
-    def to_mongo(self, value: Optional[int]) -> int:
-        """Convert Python integer to MongoDB integer."""
-        if value is None:
-            return 0
-        return int(value)
-
-    def from_mongo(self, value: Any) -> int:
-        """Convert MongoDB integer to Python integer."""
-        if value is None:
-            return 0
-        return int(value)
-
-
-class FloatField(Field[float]):
-    """Float field."""
-
-    def __init__(
-        self,
-        *,
-        required: bool = False,
-        unique: bool = False,
-        default: Any = None,
-        validators: Optional[List[ValidatorFunc]] = None,
-        min_value: Optional[float] = None,
-        max_value: Optional[float] = None,
-        **kwargs: Any,
-    ) -> None:
-        """Initialize field.
-
-        Args:
-            required: Whether field is required
-            unique: Whether field value must be unique
-            default: Default value
-            validators: List of validator functions
-            min_value: Minimum allowed value
-            max_value: Maximum allowed value
-        """
-        super().__init__(
-            required=required,
-            unique=unique,
-            default=default,
-            validators=validators,
-            **kwargs,
-        )
-        if min_value is not None or max_value is not None:
-            self.validators.append(validate_range(min_value, max_value))
-
-    def convert(self, value: Any) -> float:
-        """Convert value to float."""
-        if value is None:
-            return 0.0
-        return float(value)
-
-    def to_mongo(self, value: Optional[float]) -> float:
-        """Convert Python float to MongoDB float."""
-        if value is None:
-            return 0.0
-        return float(value)
-
-    def from_mongo(self, value: Any) -> float:
-        """Convert MongoDB float to Python float."""
-        if value is None:
-            return 0.0
-        return float(value)
-
-
-class BooleanField(Field[bool]):
-    """Boolean field."""
-
-    def convert(self, value: Any) -> bool:
-        """Convert value to boolean."""
-        if value is None:
-            return False
-        return bool(value)
-
-    def to_mongo(self, value: Optional[bool]) -> bool:
-        """Convert Python boolean to MongoDB boolean."""
-        if value is None:
-            return False
-        return bool(value)
-
-    def from_mongo(self, value: Any) -> bool:
-        """Convert MongoDB boolean to Python boolean."""
-        if value is None:
-            return False
-        return bool(value)
-
-
-class ObjectIdField(Field[ObjectId]):
-    """ObjectId field."""
-
-    def convert(self, value: Any) -> ObjectId:
-        """Convert value to ObjectId."""
-        if value is None or value == "":
-            return ObjectId()  # Generate new ObjectId instead of returning None
-        if isinstance(value, ObjectId):
-            return value
-        return ObjectId(str(value))
-
-    def to_dict(self, value: Optional[ObjectId]) -> Optional[str]:
-        """Convert ObjectId to string."""
-        if value is None:
-            return None
-        return str(value)
-
-    def to_mongo(self, value: Optional[ObjectId]) -> Optional[ObjectId]:
-        """Convert Python ObjectId to MongoDB ObjectId."""
-        if value is None:
-            return None
-        if type(value) is ObjectId:  # type: ignore
-            return value
-        return ObjectId(str(value))
-
-    def from_mongo(self, value: Any) -> ObjectId:
-        """Convert MongoDB ObjectId to Python ObjectId."""
-        if value is None:
-            return ObjectId()  # Return new ObjectId instead of None
-        if type(value) is ObjectId:  # type: ignore
-            return value
-        return ObjectId(str(value))
-
-
-class ListField(Field[List[T]], Generic[T]):
-    """List field."""
-
-    def __init__(
-        self,
-        field: Field[T],
-        *,
-        required: bool = False,
-        default: Any = None,
-    ) -> None:
-        """Initialize field."""
-        super().__init__(
-            required=required,
-            default=default,
-        )
-        self.field = field
-
-    def convert(self, value: Any) -> List[T]:
-        """Convert value to list."""
-        if value is None:
-            return []  # Return empty list instead of None
-        if not isinstance(value, list):
-            raise ValueError(f"Expected list, got {type(value)}")
-        result: List[T] = []
-        items: List[Any] = value
-        for item in items:
-            converted = self.field.convert(item)
-            result.append(converted)
-        return result
-
-    def to_dict(self, value: Optional[List[T]]) -> Optional[List[Any]]:
-        """Convert list to dict representation."""
-        if value is None:
-            return None
-        return [self.field.to_dict(item) for item in value]
-
-    def to_mongo(self, value: Optional[List[T]]) -> Optional[List[Any]]:
-        """Convert Python list to MongoDB array."""
-        if value is None:
-            return None
-        return [self.field.to_mongo(item) for item in value]
-
-    def from_mongo(self, value: Any) -> List[T]:
-        """Convert MongoDB array to Python list."""
-        if value is None:
-            return []  # Return empty list instead of None
-        if not isinstance(value, list):
-            raise ValueError(f"Expected list, got {type(value)}")
-        result: List[T] = []
-        items: List[Any] = value
-        for item in items:
-            converted = self.field.from_mongo(item)
-            result.append(converted)
-        return result
-
-
-class DictField(Field[Dict[str, Any]]):
-    """Dict field."""
-
-    def convert(self, value: Any) -> Dict[str, Any]:
-        """Convert value to dict."""
-        if value is None:
-            return {}
-        return dict(value)
-
-    def to_mongo(self, value: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        """Convert Python dict to MongoDB document."""
-        if value is None:
-            return {}
-        return dict(value)
-
-    def from_mongo(self, value: Any) -> Dict[str, Any]:
-        """Convert MongoDB document to Python dict."""
-        if value is None:
-            return {}
-        return dict(value)

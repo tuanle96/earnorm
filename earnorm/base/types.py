@@ -13,7 +13,12 @@ from typing import (
 )
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from typing_extensions import Self
+
+M = TypeVar("M", bound="ModelProtocol")
+F = TypeVar("F", bound="FieldProtocol")
+M_co = TypeVar("M_co", bound="ModelProtocol", covariant=True)
+
+DocumentType = Dict[str, Any]
 
 
 @runtime_checkable
@@ -23,8 +28,8 @@ class ModelProtocol(Protocol):
     _name: str
     _collection: str
     _abstract: bool
-    _data: Dict[str, Any]
-    _indexes: List[Dict[str, Any]]
+    _data: DocumentType
+    _indexes: List[DocumentType]
     __annotations__: Dict[str, Any]
 
     def __getattr__(self, name: str) -> Any:
@@ -32,7 +37,7 @@ class ModelProtocol(Protocol):
         ...
 
     @property
-    def data(self) -> Dict[str, Any]:
+    def data(self) -> DocumentType:
         """Get model data."""
         ...
 
@@ -47,26 +52,26 @@ class ModelProtocol(Protocol):
         ...
 
     @classmethod
-    def get_indexes(cls) -> List[Dict[str, Any]]:
+    def get_indexes(cls) -> List[DocumentType]:
         """Get model indexes."""
         ...
 
     @classmethod
     async def search(
         cls, domain: Optional[List[Any]] = None, **kwargs: Any
-    ) -> "RecordSetProtocol[Self]":
+    ) -> "RecordSetProtocol[ModelProtocol]":
         """Search records and return RecordSet."""
         ...
 
     @classmethod
-    async def browse(cls, ids: List[str]) -> "RecordSetProtocol[Self]":
+    async def browse(cls, ids: List[str]) -> "RecordSetProtocol[ModelProtocol]":
         """Browse records by IDs."""
         ...
 
     @classmethod
     async def find_one(
         cls, domain: Optional[List[Any]] = None, **kwargs: Any
-    ) -> "RecordSetProtocol[Self]":
+    ) -> Optional["ModelProtocol"]:
         """Find single record."""
         ...
 
@@ -98,16 +103,16 @@ class FieldProtocol(Protocol):
     default: Any
 
     def __get__(
-        self, instance: Optional["ModelProtocol"], owner: Type["ModelProtocol"]
+        self, instance: Optional[ModelProtocol], owner: Type[ModelProtocol]
     ) -> Any:
         """Get field value."""
         ...
 
-    def __set__(self, instance: Optional["ModelProtocol"], value: Any) -> None:
+    def __set__(self, instance: Optional[ModelProtocol], value: Any) -> None:
         """Set field value."""
         ...
 
-    def __delete__(self, instance: Optional["ModelProtocol"]) -> None:
+    def __delete__(self, instance: Optional[ModelProtocol]) -> None:
         """Delete field value."""
         ...
 
@@ -124,17 +129,12 @@ class FieldProtocol(Protocol):
         ...
 
 
-M = TypeVar("M", bound=ModelProtocol)
-F = TypeVar("F", bound=FieldProtocol)
-M_co = TypeVar("M_co", bound=ModelProtocol, covariant=True)
-
-
 @runtime_checkable
 class RecordSetProtocol(Protocol[M_co]):
     """Protocol for recordset."""
 
     def __init__(
-        self, model_cls: type[M_co], records: Optional[List[M_co]] = None
+        self, model_cls: Type[M_co], records: Optional[List[M_co]] = None
     ) -> None:
         """Initialize recordset."""
         ...
@@ -156,11 +156,11 @@ class RecordSetProtocol(Protocol[M_co]):
         """Get list of record IDs."""
         ...
 
-    async def create(self, values: Dict[str, Any]) -> "RecordSetProtocol[M_co]":
+    async def create(self, values: DocumentType) -> "RecordSetProtocol[M_co]":
         """Create new record."""
         ...
 
-    async def write(self, values: Dict[str, Any]) -> bool:
+    async def write(self, values: DocumentType) -> bool:
         """Update records with values."""
         ...
 
@@ -210,7 +210,7 @@ class RegistryProtocol(Protocol):
     """Protocol for registry."""
 
     _models: Dict[str, Type[ModelProtocol]]
-    _db: Optional[AsyncIOMotorDatabase[Dict[str, Any]]]
+    _db: Optional[AsyncIOMotorDatabase[DocumentType]]
 
     def add_scan_path(self, package_name: str) -> None:
         """Add package to scan for models."""
@@ -222,4 +222,18 @@ class RegistryProtocol(Protocol):
 
     def __getitem__(self, collection: str) -> RecordSetProtocol[ModelProtocol]:
         """Get recordset for collection."""
+        ...
+
+    @property
+    def db(self) -> AsyncIOMotorDatabase[DocumentType]:
+        """Get database instance."""
+        ...
+
+
+class ContainerProtocol(Protocol):
+    """Container protocol."""
+
+    @property
+    def registry(self) -> RegistryProtocol:
+        """Get registry instance."""
         ...

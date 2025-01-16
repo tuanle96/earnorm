@@ -611,3 +611,19 @@ print(f"Cleaned up {cleaned} stale connections")
 - Set appropriate timeouts for your use case
 - Implement regular health checks
 - Clean up stale connections periodically
+
+## Known Linter Warnings
+
+### Redundant isinstance checks
+
+Some isinstance checks in the codebase may be flagged as redundant by linters, for example:
+
+```python
+elif isinstance(pool, RedisPool):
+```
+
+These checks are intentionally kept for several reasons:
+1. Type hints in Python are only hints and not enforced at runtime
+2. Ensures type safety when the codebase is modified or extended
+3. Makes the code more maintainable and refactor-friendly
+4. Provides explicit type checking for better IDE support
