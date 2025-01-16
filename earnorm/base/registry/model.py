@@ -3,10 +3,10 @@
 from typing import Dict, List, Optional, Type, TypeVar, cast
 
 from earnorm.base.fields.metadata import FieldMetadata
-from earnorm.base.models.interfaces import ModelInterface
 from earnorm.base.recordset.recordset import RecordSet
+from earnorm.base.types import ModelProtocol
 
-T = TypeVar("T", bound=ModelInterface)
+T = TypeVar("T", bound=ModelProtocol)
 
 
 class ModelRegistry:
@@ -24,10 +24,10 @@ class ModelRegistry:
 
     def __init__(self) -> None:
         """Initialize registry."""
-        self._models: Dict[str, Type[ModelInterface]] = {}
+        self._models: Dict[str, Type[ModelProtocol]] = {}
         self._metadata: Dict[str, Dict[str, FieldMetadata]] = {}
 
-    def register(self, model: Type[ModelInterface]) -> None:
+    def register(self, model: Type[ModelProtocol]) -> None:
         """Register model.
 
         Args:
@@ -35,12 +35,19 @@ class ModelRegistry:
 
         Raises:
             ValueError: If model name is missing or already registered
+            TypeError: If model does not implement ModelProtocol
 
         Example:
             >>> registry = ModelRegistry()
             >>> registry.register(UserModel)
         """
-        model_name = getattr(model, "_name", "")
+        # Check if model implements required attributes
+        required_attrs = ["_name", "_abstract"]
+        for attr in required_attrs:
+            if not hasattr(model, attr):
+                raise TypeError(f"model must have {attr} attribute")
+
+        model_name = model.get_name()
         if getattr(model, "_abstract", False):
             return
 
@@ -52,7 +59,7 @@ class ModelRegistry:
 
         self._models[model_name] = model
 
-    def get(self, name: str) -> Optional[Type[ModelInterface]]:
+    def get(self, name: str) -> Optional[Type[ModelProtocol]]:
         """Get model by name.
 
         Args:
@@ -61,13 +68,18 @@ class ModelRegistry:
         Returns:
             Model class if found, None otherwise
 
+        Raises:
+            ValueError: If model name is empty
+
         Example:
             >>> registry = ModelRegistry()
             >>> user_model = registry.get("user")
         """
+        if not name:
+            raise ValueError("Model name cannot be empty")
         return self._models.get(name)
 
-    def get_all(self) -> List[Type[ModelInterface]]:
+    def get_all(self) -> List[Type[ModelProtocol]]:
         """Get all models.
 
         Returns:
@@ -89,11 +101,19 @@ class ModelRegistry:
             field_name: Name of the field
             metadata: Field metadata
 
+        Raises:
+            ValueError: If model name or field name is empty
+
         Example:
             >>> registry = ModelRegistry()
             >>> metadata = FieldMetadata(...)
             >>> registry.add_metadata("user", "email", metadata)
         """
+        if not model_name:
+            raise ValueError("Model name cannot be empty")
+        if not field_name:
+            raise ValueError("Field name cannot be empty")
+
         if model_name not in self._metadata:
             self._metadata[model_name] = {}
 
@@ -108,10 +128,15 @@ class ModelRegistry:
         Returns:
             Dict mapping field names to metadata
 
+        Raises:
+            ValueError: If model name is empty
+
         Example:
             >>> registry = ModelRegistry()
             >>> metadata = registry.get_metadata("user")
         """
+        if not model_name:
+            raise ValueError("Model name cannot be empty")
         return self._metadata.get(model_name, {})
 
     def create_recordset(self, model_name: str, records: List[T]) -> RecordSet[T]:
@@ -125,13 +150,16 @@ class ModelRegistry:
             RecordSet instance for querying
 
         Raises:
-            ValueError: If model is not found
+            ValueError: If model name is empty or model is not found
 
         Example:
             >>> registry = ModelRegistry()
             >>> users = [User(...), User(...)]
             >>> recordset = registry.create_recordset("user", users)
         """
+        if not model_name:
+            raise ValueError("Model name cannot be empty")
+
         model_cls = self.get(model_name)
         if not model_cls:
             raise ValueError(f"Model {model_name} not found")

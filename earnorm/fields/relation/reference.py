@@ -47,13 +47,20 @@ class ReferenceField(BaseRelationField[M]):
 
         Raises:
             ValueError: If value cannot be converted to ObjectId
+
+        Examples:
+            >>> field = ReferenceField(User)
+            >>> field.convert("507f1f77bcf86cd799439011")
+            ObjectId('507f1f77bcf86cd799439011')
+            >>> field.convert(None)
+            None
         """
         if value is None:
             return cast(M, None)
         if isinstance(value, ObjectId):
             return cast(M, value)
         if isinstance(value, self.model):
-            return cast(M, value.id)  # type: ignore
+            return cast(M, value.id)
         return cast(M, ObjectId(str(value)))
 
     def to_dict(self, value: Optional[M]) -> Optional[str]:
@@ -64,9 +71,22 @@ class ReferenceField(BaseRelationField[M]):
 
         Returns:
             String representation of ObjectId or None if value is None
+
+        Examples:
+            >>> field = ReferenceField(User)
+            >>> field.to_dict(ObjectId("507f1f77bcf86cd799439011"))
+            '507f1f77bcf86cd799439011'
+            >>> field.to_dict(None)
+            None
         """
         if value is None:
             return None
+        if isinstance(value, str):
+            return value
+        if isinstance(value, ObjectId):
+            return str(value)
+        if isinstance(value, self.model):
+            return str(value.id)
         return str(value)
 
     def to_mongo(self, value: Optional[M]) -> Optional[ObjectId]:
@@ -77,11 +97,20 @@ class ReferenceField(BaseRelationField[M]):
 
         Returns:
             MongoDB ObjectId or None if value is None
+
+        Examples:
+            >>> field = ReferenceField(User)
+            >>> field.to_mongo("507f1f77bcf86cd799439011")
+            ObjectId('507f1f77bcf86cd799439011')
+            >>> field.to_mongo(None)
+            None
         """
         if value is None:
             return None
         if isinstance(value, ObjectId):
             return value
+        if isinstance(value, self.model):
+            return ObjectId(value.id)
         return ObjectId(str(value))
 
     def from_mongo(self, value: Any) -> M:
@@ -95,6 +124,13 @@ class ReferenceField(BaseRelationField[M]):
 
         Raises:
             ValueError: If value cannot be converted to ObjectId
+
+        Examples:
+            >>> field = ReferenceField(User)
+            >>> field.from_mongo(ObjectId("507f1f77bcf86cd799439011"))
+            ObjectId('507f1f77bcf86cd799439011')
+            >>> field.from_mongo(None)
+            None
         """
         if value is None:
             return cast(M, None)
@@ -116,14 +152,22 @@ class ReferenceField(BaseRelationField[M]):
         Raises:
             ValueError: If value cannot be converted to ObjectId
             DocumentNotFoundError: If referenced document is not found
+
+        Examples:
+            >>> field = ReferenceField(User)
+            >>> user = await field.async_convert("507f1f77bcf86cd799439011")
+            >>> print(user.name)
+            'John'
         """
         if value is None:
             return None
         if isinstance(value, self.model):
             return value
         if isinstance(value, ObjectId):
-            return await self.model.find_by_id(value)  # type: ignore
-        return await self.model.find_by_id(ObjectId(str(value)))  # type: ignore
+            result = await self.model.find_by_id(str(value))
+            return cast(M, result)
+        result = await self.model.find_by_id(str(ObjectId(str(value))))
+        return cast(M, result)
 
     async def async_to_dict(self, value: Optional[M]) -> Optional[str]:
         """Convert model instance to dict representation asynchronously.
@@ -133,10 +177,16 @@ class ReferenceField(BaseRelationField[M]):
 
         Returns:
             String representation of model's ID or None if value is None
+
+        Examples:
+            >>> field = ReferenceField(User)
+            >>> user = await User.find_by_id("507f1f77bcf86cd799439011")
+            >>> await field.async_to_dict(user)
+            '507f1f77bcf86cd799439011'
         """
         if value is None:
             return None
-        return str(value.id)  # type: ignore
+        return str(value.id)
 
     async def async_to_mongo(self, value: Optional[M]) -> Optional[ObjectId]:
         """Convert Python value to MongoDB value asynchronously.
@@ -146,10 +196,16 @@ class ReferenceField(BaseRelationField[M]):
 
         Returns:
             Model's ID as ObjectId or None if value is None
+
+        Examples:
+            >>> field = ReferenceField(User)
+            >>> user = await User.find_by_id("507f1f77bcf86cd799439011")
+            >>> await field.async_to_mongo(user)
+            ObjectId('507f1f77bcf86cd799439011')
         """
         if value is None:
             return None
-        return value.id  # type: ignore
+        return ObjectId(value.id)
 
     async def async_from_mongo(self, value: Any) -> Optional[M]:
         """Convert MongoDB value to Python value asynchronously.
@@ -165,11 +221,19 @@ class ReferenceField(BaseRelationField[M]):
         Raises:
             ValueError: If value cannot be converted to ObjectId
             DocumentNotFoundError: If referenced document is not found
+
+        Examples:
+            >>> field = ReferenceField(User)
+            >>> user = await field.async_from_mongo(ObjectId("507f1f77bcf86cd799439011"))
+            >>> print(user.name)
+            'John'
         """
         if value is None:
             return None
         if isinstance(value, self.model):
             return value
         if isinstance(value, ObjectId):
-            return await self.model.find_by_id(value)  # type: ignore
-        return await self.model.find_by_id(ObjectId(str(value)))  # type: ignore
+            result = await self.model.find_by_id(str(value))
+            return cast(M, result)
+        result = await self.model.find_by_id(str(ObjectId(str(value))))
+        return cast(M, result)

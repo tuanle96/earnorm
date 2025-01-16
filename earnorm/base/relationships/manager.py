@@ -1,13 +1,26 @@
 """Relationship manager implementation."""
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Type, cast
+from typing import Any, Dict, List, Optional, Type, TypedDict, TypeVar, cast
 
-from motor.motor_asyncio import AsyncIOMotorCollection
+from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorCursor
 
-from earnorm.base.models.interfaces import ModelInterface
-from earnorm.base.types import ContainerProtocol, DocumentType
+from earnorm.base.types import (
+    ContainerProtocol,
+    DocumentType,
+    ModelProtocol,
+    RecordSetProtocol,
+)
 from earnorm.di import container
+
+M = TypeVar("M", bound=ModelProtocol)
+
+
+class RelationDict(TypedDict):
+    """Type definition for relation document."""
+
+    source_id: str
+    target_id: str
 
 
 @dataclass
@@ -50,16 +63,21 @@ class Relationship:
 
 
 class RelationshipManager:
-    """Relationship manager.
+    """Manages relationships between models.
 
-    This class manages model relationships:
-    - Storing relationship definitions
-    - Loading relationship data
-    - Managing inverse relationships
-    - Handling cascading deletes
+    This class handles loading and managing relationships between models:
+    - many2one: Foreign key relationships (e.g. Post -> User)
+    - one2many: Inverse of many2one (e.g. User -> Posts)
+    - many2many: Many-to-many relationships through a relation collection
 
-    Attributes:
-        _relationships: Dict mapping model names to their relationships
+    Examples:
+        >>> manager = RelationshipManager()
+        >>> # Load many2one relationship
+        >>> user = await manager._load_many2one(post, relationship, User)
+        >>> # Load one2many relationship
+        >>> posts = await manager._load_one2many(user, relationship, Post)
+        >>> # Load many2many relationship
+        >>> tags = await manager._load_many2many(post, relationship, Tag)
     """
 
     def __init__(self) -> None:
@@ -83,6 +101,11 @@ class RelationshipManager:
             relation_type: Type of relationship
             **options: Additional relationship options
 
+        Raises:
+            ValueError: If model name, field name or target model is empty
+            ValueError: If relation type is invalid
+            ValueError: If inverse field is missing for one2many relationship
+
         Example:
             >>> manager = RelationshipManager()
             >>> manager.add_relationship(
@@ -93,6 +116,17 @@ class RelationshipManager:
             ...     inverse_field="posts"
             ... )
         """
+        if not model:
+            raise ValueError("Model name cannot be empty")
+        if not name:
+            raise ValueError("Field name cannot be empty")
+        if not target_model:
+            raise ValueError("Target model cannot be empty")
+        if relation_type not in ("many2one", "one2many", "many2many"):
+            raise ValueError("Invalid relation type")
+        if relation_type == "one2many" and "inverse_field" not in options:
+            raise ValueError("Inverse field is required for one2many relationship")
+
         if model not in self._relationships:
             self._relationships[model] = {}
 
@@ -110,10 +144,17 @@ class RelationshipManager:
         Returns:
             Relationship definition if found, None otherwise
 
+        Raises:
+            ValueError: If model name or field name is empty
+
         Example:
             >>> manager = RelationshipManager()
             >>> relationship = manager.get_relationship("Post", "author")
         """
+        if not model:
+            raise ValueError("Model name cannot be empty")
+        if not name:
+            raise ValueError("Field name cannot be empty")
         return self._relationships.get(model, {}).get(name)
 
     def get_relationships(self, model: str) -> Dict[str, Relationship]:
@@ -125,10 +166,15 @@ class RelationshipManager:
         Returns:
             Dict mapping relationship names to definitions
 
+        Raises:
+            ValueError: If model name is empty
+
         Example:
             >>> manager = RelationshipManager()
             >>> relationships = manager.get_relationships("Post")
         """
+        if not model:
+            raise ValueError("Model name cannot be empty")
         return self._relationships.get(model, {})
 
     def get_inverse_relationships(self, model: str) -> List[Relationship]:
@@ -140,10 +186,16 @@ class RelationshipManager:
         Returns:
             List of relationships where this model is the target
 
+        Raises:
+            ValueError: If model name is empty
+
         Example:
             >>> manager = RelationshipManager()
             >>> inverse = manager.get_inverse_relationships("User")
         """
+        if not model:
+            raise ValueError("Model name cannot be empty")
+
         inverse: List[Relationship] = []
 
         # Search all models
@@ -158,33 +210,25 @@ class RelationshipManager:
 
         return inverse
 
-    async def load_relationship(self, model: ModelInterface, name: str) -> Any:
+    async def load(
+        self,
+        model: ModelProtocol,
+        relationship: Relationship,
+    ) -> Optional[RecordSetProtocol[ModelProtocol]]:
         """Load relationship data.
 
         Args:
             model: Source model instance
-            name: Name of the relationship field
+            relationship: Relationship definition
 
         Returns:
-            Loaded relationship data:
-            - many2one: Single model instance or None
-            - one2many/many2many: Sequence of model instances
+            RecordSet containing related records or None if not found
 
         Raises:
-            ValueError: If relationship not found or invalid
-
-        Example:
-            >>> post = Post(...)
-            >>> author = await manager.load_relationship(post, "author")
+            ValueError: If relationship type is invalid
         """
-        relationship = self.get_relationship(model.__class__.__name__, name)
-        if not relationship:
-            raise ValueError(f"Relationship not found: {name}")
-
-        # Get target model
         target_model = self._get_target_model(relationship.target_model)
 
-        # Load based on type
         if relationship.relation_type == "many2one":
             return await self._load_many2one(model, relationship, target_model)
         elif relationship.relation_type == "one2many":
@@ -192,9 +236,9 @@ class RelationshipManager:
         elif relationship.relation_type == "many2many":
             return await self._load_many2many(model, relationship, target_model)
         else:
-            raise ValueError(f"Invalid relation type: {relationship.relation_type}")
+            raise ValueError(f"Invalid relationship type: {relationship.relation_type}")
 
-    def _get_target_model(self, model_name: str) -> Type[ModelInterface]:
+    def _get_target_model(self, model_name: str) -> Type[ModelProtocol]:
         """Get target model class.
 
         Args:
@@ -204,22 +248,29 @@ class RelationshipManager:
             Target model class
 
         Raises:
-            ValueError: If model not found
+            ValueError: If model name is empty or model not found
+
+        Example:
+            >>> manager = RelationshipManager()
+            >>> user_model = manager._get_target_model("User")
         """
+        if not model_name:
+            raise ValueError("Model name cannot be empty")
+
         container_instance = cast(ContainerProtocol, container)
         registry = container_instance.registry
         model_cls = registry.get(model_name)
         if not model_cls:
             raise ValueError(f"Model not found: {model_name}")
 
-        return cast(Type[ModelInterface], model_cls)
+        return model_cls  # type: ignore
 
     async def _load_many2one(
         self,
-        model: ModelInterface,
+        model: ModelProtocol,
         relationship: Relationship,
-        target_model: Type[ModelInterface],
-    ) -> Optional[ModelInterface]:
+        target_model: Type[ModelProtocol],
+    ) -> Optional[RecordSetProtocol[ModelProtocol]]:
         """Load many2one relationship.
 
         Args:
@@ -229,6 +280,9 @@ class RelationshipManager:
 
         Returns:
             Target model instance if found, None otherwise
+
+        Raises:
+            ValueError: If foreign key field is missing
         """
         # Get foreign key value
         foreign_key = getattr(model, relationship.name + "_id", None)
@@ -236,15 +290,15 @@ class RelationshipManager:
             return None
 
         # Load target record
-        return await target_model.find_one({"_id": foreign_key})
+        return await target_model.find_one([("_id", "=", foreign_key)])
 
     async def _load_one2many(
         self,
-        model: ModelInterface,
+        model: ModelProtocol,
         relationship: Relationship,
-        target_model: Type[ModelInterface],
-    ) -> Sequence[ModelInterface]:
-        """Load one2many relationship.
+        target_model: Type[ModelProtocol],
+    ) -> RecordSetProtocol[ModelProtocol]:
+        """Load one2many relationship data.
 
         Args:
             model: Source model instance
@@ -252,31 +306,24 @@ class RelationshipManager:
             target_model: Target model class
 
         Returns:
-            Sequence of target model instances
-
-        Raises:
-            ValueError: If inverse_field not specified
+            RecordSet containing related records
         """
         if not relationship.inverse_field:
-            raise ValueError("inverse_field required for one2many relationship")
+            raise ValueError("Inverse field is required for one2many relationship")
 
-        # Build query
-        query = {relationship.inverse_field: model.id}
-        if relationship.order:
-            sort = [(relationship.order, 1)]
-        else:
-            sort = None
-
-        # Load target records
-        return await target_model.find(query, sort=sort)
+        # Get target records
+        target_records = await target_model.search(
+            [[relationship.inverse_field, "=", model.id]]
+        )
+        return target_records
 
     async def _load_many2many(
         self,
-        model: ModelInterface,
+        model: ModelProtocol,
         relationship: Relationship,
-        target_model: Type[ModelInterface],
-    ) -> Sequence[ModelInterface]:
-        """Load many2many relationship.
+        target_model: Type[ModelProtocol],
+    ) -> RecordSetProtocol[ModelProtocol]:
+        """Load many2many relationship data.
 
         Args:
             model: Source model instance
@@ -284,33 +331,48 @@ class RelationshipManager:
             target_model: Target model class
 
         Returns:
-            Sequence of target model instances
-
-        Raises:
-            ValueError: If relation collection not specified
+            RecordSet containing related records
         """
         # Get relation collection
-        relation_name = relationship.options.get("relation")
-        if not relation_name:
-            raise ValueError("relation required for many2many relationship")
+        relation_collection = self._get_relation_collection(relationship)
 
-        # Load relation records
+        # Get relations
+        cursor: AsyncIOMotorCursor[RelationDict] = relation_collection.find(
+            {"source_id": model.id}
+        )  # type: ignore
+        relations: List[RelationDict] = await cursor.to_list(None)  # type: ignore
+
+        # Get target IDs
+        target_ids = [str(rel["target_id"]) for rel in relations if rel["target_id"]]
+
+        # Get target records
+        if not target_ids:
+            return await target_model.search([["_id", "in", []]])
+
+        target_records = await target_model.search([["_id", "in", target_ids]])
+        return target_records
+
+    def _get_relation_collection(
+        self, relationship: Relationship
+    ) -> AsyncIOMotorCollection[DocumentType]:
+        """Get relation collection for many2many relationship.
+
+        Args:
+            relationship: Relationship definition
+
+        Returns:
+            MongoDB collection for storing relations
+
+        Raises:
+            ValueError: If relation collection is missing
+        """
+        relation_collection = relationship.options.get("relation_collection")
+        if not relation_collection:
+            raise ValueError(
+                "Relation collection is required for many2many relationship"
+            )
+
         container_instance = cast(ContainerProtocol, container)
         registry = container_instance.registry
         db = registry.db
-        if db is None:  # type: ignore
-            raise ValueError("Database not initialized")
-
-        relation_collection: AsyncIOMotorCollection[DocumentType] = db[relation_name]
-
-        # Get target IDs
-        cursor = relation_collection.find({relationship.name + "_id": model.id})
-        relations = await cursor.to_list(None)  # type: ignore
-
-        target_ids = [r["target_id"] for r in cast(List[Dict[str, Any]], relations)]
-
-        # Load target records
-        if not target_ids:
-            return []
-
-        return await target_model.find({"_id": {"$in": target_ids}})
+        return db[relation_collection]

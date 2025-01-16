@@ -3,13 +3,13 @@
 from dataclasses import dataclass
 from typing import Generic, List, Optional, TypeVar
 
-from earnorm.base.models.interfaces import ModelInterface
+from earnorm.base.types import ModelProtocol
 
-T = TypeVar("T", bound=ModelInterface)
+M = TypeVar("M", bound=ModelProtocol)
 
 
 @dataclass
-class QueryResult(Generic[T]):
+class QueryResult(Generic[M]):
     """Query result container.
 
     This class holds:
@@ -17,19 +17,11 @@ class QueryResult(Generic[T]):
     - Pagination metadata
     - Total count
 
-    Examples:
-        >>> result = QueryResult(
-        ...     items=[user1, user2],
-        ...     total=10,
-        ...     limit=2,
-        ...     offset=0
-        ... )
-        >>> print(f"Found {result.total} users")
-        >>> for user in result.items:
-        ...     print(user.name)
+    Type Parameters:
+        M: Type of model in the result items
     """
 
-    items: List[T]
+    items: List[M]
     total: int
     limit: Optional[int] = None
     offset: Optional[int] = None

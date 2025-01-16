@@ -1,16 +1,11 @@
 """Query parser implementation."""
 
-from typing import Any, Dict, List, Sequence, cast
+from typing import Any, List, Sequence, cast
 
 from bson import ObjectId
 
 from earnorm.base.query.builder import QueryBuilder
-
-# Type aliases
-FilterDict = Dict[str, Any]
-SortItem = tuple[str, int]  # (field, direction)
-ProjectionDict = Dict[str, int]
-QueryParams = Dict[str, Any]
+from earnorm.base.types import FilterDict, ProjectionDict, QueryParams, SortItem
 
 
 class QueryParser:
@@ -44,6 +39,13 @@ class QueryParser:
 
         Returns:
             Configured query builder
+
+        Raises:
+            ValueError: If any parameter is invalid:
+                - filter is not a dict
+                - sort is not a list of (field, direction) tuples
+                - limit/offset is not a positive integer
+                - projection is not a dict
 
         Examples:
             >>> params = {

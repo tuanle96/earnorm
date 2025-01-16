@@ -1,49 +1,36 @@
-"""Model validation implementation."""
+"""Model validation."""
 
-from __future__ import annotations
-
-from typing import Dict, List, cast
+from typing import Dict, List, Union
 
 from earnorm.base.fields.metadata import FieldMetadata
-from earnorm.base.models.interfaces import ModelInterface
-from earnorm.base.types import ContainerProtocol
-from earnorm.di import container
-
-
-class ValidationError(Exception):
-    """Validation error.
-
-    This exception is raised when model validation fails.
-    It contains a dictionary of field errors.
-
-    Attributes:
-        errors: Dictionary mapping field names to error messages
-    """
-
-    def __init__(self, errors: Dict[str, List[str]]) -> None:
-        """Initialize error.
-
-        Args:
-            errors: Dictionary mapping field names to error messages
-        """
-        self.errors = errors
-        message = "\n".join(
-            f"{field}: {', '.join(msgs)}" for field, msgs in errors.items()
-        )
-        super().__init__(message)
+from earnorm.base.types import ModelProtocol
+from earnorm.validators.models.custom import AsyncModelValidator, ModelValidator
 
 
 class Validator:
     """Model validator.
 
-    This class handles model validation:
+    This class handles model validation including:
     - Field validation
-    - Type checking
-    - Required fields
-    - Custom validators
+    - Model validation
+    - Custom validation rules
     """
 
-    async def validate(self, model: ModelInterface) -> None:
+    def __init__(self) -> None:
+        """Initialize validator."""
+        self._validators: List[Union[ModelValidator, AsyncModelValidator]] = []
+
+    def add_validator(
+        self, validator: Union[ModelValidator, AsyncModelValidator]
+    ) -> None:
+        """Add model validator.
+
+        Args:
+            validator: Validator to add
+        """
+        self._validators.append(validator)
+
+    async def validate(self, model: ModelProtocol) -> None:
         """Validate model.
 
         Args:
@@ -52,46 +39,42 @@ class Validator:
         Raises:
             ValidationError: If validation fails
         """
-        errors: Dict[str, List[str]] = {}
-
         # Get model metadata
         metadata = self._get_model_metadata(model)
 
         # Validate fields
-        for field_name, field_meta in metadata.items():
-            try:
-                value = getattr(model, field_name, None)
-                field_meta.validate(value)
-            except (ValueError, TypeError) as e:
-                if field_name not in errors:
-                    errors[field_name] = []
-                errors[field_name].append(str(e))
+        for field_name, field_metadata in metadata.items():
+            field = field_metadata.field
+            value = getattr(model, field_name, None)
 
-        if errors:
-            raise ValidationError(errors)
+            # Skip if field is not required and value is None
+            if not field.required and value is None:
+                continue
 
-    def _get_model_metadata(self, model: ModelInterface) -> Dict[str, FieldMetadata]:
-        """Get model metadata.
+            # Validate field value
+            field.validate(value)
+
+        # Run model validators
+        for validator in self._validators:
+            if isinstance(validator, AsyncModelValidator):
+                await validator(model)
+            else:
+                validator(model)
+
+    def _get_model_metadata(self, model: ModelProtocol) -> Dict[str, FieldMetadata]:
+        """Get model field metadata.
 
         Args:
             model: Model instance
 
         Returns:
-            Dict mapping field names to metadata
+            Dict[str, FieldMetadata]: Dictionary mapping field names to their metadata objects
         """
-        container_instance = cast(ContainerProtocol, container)
-        registry = container_instance.registry  # type: ignore
+        metadata: Dict[str, FieldMetadata] = {}
 
-        # Get model class name
-        model_class = model.__class__
-        model_name = getattr(model_class, "name", "")
+        # Get all field metadata
+        for name, field in model.__class__.__dict__.items():
+            if isinstance(field, FieldMetadata):
+                metadata[name] = field
 
-        # Get metadata from registry
-        try:
-            metadata = registry.get_metadata(model_name)  # type: ignore
-            if metadata:
-                return cast(Dict[str, FieldMetadata], metadata)
-        except AttributeError:
-            pass
-
-        return {}
+        return metadata

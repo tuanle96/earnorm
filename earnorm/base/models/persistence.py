@@ -1,110 +1,100 @@
-"""Model persistence implementation."""
-
-from __future__ import annotations
+"""Model persistence."""
 
 from typing import cast
 
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorCollection
-from pymongo.results import DeleteResult, InsertOneResult, UpdateResult
 
-from earnorm.base.models.interfaces import ModelInterface
-from earnorm.base.types import ContainerProtocol, DocumentType
+from earnorm.base.types import ContainerProtocol, DocumentType, ModelProtocol
 from earnorm.di import container
 
 
 class PersistenceError(Exception):
-    """Persistence error.
+    """Persistence operation error.
 
-    This exception is raised when persistence operations fail.
+    This exception is raised when a persistence operation fails.
+    It contains the original error message from the operation.
+
+    Attributes:
+        message: Error message from the operation
     """
 
     def __init__(self, message: str) -> None:
         """Initialize error.
 
         Args:
-            message: Error message
+            message: Error message from the operation
         """
         self.message = message
         super().__init__(message)
 
 
 class Persistence:
-    """Model persistence.
+    """Model persistence manager.
 
     This class handles model persistence operations:
-    - Save (insert/update)
-    - Delete
+    - Save to database
+    - Delete from database
     """
 
-    async def save(self, model: ModelInterface) -> None:
+    async def save(self, model: ModelProtocol) -> None:
         """Save model to database.
 
         Args:
-            model: Model to save
+            model: Model instance to save
 
         Raises:
             PersistenceError: If save fails
         """
-        container_instance = cast(ContainerProtocol, container)
-        registry = container_instance.registry
-        db = registry.db
-
         # Get collection
-        collection: AsyncIOMotorCollection[DocumentType] = db[
-            cast(str, getattr(model.__class__, "collection", ""))
-        ]
+        collection = await self._get_collection(model)
 
-        # Get model data
-        data = model.data.copy()
+        # Convert to MongoDB format
+        data = model.to_mongo()
 
-        # Convert ID to ObjectId
-        if "_id" in data and isinstance(data["_id"], str):
-            data["_id"] = ObjectId(data["_id"])
+        # Insert or update
+        if model.id:
+            await collection.update_one(
+                {"_id": ObjectId(model.id)},
+                {"$set": data},
+            )
+        else:
+            result = await collection.insert_one(data)
+            model.from_mongo({"_id": result.inserted_id})
 
-        try:
-            # Insert or update
-            if model.id:
-                update_result: UpdateResult = await collection.update_one(
-                    {"_id": ObjectId(model.id)}, {"$set": data}
-                )
-                if not update_result.modified_count:
-                    raise PersistenceError(f"Failed to update model {model.id}")
-            else:
-                insert_result: InsertOneResult = await collection.insert_one(data)
-                if not insert_result.inserted_id:
-                    raise PersistenceError("Failed to insert model")
-                setattr(model, "_data", {"_id": insert_result.inserted_id, **data})
-        except Exception as e:
-            raise PersistenceError(f"Failed to save model: {str(e)}") from e
-
-    async def delete(self, model: ModelInterface) -> None:
+    async def delete(self, model: ModelProtocol) -> None:
         """Delete model from database.
 
         Args:
-            model: Model to delete
+            model: Model instance to delete
 
         Raises:
-            PersistenceError: If delete fails or model has no ID
+            PersistenceError: If delete fails
         """
         if not model.id:
-            raise PersistenceError("Cannot delete model without ID")
+            return
 
+        # Get collection
+        collection = await self._get_collection(model)
+
+        # Delete document
+        await collection.delete_one({"_id": ObjectId(model.id)})
+
+    async def _get_collection(
+        self, model: ModelProtocol
+    ) -> AsyncIOMotorCollection[DocumentType]:
+        """Get MongoDB collection for model.
+
+        Args:
+            model: Model instance
+
+        Returns:
+            AsyncIOMotorCollection[DocumentType]: MongoDB collection instance for the model
+
+        Raises:
+            PersistenceError: If collection cannot be accessed
+        """
         container_instance = cast(ContainerProtocol, container)
         registry = container_instance.registry
         db = registry.db
-
-        # Get collection
-        collection: AsyncIOMotorCollection[DocumentType] = db[
-            cast(str, getattr(model.__class__, "collection", ""))
-        ]
-
-        try:
-            # Delete document
-            result: DeleteResult = await collection.delete_one(
-                {"_id": ObjectId(model.id)}
-            )
-            if not result.deleted_count:
-                raise PersistenceError(f"Failed to delete model {model.id}")
-        except Exception as e:
-            raise PersistenceError(f"Failed to delete model: {str(e)}") from e
+        return db[model.get_collection_name()]

@@ -27,8 +27,12 @@ class StringField(Field[str]):
         ValidationError: Value must match pattern '^[a-zA-Z0-9_]+$'
     """
 
-    def _get_field_type(self) -> Type[Any]:
-        """Get field type."""
+    def _get_field_type(self) -> Type[str]:
+        """Get field type.
+
+        Returns:
+            Type object representing string type
+        """
         return str
 
     def __init__(
@@ -62,24 +66,92 @@ class StringField(Field[str]):
             **kwargs,
         )
         if min_length is not None or max_length is not None:
-            self._metadata.validators.append(validate_length(min_length, max_length))
+            if not hasattr(self._metadata, "validators"):
+                self._metadata.validators = []  # type: ignore
+            self._metadata.validators.append(validate_length(min_length, max_length))  # type: ignore
         if pattern is not None:
-            self._metadata.validators.append(validate_regex(pattern))
+            if not hasattr(self._metadata, "validators"):
+                self._metadata.validators = []  # type: ignore
+            self._metadata.validators.append(validate_regex(pattern))  # type: ignore
 
     def convert(self, value: Any) -> str:
-        """Convert value to string."""
+        """Convert value to string.
+
+        Args:
+            value: Value to convert
+
+        Returns:
+            Converted string value or empty string if value is None
+
+        Examples:
+            >>> field = StringField()
+            >>> field.convert("hello")
+            'hello'
+            >>> field.convert(123)
+            '123'
+            >>> field.convert(None)
+            ''
+        """
         if value is None:
             return ""
         return str(value)
 
     def to_mongo(self, value: Optional[str]) -> Optional[str]:
-        """Convert Python string to MongoDB string."""
+        """Convert Python string to MongoDB string.
+
+        Args:
+            value: String value to convert
+
+        Returns:
+            MongoDB string value or None if value is None
+
+        Examples:
+            >>> field = StringField()
+            >>> field.to_mongo("hello")
+            'hello'
+            >>> field.to_mongo(None)
+            None
+        """
         if value is None:
             return None
         return str(value)
 
     def from_mongo(self, value: Any) -> str:
-        """Convert MongoDB string to Python string."""
+        """Convert MongoDB string to Python string.
+
+        Args:
+            value: MongoDB value to convert
+
+        Returns:
+            Python string value or empty string if value is None
+
+        Examples:
+            >>> field = StringField()
+            >>> field.from_mongo("hello")
+            'hello'
+            >>> field.from_mongo(None)
+            ''
+        """
         if value is None:
             return ""
         return str(value)
+
+    def __repr__(self) -> str:
+        """Get string representation of field."""
+        return f"StringField(name={self.name}, required={self.required}, unique={self.unique}, default={self.default})"
+
+    def __str__(self) -> str:
+        """Get string representation of field."""
+        return f"StringField(name={self.name}, required={self.required}, unique={self.unique}, default={self.default})"
+
+    def __eq__(self, other: Any) -> bool:
+        """Check if field is equal to another field."""
+        return isinstance(other, StringField) and self.name == other.name
+
+    def __hash__(self) -> int:
+        """Get hash of field."""
+        return hash(self.name)
+
+    def test(self) -> None:
+        """Test field."""
+        print("test")

@@ -8,10 +8,10 @@ This module provides custom validators for model validation:
 
 from typing import Any, Coroutine, Optional, TypeVar
 
-from earnorm.types import ModelInterface
+from earnorm.base.types import ModelProtocol
 from earnorm.validators.base import BaseValidator
 
-M = TypeVar("M", bound=ModelInterface)
+M = TypeVar("M", bound=ModelProtocol)
 
 
 class ModelValidator(BaseValidator):
@@ -34,7 +34,7 @@ class ModelValidator(BaseValidator):
         """
         super().__init__(message)
 
-    def __call__(self, model: ModelInterface) -> None:
+    def __call__(self, model: ModelProtocol) -> None:
         """Validate model.
 
         Args:
@@ -58,7 +58,7 @@ class FieldsValidator(ModelValidator):
         ```
     """
 
-    def __call__(self, model: ModelInterface) -> None:
+    def __call__(self, model: ModelProtocol) -> None:
         """Validate model fields.
 
         Args:
@@ -69,7 +69,7 @@ class FieldsValidator(ModelValidator):
         """
         self.validate_fields(model)
 
-    def validate_fields(self, model: ModelInterface) -> None:
+    def validate_fields(self, model: ModelProtocol) -> None:
         """Validate model fields.
 
         Args:
@@ -101,7 +101,7 @@ class AsyncModelValidator(BaseValidator):
         """
         super().__init__(message)
 
-    def __call__(self, model: ModelInterface) -> Coroutine[Any, Any, None]:
+    def __call__(self, model: ModelProtocol) -> Coroutine[Any, Any, None]:
         """Validate model.
 
         Args:
@@ -115,7 +115,7 @@ class AsyncModelValidator(BaseValidator):
         """
         return self._validate(model)
 
-    async def _validate(self, model: ModelInterface) -> None:
+    async def _validate(self, model: ModelProtocol) -> None:
         """Internal validation method.
 
         Args:
@@ -139,7 +139,7 @@ class AsyncFieldsValidator(AsyncModelValidator):
         ```
     """
 
-    def __call__(self, model: ModelInterface) -> Coroutine[Any, Any, None]:
+    def __call__(self, model: ModelProtocol) -> Coroutine[Any, Any, None]:
         """Validate model fields.
 
         Args:
@@ -153,7 +153,7 @@ class AsyncFieldsValidator(AsyncModelValidator):
         """
         return self._validate(model)
 
-    async def _validate(self, model: ModelInterface) -> None:
+    async def _validate(self, model: ModelProtocol) -> None:
         """Internal validation method.
 
         Args:
@@ -164,7 +164,7 @@ class AsyncFieldsValidator(AsyncModelValidator):
         """
         await self.validate_fields(model)
 
-    async def validate_fields(self, model: ModelInterface) -> None:
+    async def validate_fields(self, model: ModelProtocol) -> None:
         """Validate model fields.
 
         Args:

@@ -61,30 +61,78 @@ class TupleField(Field[Tuple[T, ...]]):
         if length is not None:
             from earnorm.validators import validate_length
 
-            self._metadata.validators.append(validate_length(length, length))
+            if not hasattr(self._metadata, "validators"):
+                self._metadata.validators = []  # type: ignore
+            self._metadata.validators.append(validate_length(length, length))  # type: ignore
 
-    def _get_field_type(self) -> Type[Any]:
-        """Get field type."""
-        return tuple
+    def _get_field_type(self) -> Type[Tuple[T, ...]]:
+        """Get field type.
+
+        Returns:
+            Type object representing tuple type
+        """
+        return tuple  # type: ignore
 
     def convert(self, value: Any) -> Tuple[T, ...]:
-        """Convert value to tuple."""
+        """Convert value to tuple.
+
+        Args:
+            value: Value to convert
+
+        Returns:
+            Converted tuple value or empty tuple if value is None
+
+        Examples:
+            >>> field = TupleField(IntegerField())
+            >>> field.convert([1, 2, 3])
+            (1, 2, 3)
+            >>> field.convert(None)
+            ()
+        """
         if value is None:
             return tuple()
         if isinstance(value, (list, tuple)):
             return tuple(self.field.convert(item) for item in value)  # type: ignore
-        return (self.field.convert(value),)
+        return (self.field.convert(value),)  # type: ignore
 
     def to_mongo(self, value: Optional[Tuple[T, ...]]) -> Optional[List[Any]]:
-        """Convert Python tuple to MongoDB list."""
+        """Convert Python tuple to MongoDB list.
+
+        Args:
+            value: Tuple value to convert
+
+        Returns:
+            MongoDB list value or None if value is None
+
+        Examples:
+            >>> field = TupleField(IntegerField())
+            >>> field.to_mongo((1, 2, 3))
+            [1, 2, 3]
+            >>> field.to_mongo(None)
+            None
+        """
         if value is None:
             return None
         return [self.field.to_mongo(item) for item in value]  # type: ignore
 
     def from_mongo(self, value: Any) -> Tuple[T, ...]:
-        """Convert MongoDB list to Python tuple."""
+        """Convert MongoDB list to Python tuple.
+
+        Args:
+            value: MongoDB value to convert
+
+        Returns:
+            Python tuple value or empty tuple if value is None
+
+        Examples:
+            >>> field = TupleField(IntegerField())
+            >>> field.from_mongo([1, 2, 3])
+            (1, 2, 3)
+            >>> field.from_mongo(None)
+            ()
+        """
         if value is None:
             return tuple()
         if isinstance(value, (list, tuple)):
             return tuple(self.field.from_mongo(item) for item in value)  # type: ignore
-        return (self.field.from_mongo(value),)
+        return (self.field.from_mongo(value),)  # type: ignore

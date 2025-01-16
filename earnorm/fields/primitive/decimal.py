@@ -28,8 +28,12 @@ class DecimalField(Field[Decimal]):
         ValidationError: Value must be between 0 and 5
     """
 
-    def _get_field_type(self) -> Type[Any]:
-        """Get field type."""
+    def _get_field_type(self) -> Type[Decimal]:
+        """Get field type.
+
+        Returns:
+            Type object representing decimal type
+        """
         return Decimal
 
     def __init__(
@@ -67,10 +71,28 @@ class DecimalField(Field[Decimal]):
             # Convert min/max values to float for validation
             min_float = float(min_value) if min_value is not None else None
             max_float = float(max_value) if max_value is not None else None
-            self._metadata.validators.append(validate_range(min_float, max_float))
+            if not hasattr(self._metadata, "validators"):
+                self._metadata.validators = []  # type: ignore
+            self._metadata.validators.append(validate_range(min_float, max_float))  # type: ignore
 
     def convert(self, value: Any) -> Decimal:
-        """Convert value to decimal."""
+        """Convert value to decimal.
+
+        Args:
+            value: Value to convert
+
+        Returns:
+            Converted decimal value or 0 if value is None
+
+        Examples:
+            >>> field = DecimalField(precision=2)
+            >>> field.convert("123.456")
+            Decimal('123.46')
+            >>> field.convert(123.456)
+            Decimal('123.46')
+            >>> field.convert(None)
+            Decimal('0')
+        """
         if value is None:
             return Decimal("0")
         if isinstance(value, Decimal):
@@ -82,13 +104,41 @@ class DecimalField(Field[Decimal]):
         )
 
     def to_mongo(self, value: Optional[Decimal]) -> Optional[float]:
-        """Convert Python decimal to MongoDB decimal."""
+        """Convert Python decimal to MongoDB decimal.
+
+        Args:
+            value: Decimal value to convert
+
+        Returns:
+            MongoDB float value or None if value is None
+
+        Examples:
+            >>> field = DecimalField(precision=2)
+            >>> field.to_mongo(Decimal("123.456"))
+            123.46
+            >>> field.to_mongo(None)
+            None
+        """
         if value is None:
             return None
         return float(value)
 
     def from_mongo(self, value: Any) -> Decimal:
-        """Convert MongoDB decimal to Python decimal."""
+        """Convert MongoDB decimal to Python decimal.
+
+        Args:
+            value: MongoDB value to convert
+
+        Returns:
+            Python decimal value or 0 if value is None
+
+        Examples:
+            >>> field = DecimalField(precision=2)
+            >>> field.from_mongo(123.456)
+            Decimal('123.46')
+            >>> field.from_mongo(None)
+            Decimal('0')
+        """
         if value is None:
             return Decimal("0")
         return Decimal(str(value)).quantize(

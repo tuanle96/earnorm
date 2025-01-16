@@ -7,8 +7,6 @@ It implements the core functionality for field validation, conversion, and seria
 from abc import abstractmethod
 from typing import Any, Callable, Generic, List, Optional, Type, TypeVar, Union
 
-from typing_extensions import Self
-
 from earnorm.base.fields.metadata import FieldMetadata
 from earnorm.di import container
 from earnorm.types import FieldProtocol, ModelInterface
@@ -31,9 +29,17 @@ class Field(FieldProtocol, Generic[T]):
 
     Attributes:
         name: Name of the field
+        required: Whether the field is required
+        unique: Whether the field value must be unique
+        default: Default value for the field
         _metadata: Field metadata containing configuration
         _cache_manager: Cache manager for caching field operations
     """
+
+    name: str = ""
+    required: bool = False
+    unique: bool = False
+    default: Any = None
 
     def __init__(
         self,
@@ -56,28 +62,37 @@ class Field(FieldProtocol, Generic[T]):
             index: Whether to create an index for this field
             description: Field description
             **kwargs: Additional field options
+
+        Examples:
+            >>> field = Field(required=True, unique=True)
+            >>> field = Field(default=42, validators=[validate_positive])
+            >>> field = Field(index=True, description="User's age")
         """
-        self.name: str = ""
+        self.name = ""
+        self.required = required
+        self.unique = unique
+        self.default = default
         self._metadata = FieldMetadata(
+            field=self,
             name=self.name,
-            field_type=self._get_field_type(),
             required=required,
             unique=unique,
             default=default,
-            validators=validators or [],
-            index=index,
-            description=description,
-            options=kwargs,
         )
         self._cache_manager = container.get("cache_lifecycle_manager")
 
-    def _get_field_type(self) -> Type[Any]:
+    def _get_field_type(self) -> Type[T]:
         """Get field type.
 
         Returns:
-            Type object representing this field's type
+            Type object representing this field's type T
+
+        Examples:
+            >>> field = IntField()
+            >>> field._get_field_type()
+            <class 'int'>
         """
-        return type(Any)
+        return type(Any)  # type: ignore
 
     @property
     def metadata(self) -> FieldMetadata:
@@ -85,6 +100,11 @@ class Field(FieldProtocol, Generic[T]):
 
         Returns:
             FieldMetadata object containing field configuration
+
+        Examples:
+            >>> field = Field(required=True)
+            >>> field.metadata.required
+            True
         """
         return self._metadata
 
@@ -96,6 +116,11 @@ class Field(FieldProtocol, Generic[T]):
 
         Raises:
             ValidationError: If validation fails
+
+        Examples:
+            >>> field = Field(validators=[lambda x: x > 0])
+            >>> field.validate(42)  # OK
+            >>> field.validate(-1)  # Raises ValidationError
         """
         try:
             self._metadata.validate(value)
@@ -104,7 +129,7 @@ class Field(FieldProtocol, Generic[T]):
 
     def __get__(
         self, instance: Optional[ModelInterface], owner: Type[ModelInterface]
-    ) -> Union[Self, T]:
+    ) -> Union["Field[T]", T]:
         """Get field value.
 
         Args:
@@ -113,10 +138,17 @@ class Field(FieldProtocol, Generic[T]):
 
         Returns:
             Field value if instance is provided, otherwise returns self
+
+        Examples:
+            >>> class User(Model):
+            ...     age = IntField()
+            >>> user = User(age=42)
+            >>> user.age  # Returns 42
+            >>> User.age  # Returns IntField instance
         """
         if instance is None:
             return self
-        value = instance.data.get(self.name)  # type: ignore
+        value = instance.data.get(self.name)
         if value is None:
             return self.convert(self._metadata.default)
         return self.from_mongo(value)
@@ -127,6 +159,12 @@ class Field(FieldProtocol, Generic[T]):
         Args:
             instance: Model instance
             value: Value to set
+
+        Examples:
+            >>> class User(Model):
+            ...     age = IntField()
+            >>> user = User()
+            >>> user.age = 42  # Sets age to 42
         """
         if instance is None:
             return
@@ -135,19 +173,25 @@ class Field(FieldProtocol, Generic[T]):
         self.validate(value)
 
         if isinstance(value, Field):
-            instance.data[self.name] = self.convert(value._metadata.default)  # type: ignore
+            instance.data[self.name] = self.convert(value._metadata.default)
         else:
-            instance.data[self.name] = self.convert(value)  # type: ignore
+            instance.data[self.name] = self.convert(value)
 
     def __delete__(self, instance: Optional[ModelInterface]) -> None:
         """Delete field value.
 
         Args:
             instance: Model instance
+
+        Examples:
+            >>> class User(Model):
+            ...     age = IntField()
+            >>> user = User(age=42)
+            >>> del user.age  # Removes age field
         """
         if instance is None:
             return
-        instance.data.pop(self.name, None)  # type: ignore
+        instance.data.pop(self.name, None)
 
     @abstractmethod
     def convert(self, value: Any) -> T:
@@ -158,6 +202,11 @@ class Field(FieldProtocol, Generic[T]):
 
         Returns:
             Converted value of type T
+
+        Examples:
+            >>> field = IntField()
+            >>> field.convert("42")
+            42
         """
         pass
 
@@ -169,6 +218,11 @@ class Field(FieldProtocol, Generic[T]):
 
         Returns:
             Dict representation of value
+
+        Examples:
+            >>> field = DateTimeField()
+            >>> field.to_dict(datetime(2024, 1, 1))
+            '2024-01-01T00:00:00'
         """
         return value
 
@@ -180,6 +234,11 @@ class Field(FieldProtocol, Generic[T]):
 
         Returns:
             MongoDB representation of value
+
+        Examples:
+            >>> field = ObjectIdField()
+            >>> field.to_mongo("507f1f77bcf86cd799439011")
+            ObjectId('507f1f77bcf86cd799439011')
         """
         return value
 
@@ -191,5 +250,10 @@ class Field(FieldProtocol, Generic[T]):
 
         Returns:
             Python value of type T
+
+        Examples:
+            >>> field = ObjectIdField()
+            >>> field.from_mongo(ObjectId('507f1f77bcf86cd799439011'))
+            '507f1f77bcf86cd799439011'
         """
         return self.convert(value)

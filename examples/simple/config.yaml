@@ -1,0 +1,27 @@
+# MongoDB Configuration
+mongo_uri: mongodb://localhost:27017
+mongo_database: earnbase
+mongo_min_pool_size: 5
+mongo_max_pool_size: 20
+mongo_timeout: 30
+mongo_max_lifetime: 3600
+mongo_idle_timeout: 300
+
+# Redis Configuration
+redis_host: localhost
+redis_port: 6379
+redis_db: 0
+redis_min_pool_size: 5
+redis_max_pool_size: 20
+redis_timeout: 30
+
+# Cache Configuration
+cache_enabled: true
+cache_ttl: 3600
+cache_prefix: earnorm:
+cache_max_retries: 3
+
+# Event Configuration
+event_enabled: true
+event_queue: earnorm:events
+event_batch_size: 100

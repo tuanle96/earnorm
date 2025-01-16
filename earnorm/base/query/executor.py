@@ -1,18 +1,18 @@
 """Query executor implementation."""
 
-from typing import TypeVar
+from typing import Generic, List, TypeVar
 
 from bson.raw_bson import RawBSONDocument
 from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorCursor
 
-from earnorm.base.models.interfaces import ModelInterface
 from earnorm.base.query.builder import QueryBuilder
 from earnorm.base.query.result import QueryResult
+from earnorm.base.types import ModelProtocol
 
-M = TypeVar("M", bound=ModelInterface)
+M = TypeVar("M", bound=ModelProtocol)
 
 
-class QueryExecutor:
+class QueryExecutor(Generic[M]):
     """MongoDB query executor.
 
     This class handles:
@@ -20,8 +20,11 @@ class QueryExecutor:
     - Converting results to model instances
     - Handling pagination and sorting
 
+    Type Parameters:
+        M: Type of model this executor handles
+
     Examples:
-        >>> executor = QueryExecutor(collection, model_class)
+        >>> executor = QueryExecutor(collection, User)
         >>> query = QueryBuilder().filter(age=18).build()
         >>> result = await executor.execute(query)
         >>> users = result.items
@@ -30,7 +33,7 @@ class QueryExecutor:
     def __init__(
         self,
         collection: AsyncIOMotorCollection[RawBSONDocument],
-        model_class: type[ModelInterface],
+        model_class: type[M],
     ) -> None:
         """Initialize executor.
 
@@ -43,7 +46,7 @@ class QueryExecutor:
 
     async def execute(
         self, query: QueryBuilder, batch_size: int = 100
-    ) -> QueryResult[ModelInterface]:
+    ) -> QueryResult[M]:
         """Execute query and return results.
 
         Args:
@@ -52,6 +55,10 @@ class QueryExecutor:
 
         Returns:
             Query result with items and metadata
+
+        Raises:
+            ValueError: If query parameters are invalid
+            TypeError: If query result cannot be converted to model instances
 
         Examples:
             >>> query = QueryBuilder().filter(age=18).build()
@@ -84,11 +91,9 @@ class QueryExecutor:
         total = await self._collection.count_documents(filter_query)
 
         # Get items
-        raw_docs: list[RawBSONDocument] = await cursor.to_list(  # type: ignore
+        raw_docs: List[RawBSONDocument] = await cursor.to_list(  # type: ignore
             length=limit or batch_size
         )
         items = [self._model_class(**dict(doc)) for doc in raw_docs]
 
-        return QueryResult[ModelInterface](
-            items=items, total=total, limit=limit, offset=skip
-        )
+        return QueryResult[M](items=items, total=total, limit=limit, offset=skip)

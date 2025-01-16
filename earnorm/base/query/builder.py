@@ -1,8 +1,10 @@
 """Query builder implementation."""
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 
 from bson import ObjectId
+
+from earnorm.base.types import FilterDict, ProjectionDict, SortItem
 
 
 class QueryBuilder:
@@ -28,11 +30,11 @@ class QueryBuilder:
 
     def __init__(self) -> None:
         """Initialize builder."""
-        self._query: Dict[str, Any] = {}
-        self._sort: List[Tuple[str, int]] = []
+        self._query: FilterDict = {}
+        self._sort: List[SortItem] = []
         self._limit: Optional[int] = None
         self._offset: Optional[int] = None
-        self._projection: Optional[Dict[str, int]] = None
+        self._projection: Optional[ProjectionDict] = None
 
     def filter(self, **kwargs: Any) -> "QueryBuilder":
         """Add filter conditions.
@@ -42,6 +44,9 @@ class QueryBuilder:
 
         Returns:
             Self for chaining
+
+        Raises:
+            ValueError: If filter conditions are invalid
 
         Examples:
             >>> builder.filter(age=18, active=True)
@@ -67,6 +72,9 @@ class QueryBuilder:
         Returns:
             Self for chaining
 
+        Raises:
+            ValueError: If ID is invalid
+
         Examples:
             >>> builder.filter_by_id("507f1f77bcf86cd799439011")
         """
@@ -83,6 +91,9 @@ class QueryBuilder:
         Returns:
             Self for chaining
 
+        Raises:
+            ValueError: If field or direction is invalid
+
         Examples:
             >>> builder.sort("created_at", -1)  # newest first
         """
@@ -98,9 +109,14 @@ class QueryBuilder:
         Returns:
             Self for chaining
 
+        Raises:
+            ValueError: If limit is not a positive integer
+
         Examples:
             >>> builder.limit(10)  # return at most 10 documents
         """
+        if limit < 0:
+            raise ValueError("Limit must be a positive integer")
         self._limit = limit
         return self
 
@@ -113,9 +129,14 @@ class QueryBuilder:
         Returns:
             Self for chaining
 
+        Raises:
+            ValueError: If offset is not a positive integer
+
         Examples:
             >>> builder.offset(10)  # skip first 10 documents
         """
+        if offset < 0:
+            raise ValueError("Offset must be a positive integer")
         self._offset = offset
         return self
 
@@ -128,12 +149,18 @@ class QueryBuilder:
         Returns:
             Self for chaining
 
+        Raises:
+            ValueError: If projection values are not 0 or 1
+
         Examples:
             >>> builder.project(name=1, email=1)  # include only name and email
             >>> builder.project(_id=0)  # exclude _id field
         """
         if self._projection is None:
             self._projection = {}
+        for _, value in kwargs.items():
+            if value not in (0, 1):
+                raise ValueError("Projection values must be 0 or 1")
         self._projection.update(kwargs)
         return self
 

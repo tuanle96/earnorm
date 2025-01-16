@@ -6,9 +6,8 @@ This module provides model interfaces and base implementations:
 - Model persistence and validation
 """
 
-from earnorm.base.models.interfaces import ModelInterface
 from earnorm.base.models.lifecycle import Lifecycle
 from earnorm.base.models.persistence import Persistence
 from earnorm.base.models.validation import Validator
 
-__all__ = ["ModelInterface", "Lifecycle", "Persistence", "Validator"]
+__all__ = ["Lifecycle", "Persistence", "Validator"]

@@ -25,21 +25,12 @@ Examples:
 
 import functools
 import logging
-from typing import Any, Callable, Protocol, TypeVar
+from typing import Any, Callable, TypeVar
 
+from earnorm.base.types import ModelProtocol
 from earnorm.events.core.event import Event
 
 logger = logging.getLogger(__name__)
-
-
-class ModelProtocol(Protocol):
-    """Protocol for model type."""
-
-    @property
-    def name(self) -> str:
-        """Get model name."""
-        ...
-
 
 M = TypeVar("M", bound=ModelProtocol)
 

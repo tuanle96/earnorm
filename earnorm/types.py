@@ -6,7 +6,7 @@ This module defines the core interfaces used throughout EarnORM:
 """
 
 from abc import abstractmethod
-from typing import Any, Dict, Protocol, runtime_checkable
+from typing import Any, Dict, Optional, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -18,9 +18,20 @@ class ModelInterface(Protocol):
 
     Attributes:
         data: Dictionary containing the model's data
+        id: Model's unique identifier
     """
 
     data: Dict[str, Any]
+
+    @property
+    @abstractmethod
+    def id(self) -> Optional[str]:
+        """Get model ID.
+
+        Returns:
+            Model's unique identifier or None if not saved
+        """
+        pass
 
     @abstractmethod
     def to_dict(self) -> Dict[str, Any]:
@@ -46,6 +57,19 @@ class ModelInterface(Protocol):
 
         Args:
             data: Dict containing the model's data in MongoDB format
+        """
+        pass
+
+    @classmethod
+    @abstractmethod
+    async def find_by_id(cls, id: str) -> Optional["ModelInterface"]:
+        """Find model by ID.
+
+        Args:
+            id: Model ID
+
+        Returns:
+            Model instance if found, None otherwise
         """
         pass
 

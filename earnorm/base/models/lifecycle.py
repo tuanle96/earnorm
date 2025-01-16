@@ -1,114 +1,107 @@
-"""Model lifecycle hooks."""
+"""Model lifecycle management."""
 
-from __future__ import annotations
+from typing import Any, Callable, Coroutine, Generic, List, TypeVar
 
-import logging
-from typing import Any, Callable, Coroutine, Dict, List, Literal
+from earnorm.base.types import ModelProtocol
 
-from earnorm.base.models.interfaces import ModelInterface
-
-logger = logging.getLogger(__name__)
-
-# Type aliases
-Hook = Callable[[ModelInterface], Coroutine[Any, Any, None]]
-EventType = Literal["before_save", "after_save", "before_delete", "after_delete"]
+M = TypeVar("M", bound=ModelProtocol)
+ModelHook = Callable[[M], Coroutine[Any, Any, None]]
 
 
-class Lifecycle:
-    """Model lifecycle hooks.
+class Lifecycle(Generic[M]):
+    """Model lifecycle manager.
 
-    This class manages model lifecycle hooks:
+    This class manages model lifecycle events:
     - Before/after save
     - Before/after delete
 
-    Hooks are async functions that are called at specific points
-    in the model lifecycle. They can be used to perform additional
-    operations or validations.
+    Type Parameters:
+        M: Type of model this lifecycle manager handles
     """
 
     def __init__(self) -> None:
-        """Initialize lifecycle with empty hook lists."""
-        self._hooks: Dict[EventType, List[Hook]] = {
-            "before_save": [],
-            "after_save": [],
-            "before_delete": [],
-            "after_delete": [],
-        }
+        """Initialize lifecycle manager."""
+        self._before_save_hooks: List[ModelHook[M]] = []
+        self._after_save_hooks: List[ModelHook[M]] = []
+        self._before_delete_hooks: List[ModelHook[M]] = []
+        self._after_delete_hooks: List[ModelHook[M]] = []
 
-    def add_hook(self, event: EventType, hook: Hook) -> None:
-        """Add lifecycle hook.
+    def add_before_save_hook(self, hook: ModelHook[M]) -> None:
+        """Add before save hook.
 
         Args:
-            event: Event type
-            hook: Async function to call
+            hook: Hook function to call before saving
 
         Raises:
-            ValueError: If event type is invalid
+            TypeError: If hook is not a coroutine function
         """
-        if event not in self._hooks:
-            raise ValueError(f"Invalid event: {event}")
-        self._hooks[event].append(hook)
+        self._before_save_hooks.append(hook)
 
-    async def before_save(self, model: ModelInterface) -> None:
+    def add_after_save_hook(self, hook: ModelHook[M]) -> None:
+        """Add after save hook.
+
+        Args:
+            hook: Hook function to call after saving
+
+        Raises:
+            TypeError: If hook is not a coroutine function
+        """
+        self._after_save_hooks.append(hook)
+
+    def add_before_delete_hook(self, hook: ModelHook[M]) -> None:
+        """Add before delete hook.
+
+        Args:
+            hook: Hook function to call before deleting
+
+        Raises:
+            TypeError: If hook is not a coroutine function
+        """
+        self._before_delete_hooks.append(hook)
+
+    def add_after_delete_hook(self, hook: ModelHook[M]) -> None:
+        """Add after delete hook.
+
+        Args:
+            hook: Hook function to call after deleting
+
+        Raises:
+            TypeError: If hook is not a coroutine function
+        """
+        self._after_delete_hooks.append(hook)
+
+    async def before_save(self, model: M) -> None:
         """Run before save hooks.
 
         Args:
-            model: Model instance
-
-        Raises:
-            Exception: If any hook fails
+            model: Model instance being saved
         """
-        for hook in self._hooks["before_save"]:
-            try:
-                await hook(model)
-            except Exception as e:
-                logger.error("Before save hook failed: %s", str(e))
-                raise
+        for hook in self._before_save_hooks:
+            await hook(model)
 
-    async def after_save(self, model: ModelInterface) -> None:
+    async def after_save(self, model: M) -> None:
         """Run after save hooks.
 
         Args:
-            model: Model instance
-
-        Raises:
-            Exception: If any hook fails
+            model: Model instance that was saved
         """
-        for hook in self._hooks["after_save"]:
-            try:
-                await hook(model)
-            except Exception as e:
-                logger.error("After save hook failed: %s", str(e))
-                raise
+        for hook in self._after_save_hooks:
+            await hook(model)
 
-    async def before_delete(self, model: ModelInterface) -> None:
+    async def before_delete(self, model: M) -> None:
         """Run before delete hooks.
 
         Args:
-            model: Model instance
-
-        Raises:
-            Exception: If any hook fails
+            model: Model instance being deleted
         """
-        for hook in self._hooks["before_delete"]:
-            try:
-                await hook(model)
-            except Exception as e:
-                logger.error("Before delete hook failed: %s", str(e))
-                raise
+        for hook in self._before_delete_hooks:
+            await hook(model)
 
-    async def after_delete(self, model: ModelInterface) -> None:
+    async def after_delete(self, model: M) -> None:
         """Run after delete hooks.
 
         Args:
-            model: Model instance
-
-        Raises:
-            Exception: If any hook fails
+            model: Model instance that was deleted
         """
-        for hook in self._hooks["after_delete"]:
-            try:
-                await hook(model)
-            except Exception as e:
-                logger.error("After delete hook failed: %s", str(e))
-                raise
+        for hook in self._after_delete_hooks:
+            await hook(model)

@@ -62,30 +62,78 @@ class SetField(Field[Set[T]]):
         if min_length is not None or max_length is not None:
             from earnorm.validators import validate_length
 
-            self._metadata.validators.append(validate_length(min_length, max_length))
+            if not hasattr(self._metadata, "validators"):
+                self._metadata.validators = []  # type: ignore
+            self._metadata.validators.append(validate_length(min_length, max_length))  # type: ignore
 
-    def _get_field_type(self) -> Type[Any]:
-        """Get field type."""
-        return set
+    def _get_field_type(self) -> Type[Set[T]]:
+        """Get field type.
+
+        Returns:
+            Type object representing set type
+        """
+        return set  # type: ignore
 
     def convert(self, value: Any) -> Set[T]:
-        """Convert value to set."""
+        """Convert value to set.
+
+        Args:
+            value: Value to convert
+
+        Returns:
+            Converted set value or empty set if value is None
+
+        Examples:
+            >>> field = SetField(StringField())
+            >>> field.convert(["a", "b"])
+            {"a", "b"}
+            >>> field.convert(None)
+            set()
+        """
         if value is None:
             return set()
         if isinstance(value, (list, tuple, set)):
             return {self.field.convert(item) for item in value}  # type: ignore
-        return {self.field.convert(value)}
+        return {self.field.convert(value)}  # type: ignore
 
     def to_mongo(self, value: Optional[Set[T]]) -> Optional[List[Any]]:
-        """Convert Python set to MongoDB list."""
+        """Convert Python set to MongoDB list.
+
+        Args:
+            value: Set value to convert
+
+        Returns:
+            MongoDB list value or None if value is None
+
+        Examples:
+            >>> field = SetField(StringField())
+            >>> field.to_mongo({"a", "b"})
+            ["a", "b"]
+            >>> field.to_mongo(None)
+            None
+        """
         if value is None:
             return None
         return [self.field.to_mongo(item) for item in value]  # type: ignore
 
     def from_mongo(self, value: Any) -> Set[T]:
-        """Convert MongoDB list to Python set."""
+        """Convert MongoDB list to Python set.
+
+        Args:
+            value: MongoDB value to convert
+
+        Returns:
+            Python set value or empty set if value is None
+
+        Examples:
+            >>> field = SetField(StringField())
+            >>> field.from_mongo(["a", "b"])
+            {"a", "b"}
+            >>> field.from_mongo(None)
+            set()
+        """
         if value is None:
             return set()
         if isinstance(value, (list, tuple)):
             return {self.field.from_mongo(item) for item in value}  # type: ignore
-        return {self.field.from_mongo(value)}
+        return {self.field.from_mongo(value)}  # type: ignore

@@ -102,7 +102,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, List, Optional, Type, Union, cast
 
 # Core imports
-from earnorm.base import fields
+from earnorm import fields
 from earnorm.base import model as models
 from earnorm.base.registry import Registry
 
@@ -286,43 +286,78 @@ async def _init_events(redis_pool: RedisPool, event_config: Dict[str, Any]) -> N
         container.register("events", events)
 
 
-async def init(
-    pools: List[Union[MongoPool, RedisPool]],
-    cache_config: Optional[Dict[str, Any]] = None,
-    event_config: Optional[Dict[str, Any]] = None,
-    **kwargs: Dict[str, Any],
-) -> None:
-    """Initialize EarnORM.
+async def init(config_path: str) -> None:
+    """Initialize EarnORM with config file.
 
     Args:
-        pools: List of connection pools to initialize
-        cache_config: Cache configuration options
-        event_config: Event configuration options
-        **kwargs: Additional configuration options
+        config_path: Path to config file (.yaml, .env, etc)
+
+    Examples:
+        >>> await earnorm.init("config.yaml")
     """
+    # Initialize registry and config
+    global env, registry, di, pool_registry, pool_factory, cache, events
+
+    # Create and initialize registry
+    env = Registry()
+    registry = env
+
+    # Load config
+    await env.init_config(config_path)
+
+    # Initialize pools from config
+    pools = []
+
+    # Create MongoDB pool
+    mongo_pool = await PoolFactory.create_mongo_pool(
+        uri=env.config.mongo_uri,
+        database=env.config.mongo_database,
+        min_size=env.config.mongo_min_pool_size,
+        max_size=env.config.mongo_max_pool_size,
+        timeout=env.config.mongo_timeout,
+        max_lifetime=env.config.mongo_max_lifetime,
+        idle_timeout=env.config.mongo_idle_timeout,
+    )
+    pools.append(mongo_pool)
+
+    # Create Redis pool
+    redis_pool = await PoolFactory.create_redis_pool(
+        host=env.config.redis_host,
+        port=env.config.redis_port,
+        db=env.config.redis_db,
+        min_size=env.config.redis_min_pool_size,
+        max_size=env.config.redis_max_pool_size,
+        timeout=env.config.redis_timeout,
+    )
+    pools.append(redis_pool)
+
     # Initialize container and core services
-    await _init_container(pools, **kwargs)
+    await _init_container(pools)
 
-    # Initialize cache if configured
-    if cache_config and pool_registry:
-        redis_pool = pool_registry.get("redis")
-        if not redis_pool:
-            raise ValueError("Redis pool required for cache system")
-        if isinstance(redis_pool, RedisPool):
-            await _init_cache(redis_pool, cache_config)
+    # Initialize cache if enabled
+    if env.config.cache_enabled:
+        await _init_cache(
+            redis_pool=redis_pool,
+            cache_config={
+                "ttl": env.config.cache_ttl,
+                "prefix": env.config.cache_prefix,
+                "max_retries": env.config.cache_max_retries,
+            },
+        )
 
-    # Initialize events if configured
-    if event_config and pool_registry:
-        redis_pool = pool_registry.get("redis")
-        if not redis_pool:
-            raise ValueError("Redis pool required for event system")
-        if isinstance(redis_pool, RedisPool):
-            await _init_events(redis_pool, event_config)
+    # Initialize events if enabled
+    if env.config.event_enabled:
+        await _init_events(
+            redis_pool=redis_pool,
+            event_config={
+                "queue_name": env.config.event_queue,
+                "batch_size": env.config.event_batch_size,
+            },
+        )
 
     # Register all model classes
-    if env:
-        for model_cls in get_all_subclasses(models.BaseModel):
-            env.register_model(model_cls)
+    for model_cls in get_all_subclasses(models.BaseModel):
+        env.register_model(model_cls)
 
     logger.info("EarnORM initialized successfully")
 

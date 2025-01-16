@@ -24,9 +24,12 @@ Examples:
 
 import inspect
 import logging
-from typing import Any, Dict, List, Optional, TypeVar
+from typing import Any, Callable, Coroutine, Dict, List, Optional, Type, TypeVar, cast
 
-from earnorm.base.models.interfaces import ModelInterface
+from typing_extensions import Self
+
+from earnorm.base.recordset.recordset import RecordSet
+from earnorm.base.types import ModelProtocol
 from earnorm.events.core.event import Event
 
 logger = logging.getLogger(__name__)
@@ -34,7 +37,7 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T", bound="Model")
 
 
-class Model(ModelInterface):
+class Model(ModelProtocol):
     """Base model class.
 
     All models should inherit from this class. It provides:
@@ -55,7 +58,23 @@ class Model(ModelInterface):
     _collection: str = ""
     _abstract: bool = False
     _data: Dict[str, Any] = {}
-    _event_handlers: Dict[str, List[Any]] = {}
+    _event_handlers: Dict[str, List[Callable[[Event], Coroutine[Any, Any, None]]]] = {}
+
+    def __new__(cls: Type[Self], **kwargs: Any) -> RecordSet[Self]:
+        """Create new instance.
+
+        This method is called before __init__ when creating a new instance.
+        It returns a RecordSet containing a single record instead of the instance itself.
+
+        Args:
+            **kwargs: Model data
+
+        Returns:
+            RecordSet containing the new instance
+        """
+        instance = super().__new__(cls)
+        instance.__init__(**kwargs)  # type: ignore
+        return RecordSet(cls, [cast(Self, instance)])
 
     def __init__(self, **kwargs: Any) -> None:
         """Initialize model.
