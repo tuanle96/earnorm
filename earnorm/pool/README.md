@@ -1,179 +1,167 @@
-# EarnORM Pool Module
+# Pool Module
 
-The pool module provides connection pooling functionality for various database backends.
+## Overview
+
+The Pool module provides connection pooling and resource management for database connections in EarnORM.
+
+## Structure
+
+```
+pool/
+├── core/          # Core pooling functionality
+│   ├── pool.py    # Connection pool implementation
+│   └── manager.py # Pool manager
+├── backends/      # Database backend implementations
+│   ├── mongo/     # MongoDB connection pool
+│   └── redis/     # Redis connection pool
+└── protocols/     # Pool protocols and interfaces
+```
 
 ## Features
 
-- Multiple backend support (MongoDB, Redis, PostgreSQL)
-- Connection lifecycle management
-- Health checks and validation
-- Metrics collection
-- Configurable pool size and timeouts
-- Connection reuse and cleanup
-
-## Usage
-
-### MongoDB Pool
+### 1. Connection Pool
 
 ```python
-from earnorm.pool.backends.mongo.pool import MongoPool
+from earnorm.pool import Pool
 
 # Create pool
-pool = MongoPool(
+pool = await Pool.create(
     uri="mongodb://localhost:27017",
-    database="test",
     min_size=5,
-    max_size=20,
-    timeout=30.0,
-    max_lifetime=3600,
-    idle_timeout=300,
-    validate_on_borrow=True,
-    test_on_return=True
+    max_size=20
 )
 
-# Initialize pool
-await pool.init()
-
-# Acquire connection
-conn = await pool.acquire()
-
-# Execute operations
-result = await conn.execute("find_one", "users", {"name": "John"})
-print(result)  # {"_id": "...", "name": "John", "age": 30}
-
-# Release connection
-await pool.release(conn)
-
-# Close pool
-await pool.close()
+# Get connection
+async with pool.acquire() as conn:
+    await conn.find_one("users", {"id": "123"})
 ```
 
-### Pool Manager
+### 2. Pool Management
 
 ```python
-from earnorm.pool.manager import PoolManager
-from earnorm.pool.backends.mongo.pool import MongoPool
+from earnorm.pool import pool_manager
 
-# Create manager
-manager = PoolManager()
+# Register pool
+await pool_manager.register("default", pool)
 
-# Register pool types
-manager.register_pool_type("mongodb", MongoPool)
-
-# Create named pool
-pool = await manager.create_pool(
-    "mongodb",
-    pool_name="users",
-    uri="mongodb://localhost:27017",
-    database="test"
-)
-
-# Get pool by name
-pool = manager.get_pool("users")
+# Get pool
+pool = pool_manager.get("default")
 
 # Close all pools
-await manager.close_all()
+await pool_manager.close_all()
+```
+
+### 3. Connection Lifecycle
+
+```python
+from earnorm.pool import lifecycle
+
+@lifecycle.on_connect
+async def setup_connection(conn):
+    await conn.set_read_concern("majority")
+
+@lifecycle.on_release
+async def cleanup_connection(conn):
+    await conn.reset()
+```
+
+### 4. Pool Monitoring
+
+```python
+from earnorm.pool import metrics
+
+# Get pool stats
+stats = await pool.get_stats()
+print(f"Active connections: {stats.active}")
+print(f"Available connections: {stats.available}")
+
+# Monitor pool events
+@pool.on("overflow")
+async def handle_overflow(pool):
+    logger.warning(f"Pool {pool.name} is at capacity")
+```
+
+## Configuration
+
+```python
+from earnorm.pool import setup_pool
+
+# MongoDB pool
+await setup_pool(
+    backend="mongodb",
+    uri="mongodb://localhost:27017",
+    min_size=5,
+    max_size=20,
+    max_idle_time=300,
+    connect_timeout=30
+)
+
+# Redis pool
+await setup_pool(
+    backend="redis",
+    host="localhost",
+    port=6379,
+    min_size=2,
+    max_size=10
+)
 ```
 
 ## Best Practices
 
-1. **Pool Lifecycle**
-   - Always initialize pools before use with `await pool.init()`
-   - Close pools when done with `await pool.close()`
-   - Use context managers when possible
+1. **Pool Sizing**
 
-2. **Connection Management**
-   - Always release connections after use
-   - Don't keep connections for too long
-   - Handle connection errors gracefully
+- Set appropriate min/max sizes
+- Monitor connection usage
+- Consider application load
+- Handle peak periods
 
-3. **Configuration**
-   - Set appropriate pool sizes based on workload
-   - Configure timeouts based on operation types
-   - Enable validation for critical operations
+2. **Connection Lifecycle**
 
-4. **Error Handling**
-   - Handle connection errors
-   - Handle pool exhaustion
-   - Handle timeout errors
+- Implement connection validation
+- Handle connection errors
+- Clean up resources
+- Monitor connection age
 
-## API Reference
+3. **Error Handling**
 
-### Pool Protocol
+- Handle connection failures
+- Implement retries
+- Log connection errors
+- Monitor error rates
 
-```python
-class PoolProtocol(Protocol[C]):
-    @property
-    def backend_type(self) -> str: ...
-    
-    @property
-    def size(self) -> int: ...
-    
-    @property
-    def available(self) -> int: ...
-    
-    async def init(self, **config: Dict[str, Any]) -> None: ...
-    
-    async def acquire(self) -> C: ...
-    
-    async def release(self, conn: C) -> None: ...
-    
-    async def close(self) -> None: ...
-```
+4. **Performance**
 
-### Connection Protocol
+- Use connection pooling
+- Monitor pool metrics
+- Optimize pool size
+- Handle backpressure
 
-```python
-class ConnectionProtocol(Protocol):
-    @property
-    def created_at(self) -> float: ...
-    
-    @property
-    def last_used_at(self) -> float: ...
-    
-    @property
-    def idle_time(self) -> float: ...
-    
-    @property
-    def lifetime(self) -> float: ...
-    
-    @property
-    def is_stale(self) -> bool: ...
-    
-    def touch(self) -> None: ...
-    
-    async def ping(self) -> bool: ...
-    
-    async def close(self) -> None: ...
-    
-    async def execute(self, operation: str, *args: Any, **kwargs: Any) -> Any: ...
-```
+## Common Issues & Solutions
 
-### Pool Manager
+1. **Connection Leaks**
 
-```python
-class PoolManager:
-    def register_pool_type(self, backend_type: str, pool_type: Type[P]) -> None: ...
-    
-    async def create_pool(
-        self,
-        backend_type: str,
-        pool_name: Optional[str] = None,
-        **config: Any
-    ) -> PoolProtocol[Any]: ...
-    
-    def get_pool(self, pool_name: str) -> Optional[PoolProtocol[Any]]: ...
-    
-    async def close_all(self) -> None: ...
-```
+- Use context managers
+- Implement timeouts
+- Monitor active connections
+- Clean up stale connections
+
+2. **Pool Exhaustion**
+
+- Implement backpressure
+- Monitor pool capacity
+- Handle overflow gracefully
+- Scale pool size
+
+3. **Performance**
+
+- Optimize connection reuse
+- Monitor connection lifetime
+- Handle connection errors
+- Use appropriate pool size
 
 ## Contributing
 
-1. Follow the project's coding style
-2. Add tests for new features
-3. Update documentation
-4. Submit pull requests
-
-## License
-
-This module is part of the EarnORM framework and is licensed under the same terms. 
+1. Follow code style guidelines
+2. Add comprehensive docstrings
+3. Write unit tests
+4. Update documentation

@@ -1,4 +1,77 @@
-"""File field type using GridFS."""
+"""File field type using GridFS.
+
+This field type provides support for storing and managing files using MongoDB's GridFS.
+It handles file upload, download, streaming, and metadata management with proper validation.
+
+Features:
+- File upload/download with streaming support
+- Automatic content type detection
+- File size validation
+- MIME type validation
+- Metadata management
+- Async operations
+
+Examples:
+    Basic usage:
+    >>> class Document(BaseModel):
+    ...     title = StringField()
+    ...     file = FileField(allowed_types=["application/pdf"])
+    ...
+    >>> # Upload file
+    >>> doc = Document(title="Report")
+    >>> with open("report.pdf", "rb") as f:
+    ...     await doc.file.save(f, filename="report.pdf")
+    ...
+    >>> # Download file
+    >>> with open("downloaded.pdf", "wb") as f:
+    ...     await doc.file.download(f)
+    ...
+    >>> # Get file info
+    >>> info = await doc.file.get_info()
+    >>> print(info.filename)
+    'report.pdf'
+    >>> print(info.content_type)
+    'application/pdf'
+    >>> print(info.length)
+    12345
+
+    With size limit and type validation:
+    >>> class ImageDocument(BaseModel):
+    ...     name = StringField()
+    ...     image = FileField(
+    ...         allowed_types=["image/jpeg", "image/png"],
+    ...         max_size=5 * 1024 * 1024  # 5MB
+    ...     )
+    ...
+    >>> # Upload with metadata
+    >>> doc = ImageDocument(name="Profile")
+    >>> await doc.image.save(
+    ...     "profile.jpg",
+    ...     content_type="image/jpeg",
+    ...     author="John",
+    ...     tags=["profile", "avatar"]
+    ... )
+
+    Streaming large files:
+    >>> class VideoDocument(BaseModel):
+    ...     title = StringField()
+    ...     video = FileField(
+    ...         allowed_types=["video/mp4"],
+    ...         max_size=1024 * 1024 * 1024  # 1GB
+    ...     )
+    ...
+    >>> # Download with custom chunk size
+    >>> with open("video.mp4", "wb") as f:
+    ...     await doc.video.download(f, chunk_size=1024 * 1024)  # 1MB chunks
+
+Best Practices:
+1. Always set appropriate max_size to prevent large file uploads
+2. Use allowed_types to restrict file types for security
+3. Handle GridFSError for all file operations
+4. Use streaming for large files
+5. Clean up unused files by calling delete()
+6. Add relevant metadata during upload
+"""
 
 import io
 import mimetypes
