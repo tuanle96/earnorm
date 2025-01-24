@@ -19,10 +19,11 @@ Example:
     ...         ...
 """
 
-from earnorm.pool.protocols.connection import ConnectionProtocol
+from earnorm.pool.protocols.connection import ConnectionLifecycle, ConnectionProtocol
 from earnorm.pool.protocols.pool import PoolProtocol
 
 __all__ = [
     "PoolProtocol",
     "ConnectionProtocol",
+    "ConnectionLifecycle",
 ]

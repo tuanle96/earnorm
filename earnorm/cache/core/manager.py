@@ -1,359 +1,253 @@
 """Cache manager implementation.
 
-This module provides the main cache manager class that coordinates all
-cache operations. It handles:
-- Backend management
-- Value serialization
-- Error handling
-- Metrics collection
-- Health checks
+This module provides cache manager implementation that uses DI container.
 
 Examples:
     ```python
-    from earnorm.cache import CacheManager
-    from earnorm.cache.backends.redis import RedisBackend
-    from earnorm.pool.factory import PoolFactory
+    from earnorm.cache.core.manager import CacheManager
+    from earnorm.di.container import Container
 
-    # Create Redis pool
-    redis_pool = await PoolFactory.create_redis_pool(
-        host="localhost",
-        port=6379,
-        db=0,
-        min_size=5,
-        max_size=20
-    )
+    # Create container and register components
+    container = Container()
+    container.register("redis_pool", lambda: RedisPool(...))
 
-    # Create Redis backend with pool
-    redis_backend = RedisBackend(pool=redis_pool)
-
-    # Initialize cache manager
+    # Create cache manager
     cache = CacheManager(
-        backend=redis_backend,
-        default_ttl=3600,
-        enabled=True
+        container=container,
+        backend_type="redis",
+        prefix="app",
+        ttl=300
     )
-    await cache.init()
 
-    # Basic operations
-    await cache.set("key", {"name": "value"}, ttl=300)
+    # Use cache
+    await cache.set("key", "value")
     value = await cache.get("key")
-
-    # Batch operations
-    await cache.set_many({
-        "key1": "value1",
-        "key2": "value2"
-    }, ttl=300)
-    values = await cache.get_many(["key1", "key2"])
-
-    # Pattern operations
-    keys = await cache.scan("user:*")
-    await cache.delete(*keys)
-
-    # Health check
-    if cache.is_connected:
-        info = await cache.info()
-        print(f"Cache stats: {info}")
+    await cache.delete("key")
     ```
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Type
 
-from earnorm.cache.backends.base import CacheBackend
-from earnorm.cache.core.exceptions import CacheError, ConnectionError
-from earnorm.di.lifecycle import LifecycleAware
+from earnorm.cache.backends.redis import RedisBackend
+from earnorm.cache.core.backend import BaseCacheBackend
+from earnorm.cache.core.exceptions import CacheError
+from earnorm.cache.core.serializer import SerializerProtocol
+from earnorm.cache.serializers.json import JsonSerializer
+from earnorm.di import Container
 
 logger = logging.getLogger(__name__)
 
 
-class CacheManager(LifecycleAware):
-    """Cache manager.
+class CacheManager:
+    """Cache manager implementation.
 
-    This class provides a high-level interface for cache operations.
-    It handles backend management, serialization, error handling,
-    and metrics collection.
+    This class provides high-level interface for cache operations.
+    It uses DI container to get cache backend and serializer.
 
     Features:
-    - Backend abstraction (Redis, etc.)
-    - JSON serialization
-    - TTL management
-    - Error handling and logging
-    - Metrics collection
-    - Health checks
-    - Distributed locking
+    - Multiple backend support
+    - Key prefixing
+    - TTL support
+    - Error handling
+    - Batch operations
 
     Examples:
         ```python
-        from earnorm.pool.factory import PoolFactory
-        from earnorm.cache.backends.redis import RedisBackend
-        from earnorm.cache import CacheManager
-
-        # Create Redis pool
-        redis_pool = await PoolFactory.create_redis_pool(
-            host="localhost",
-            port=6379,
-            db=0,
-            min_size=5,
-            max_size=20
-        )
-
-        # Create Redis backend with pool
-        redis_backend = RedisBackend(pool=redis_pool)
-
-        # Initialize cache manager
+        # Create cache manager
         cache = CacheManager(
-            backend=redis_backend,
-            default_ttl=3600,
-            enabled=True
+            container=container,
+            backend_type="redis",
+            prefix="app",
+            ttl=300
         )
-        await cache.init()
 
         # Basic operations
         await cache.set("key", "value")
         value = await cache.get("key")
+        await cache.delete("key")
+
+        # Batch operations
+        await cache.set_many({
+            "key1": "value1",
+            "key2": "value2"
+        })
+        values = await cache.get_many(["key1", "key2"])
+        await cache.delete_many(["key1", "key2"])
         ```
     """
 
     def __init__(
         self,
-        backend: CacheBackend,
-        default_ttl: int = 3600,
-        enabled: bool = True,
+        container: Container,
+        backend_type: str = "redis",
+        prefix: str = "app",
+        ttl: int = 300,
     ) -> None:
         """Initialize cache manager.
 
         Args:
-            backend: Cache backend implementation
-            default_ttl: Default TTL in seconds
-            enabled: Whether cache is enabled
+            container: DI container
+            backend_type: Backend type (redis)
+            prefix: Key prefix
+            ttl: Default TTL in seconds
+
+        Raises:
+            CacheError: If backend type is not supported
         """
-        self._backend = backend
-        self._default_ttl = default_ttl
-        self._enabled = enabled
+        if backend_type not in ["redis"]:
+            raise CacheError(f"Unsupported backend type: {backend_type}")
 
-    async def init(self) -> None:
-        """Initialize cache manager."""
-        if not self._enabled:
-            return
-
-        if not self._backend:
-            raise CacheError("No cache backend provided")
-
-        if not self._backend.is_connected:
-            raise ConnectionError("Cache backend is not connected")
-
-        logger.info("Cache manager initialized")
-
-    async def destroy(self) -> None:
-        """Destroy cache manager."""
-        if not self._enabled:
-            return
-
-        if self._backend:
-            try:
-                await self._backend.clear()
-                logger.info("Cache manager destroyed")
-            except Exception as e:
-                logger.error("Failed to destroy cache manager: %s", e)
-
-    @property
-    def id(self) -> Optional[str]:
-        """Get manager ID."""
-        return "cache_manager"
-
-    @property
-    def data(self) -> Dict[str, str]:
-        """Get manager data."""
-        return {
-            "enabled": str(self._enabled).lower(),
-            "default_ttl": str(self._default_ttl),
-            "backend": self._backend.__class__.__name__ if self._backend else "none",
-            "connected": str(
-                self._backend.is_connected if self._backend else False
-            ).lower(),
-        }
+        self._container = container
+        self._backend_type = backend_type
+        self._prefix = prefix
+        self._ttl = ttl
+        self._backend: Optional[BaseCacheBackend] = None
 
     @property
     def is_connected(self) -> bool:
-        """Check if cache is connected.
+        """Check if cache backend is connected.
 
         Returns:
-            bool: True if cache is connected, False otherwise
+            bool: True if backend is initialized and connected
         """
-        return self._enabled and bool(self._backend) and self._backend.is_connected
+        try:
+            return self._backend is not None
+        except Exception:
+            return False
 
-    async def get(self, key: str) -> Any:
-        """Get value by key.
+    @property
+    def backend(self) -> BaseCacheBackend:
+        """Get cache backend.
+
+        Returns:
+            BaseCacheBackend: Cache backend
+
+        Raises:
+            CacheError: If backend is not initialized or initialization fails
+        """
+        if self._backend is None:
+            try:
+                # Get backend class
+                backend_class = self._get_backend_class()
+
+                # Get serializer
+                serializer = self._get_serializer()
+
+                # Create backend instance
+                if self._backend_type == "redis":
+                    self._backend = RedisBackend(
+                        container=self._container,
+                        serializer=serializer,
+                        prefix=self._prefix,
+                        ttl=self._ttl,
+                    )
+                else:
+                    self._backend = backend_class(serializer=serializer)
+            except Exception as e:
+                raise CacheError("Failed to initialize backend") from e
+        return self._backend
+
+    def _get_backend_class(self) -> Type[BaseCacheBackend]:
+        """Get backend class.
+
+        Returns:
+            Type[BaseCacheBackend]: Backend class
+
+        Raises:
+            CacheError: If backend type is not supported
+        """
+        if self._backend_type == "redis":
+            return RedisBackend
+        raise CacheError(f"Unsupported backend type: {self._backend_type}")
+
+    def _get_serializer(self) -> SerializerProtocol:
+        """Get serializer.
+
+        Returns:
+            SerializerProtocol: Value serializer
+
+        Raises:
+            CacheError: If failed to get serializer
+        """
+        try:
+            return JsonSerializer()
+        except Exception as e:
+            raise CacheError("Failed to create serializer") from e
+
+    async def get(self, key: str) -> Optional[str]:
+        """Get value from cache.
 
         Args:
             key: Cache key
 
         Returns:
-            Any: Cached value or None if not found
+            Optional[str]: Cached value or None if not found
 
         Raises:
-            CacheError: If cache is disabled or backend error occurs
-            ConnectionError: If cache is not connected
+            CacheError: If failed to get value
         """
-        if not self._enabled:
-            return None
+        return await self.backend.get(key)
 
-        if not self.is_connected:
-            raise ConnectionError("Cache is not connected")
-
-        try:
-            return await self._backend.get(key)
-        except Exception as e:
-            logger.error("Failed to get cache key %s: %s", key, e)
-            raise CacheError(f"Failed to get cache key {key}") from e
-
-    async def set(
-        self,
-        key: str,
-        value: Any,
-        ttl: Optional[int] = None,
-    ) -> bool:
-        """Set value by key.
+    async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
+        """Set value in cache.
 
         Args:
             key: Cache key
             value: Value to cache
-            ttl: Time to live in seconds (default: None)
-
-        Returns:
-            bool: True if value was set, False otherwise
+            ttl: Optional TTL in seconds
 
         Raises:
-            CacheError: If cache is disabled or backend error occurs
-            ConnectionError: If cache is not connected
+            CacheError: If failed to set value
         """
-        if not self._enabled:
-            return False
+        await self.backend.set(key, value, ttl)
 
-        if not self.is_connected:
-            raise ConnectionError("Cache is not connected")
-
-        try:
-            return await self._backend.set(key, value, ttl or self._default_ttl)
-        except Exception as e:
-            logger.error("Failed to set cache key %s: %s", key, e)
-            raise CacheError(f"Failed to set cache key {key}") from e
-
-    async def delete(self, *keys: str) -> int:
-        """Delete keys.
-
-        Args:
-            *keys: Cache keys to delete
-
-        Returns:
-            int: Number of keys deleted
-
-        Raises:
-            CacheError: If cache is disabled or backend error occurs
-            ConnectionError: If cache is not connected
-        """
-        if not self._enabled:
-            return 0
-
-        if not self.is_connected:
-            raise ConnectionError("Cache is not connected")
-
-        try:
-            return await self._backend.delete(*keys)
-        except Exception as e:
-            logger.error("Failed to delete cache keys %s: %s", keys, e)
-            raise CacheError(f"Failed to delete cache keys {keys}") from e
-
-    async def exists(self, key: str) -> bool:
-        """Check if key exists.
+    async def delete(self, key: str) -> None:
+        """Delete value from cache.
 
         Args:
             key: Cache key
 
-        Returns:
-            bool: True if key exists, False otherwise
-
         Raises:
-            CacheError: If cache is disabled or backend error occurs
-            ConnectionError: If cache is not connected
+            CacheError: If failed to delete value
         """
-        if not self._enabled:
-            return False
+        await self.backend.delete(key)
 
-        if not self.is_connected:
-            raise ConnectionError("Cache is not connected")
-
-        try:
-            return await self._backend.exists(key)
-        except Exception as e:
-            logger.error("Failed to check cache key %s: %s", key, e)
-            raise CacheError(f"Failed to check cache key {key}") from e
-
-    async def clear(self) -> bool:
-        """Clear all keys.
-
-        Returns:
-            bool: True if all keys were cleared, False otherwise
-
-        Raises:
-            CacheError: If cache is disabled or backend error occurs
-            ConnectionError: If cache is not connected
-        """
-        if not self._enabled:
-            return False
-
-        if not self.is_connected:
-            raise ConnectionError("Cache is not connected")
-
-        try:
-            return await self._backend.clear()
-        except Exception as e:
-            logger.error("Failed to clear cache: %s", e)
-            raise CacheError("Failed to clear cache") from e
-
-    async def scan(self, pattern: str) -> List[str]:
-        """Scan keys by pattern.
+    async def get_many(self, keys: List[str]) -> Dict[str, Any]:
+        """Get multiple values from cache.
 
         Args:
-            pattern: Key pattern to match
+            keys: List of cache keys
 
         Returns:
-            List[str]: List of matching keys
+            Dict[str, Any]: Dictionary of key-value pairs
 
         Raises:
-            CacheError: If cache is disabled or backend error occurs
-            ConnectionError: If cache is not connected
+            CacheError: If failed to get values
         """
-        if not self._enabled:
-            return []
+        return await self.backend.get_many(keys)
 
-        if not self.is_connected:
-            raise ConnectionError("Cache is not connected")
+    async def set_many(
+        self, mapping: Dict[str, Any], ttl: Optional[int] = None
+    ) -> None:
+        """Set multiple values in cache.
 
-        try:
-            return await self._backend.scan(pattern)
-        except Exception as e:
-            logger.error("Failed to scan cache keys %s: %s", pattern, e)
-            raise CacheError(f"Failed to scan cache keys {pattern}") from e
-
-    async def info(self) -> Dict[str, str]:
-        """Get cache info.
-
-        Returns:
-            Dict[str, str]: Cache information
+        Args:
+            mapping: Dictionary of key-value pairs
+            ttl: Optional TTL in seconds
 
         Raises:
-            CacheError: If cache is disabled or backend error occurs
-            ConnectionError: If cache is not connected
+            CacheError: If failed to set values
         """
-        if not self._enabled:
-            return {"enabled": "false", "connected": "false"}
+        await self.backend.set_many(mapping, ttl)
 
-        if not self.is_connected:
-            raise ConnectionError("Cache is not connected")
+    async def delete_many(self, keys: List[str]) -> None:
+        """Delete multiple values from cache.
 
-        try:
-            return await self._backend.info()
-        except Exception as e:
-            logger.error("Failed to get cache info: %s", e)
-            raise CacheError("Failed to get cache info") from e
+        Args:
+            keys: List of cache keys
+
+        Raises:
+            CacheError: If failed to delete values
+        """
+        await self.backend.delete_many(keys)

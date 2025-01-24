@@ -1,179 +1,150 @@
-"""Pool factory implementation."""
+"""Pool factory implementation.
 
-from typing import Any, Dict, Optional, Type, Union, cast
+This module provides a factory for creating database connection pools.
+It supports MongoDB, Redis, MySQL, and PostgreSQL backends.
+
+Examples:
+    ```python
+    # Create MongoDB pool
+    mongo_pool = PoolFactory.create(
+        "mongodb",
+        uri="mongodb://localhost:27017",
+        database="test",
+    )
+
+    # Create Redis pool
+    redis_pool = PoolFactory.create(
+        "redis",
+        uri="redis://localhost:6379",
+    )
+    ```
+"""
+
+from typing import Any, Dict, Type, TypeVar
 
 from earnorm.pool.backends.mongo.pool import MongoPool
+from earnorm.pool.backends.mysql.pool import MySQLPool
+from earnorm.pool.backends.postgres.pool import PostgresPool
 from earnorm.pool.backends.redis.pool import RedisPool
+from earnorm.pool.protocols.pool import PoolProtocol
+
+# Define type variables for database and collection types
+DB = TypeVar("DB")
+COLL = TypeVar("COLL")
 
 
 class PoolFactory:
-    """Factory for creating pool instances.
+    """Pool factory for creating database connection pools."""
 
-    This factory provides a centralized way to create pool instances with proper
-    initialization and configuration. It supports different pool types and ensures
-    consistent pool creation across the application.
-
-    Examples:
-        ```python
-        # Create MongoDB pool
-        mongo_pool = await PoolFactory.create_mongo_pool(
-            uri="mongodb://localhost:27017",
-            database="test",
-            min_size=5,
-            max_size=20
-        )
-
-        # Create Redis pool
-        redis_pool = await PoolFactory.create_redis_pool(
-            host="localhost",
-            port=6379,
-            db=0,
-            min_size=5,
-            max_size=20
-        )
-        ```
-    """
-
-    _pool_types: Dict[str, Type[Union[MongoPool, RedisPool]]] = {
+    _pools: Dict[str, Type[PoolProtocol[Any, Any]]] = {
         "mongodb": MongoPool,
         "redis": RedisPool,
+        "mysql": MySQLPool,
+        "postgres": PostgresPool,
     }
 
     @classmethod
-    def register_pool_type(
-        cls, name: str, pool_type: Type[Union[MongoPool, RedisPool]]
-    ) -> None:
-        """Register new pool type.
+    def register(cls, name: str, pool_class: Type[PoolProtocol[DB, COLL]]) -> None:
+        """Register pool implementation.
 
         Args:
-            name: Pool type identifier
-            pool_type: Pool type class
+            name: Pool name
+            pool_class: Pool class
+
+        Examples:
+            ```python
+            # Register custom pool
+            PoolFactory.register("custom", CustomPool)
+            ```
         """
-        cls._pool_types[name] = pool_type
+        cls._pools[name] = pool_class  # type: ignore
 
     @classmethod
-    async def create_pool(
-        cls, pool_type: Type[Union[MongoPool, RedisPool]], **config: Any
-    ) -> Union[MongoPool, RedisPool]:
+    def create(cls, backend: str, **config: Any) -> PoolProtocol[Any, Any]:
         """Create pool instance.
 
         Args:
-            pool_type: Pool type class
+            backend: Backend type (mongodb, redis, mysql, postgresql)
             **config: Pool configuration
 
         Returns:
             Pool instance
+
+        Raises:
+            ValueError: If backend type is unknown
+
+        Examples:
+            ```python
+            # Create MongoDB pool
+            pool = PoolFactory.create(
+                "mongodb",
+                uri="mongodb://localhost:27017",
+                database="test",
+            )
+            ```
         """
-        pool = pool_type(**config)
-        await pool.init()
-        return pool
+        if backend not in cls._pools:
+            raise ValueError(f"Unknown backend: {backend}")
 
-    @classmethod
-    async def create_mongo_pool(
-        cls,
-        uri: str,
-        database: str,
-        min_size: int = 5,
-        max_size: int = 20,
-        timeout: float = 30.0,
-        max_lifetime: int = 3600,
-        idle_timeout: int = 300,
-        validate_on_borrow: bool = True,
-        test_on_return: bool = True,
-        **config: Any,
-    ) -> MongoPool:
-        """Create MongoDB pool instance.
+        pool_class = cls._pools[backend]
+        return pool_class(**config)
 
-        Args:
-            uri: MongoDB connection URI
-            database: Database name
-            min_size: Minimum pool size
-            max_size: Maximum pool size
-            timeout: Connection acquire timeout
-            max_lifetime: Maximum connection lifetime
-            idle_timeout: Maximum idle time
-            validate_on_borrow: Validate connection on borrow
-            test_on_return: Test connection on return
-            **config: Additional configuration
 
-        Returns:
-            MongoPool instance
-        """
-        pool = await cls.create_pool(
-            MongoPool,
-            uri=uri,
-            database=database,
-            min_size=min_size,
-            max_size=max_size,
-            timeout=timeout,
-            max_lifetime=max_lifetime,
-            idle_timeout=idle_timeout,
-            validate_on_borrow=validate_on_borrow,
-            test_on_return=test_on_return,
-            **config,
+async def create_mongo_pool(
+    *,
+    uri: str,
+    database: str,
+    min_size: int = 1,
+    max_size: int = 10,
+    connection_timeout: float = 30.0,
+    max_lifetime: int = 3600,
+    idle_timeout: int = 300,
+    validate_on_borrow: bool = True,
+    test_on_return: bool = True,
+    **kwargs: Any,
+) -> MongoPool[Any, Any]:
+    """Create MongoDB connection pool.
+
+    Args:
+        uri: MongoDB connection URI
+        database: Database name
+        min_size: Minimum pool size
+        max_size: Maximum pool size
+        connection_timeout: Connection timeout
+        max_lifetime: Maximum connection lifetime
+        idle_timeout: Connection idle timeout
+        validate_on_borrow: Whether to validate connections on borrow
+        test_on_return: Whether to test connections on return
+        **kwargs: Additional pool options
+            - username: MongoDB username
+            - password: MongoDB password
+            - auth_source: Authentication database
+            - auth_mechanism: Authentication mechanism
+            - replica_set: Replica set name
+            - read_preference: Read preference
+            - write_concern: Write concern
+
+    Returns:
+        MongoDB connection pool
+
+    Examples:
+        ```python
+        pool = await create_mongo_pool(
+            uri="mongodb://localhost:27017",
+            database="test",
+            min_size=1,
+            max_size=5
         )
-        return cast(MongoPool, pool)
+        ```
+    """
+    pool = MongoPool[Any, Any](
+        uri=uri,
+        database=database,
+        min_size=min_size,
+        max_size=max_size,
+        max_lifetime=max_lifetime,
+        **kwargs,
+    )
 
-    @classmethod
-    async def create_redis_pool(
-        cls,
-        host: str = "localhost",
-        port: int = 6379,
-        db: int = 0,
-        password: Optional[str] = None,
-        username: Optional[str] = None,
-        ssl: bool = False,
-        encoding: str = "utf-8",
-        decode_responses: bool = True,
-        min_size: int = 5,
-        max_size: int = 20,
-        timeout: float = 30.0,
-        max_lifetime: int = 3600,
-        idle_timeout: int = 300,
-        validate_on_borrow: bool = True,
-        test_on_return: bool = True,
-        **config: Any,
-    ) -> RedisPool:
-        """Create Redis pool instance.
-
-        Args:
-            host: Redis host
-            port: Redis port
-            db: Redis database number
-            password: Redis password
-            username: Redis username
-            ssl: Use SSL/TLS
-            encoding: Response encoding
-            decode_responses: Decode responses to strings
-            min_size: Minimum pool size
-            max_size: Maximum pool size
-            timeout: Connection acquire timeout
-            max_lifetime: Maximum connection lifetime
-            idle_timeout: Maximum idle time
-            validate_on_borrow: Validate connection on borrow
-            test_on_return: Test connection on return
-            **config: Additional configuration
-
-        Returns:
-            RedisPool instance
-        """
-        pool = await cls.create_pool(
-            RedisPool,
-            host=host,
-            port=port,
-            db=db,
-            password=password,
-            username=username,
-            ssl=ssl,
-            encoding=encoding,
-            decode_responses=decode_responses,
-            min_size=min_size,
-            max_size=max_size,
-            timeout=timeout,
-            max_lifetime=max_lifetime,
-            idle_timeout=idle_timeout,
-            validate_on_borrow=validate_on_borrow,
-            test_on_return=test_on_return,
-            **config,
-        )
-        return cast(RedisPool, pool)
+    await pool.init()
+    return pool

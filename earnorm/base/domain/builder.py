@@ -1,17 +1,193 @@
-"""Domain builder implementation."""
+"""Domain builder for query building.
 
-from typing import Any, List, Optional, Union
+This module provides a fluent interface for building domain expressions.
 
-from earnorm.base.domain.operators import DomainOperator
+Examples:
+    >>> builder = DomainBuilder()
+    >>> domain = (
+    ...     builder
+    ...     .field("age").greater_than(18)
+    ...     .and_()
+    ...     .field("status").equals("active")
+    ...     .build()
+    ... )
+    >>> mongo_query = domain.to_mongo()
+    >>> {"$and": [{"age": {"$gt": 18}}, {"status": "active"}]}
+"""
+
+from typing import Any, List, Union
+
+from earnorm.base.domain.expression import DomainExpression, LogicalOperator
+from earnorm.types import DomainOperator
+
+
+class DomainFieldBuilder:
+    """Builder for field expressions.
+
+    Examples:
+        >>> builder = DomainFieldBuilder("age")
+        >>> expr = builder.greater_than(18)
+        >>> expr.to_mongo()
+        {"age": {"$gt": 18}}
+    """
+
+    def __init__(self, field: str, parent: "DomainBuilder") -> None:
+        """Initialize field builder.
+
+        Args:
+            field: Field name
+            parent: Parent builder
+        """
+        self.field = field
+        self.parent = parent
+
+    def equals(self, value: Any) -> "DomainBuilder":
+        """Field equals value.
+
+        Args:
+            value: Value to compare
+
+        Returns:
+            Parent builder
+        """
+        self.parent.add_leaf(self.field, "=", value)
+        return self.parent
+
+    def not_equals(self, value: Any) -> "DomainBuilder":
+        """Field not equals value.
+
+        Args:
+            value: Value to compare
+
+        Returns:
+            Parent builder
+        """
+        self.parent.add_leaf(self.field, "!=", value)
+        return self.parent
+
+    def greater_than(self, value: Any) -> "DomainBuilder":
+        """Field greater than value.
+
+        Args:
+            value: Value to compare
+
+        Returns:
+            Parent builder
+        """
+        self.parent.add_leaf(self.field, ">", value)
+        return self.parent
+
+    def greater_equals(self, value: Any) -> "DomainBuilder":
+        """Field greater than or equals value.
+
+        Args:
+            value: Value to compare
+
+        Returns:
+            Parent builder
+        """
+        self.parent.add_leaf(self.field, ">=", value)
+        return self.parent
+
+    def less_than(self, value: Any) -> "DomainBuilder":
+        """Field less than value.
+
+        Args:
+            value: Value to compare
+
+        Returns:
+            Parent builder
+        """
+        self.parent.add_leaf(self.field, "<", value)
+        return self.parent
+
+    def less_equals(self, value: Any) -> "DomainBuilder":
+        """Field less than or equals value.
+
+        Args:
+            value: Value to compare
+
+        Returns:
+            Parent builder
+        """
+        self.parent.add_leaf(self.field, "<=", value)
+        return self.parent
+
+    def in_(self, values: List[Any]) -> "DomainBuilder":
+        """Field in values.
+
+        Args:
+            values: List of values
+
+        Returns:
+            Parent builder
+        """
+        self.parent.add_leaf(self.field, "in", values)
+        return self.parent
+
+    def not_in(self, values: List[Any]) -> "DomainBuilder":
+        """Field not in values.
+
+        Args:
+            values: List of values
+
+        Returns:
+            Parent builder
+        """
+        self.parent.add_leaf(self.field, "not in", values)
+        return self.parent
+
+    def like(self, pattern: str) -> "DomainBuilder":
+        """Field matches pattern.
+
+        Args:
+            pattern: Pattern to match
+
+        Returns:
+            Parent builder
+        """
+        self.parent.add_leaf(self.field, "like", pattern)
+        return self.parent
+
+    def ilike(self, pattern: str) -> "DomainBuilder":
+        """Field matches pattern (case insensitive).
+
+        Args:
+            pattern: Pattern to match
+
+        Returns:
+            Parent builder
+        """
+        self.parent.add_leaf(self.field, "ilike", pattern)
+        return self.parent
+
+    def not_like(self, pattern: str) -> "DomainBuilder":
+        """Field does not match pattern.
+
+        Args:
+            pattern: Pattern to match
+
+        Returns:
+            Parent builder
+        """
+        self.parent.add_leaf(self.field, "not like", pattern)
+        return self.parent
+
+    def not_ilike(self, pattern: str) -> "DomainBuilder":
+        """Field does not match pattern (case insensitive).
+
+        Args:
+            pattern: Pattern to match
+
+        Returns:
+            Parent builder
+        """
+        self.parent.add_leaf(self.field, "not ilike", pattern)
+        return self.parent
 
 
 class DomainBuilder:
-    """Domain builder for constructing domain expressions.
-
-    This class provides a fluent interface for building domain expressions:
-    - Combining multiple conditions
-    - Applying operators
-    - Building complex queries
+    """Builder for domain expressions.
 
     Examples:
         >>> builder = DomainBuilder()
@@ -19,141 +195,37 @@ class DomainBuilder:
         ...     builder
         ...     .field("age").greater_than(18)
         ...     .and_()
-        ...     .field("active").equals(True)
+        ...     .field("status").equals("active")
         ...     .build()
         ... )
+        >>> mongo_query = domain.to_mongo()
+        >>> {"$and": [{"age": {"$gt": 18}}, {"status": "active"}]}
     """
 
     def __init__(self) -> None:
         """Initialize domain builder."""
-        self._domain: List[Any] = []
-        self._current_field: Optional[str] = None
+        self.expressions: List[Union[List[Any], str]] = []
 
-    def field(self, name: str) -> "DomainBuilder":
-        """Set current field.
+    def field(self, name: str) -> DomainFieldBuilder:
+        """Start building field expression.
 
         Args:
             name: Field name
 
         Returns:
-            Self for chaining
+            Field builder
         """
-        self._current_field = name
-        return self
+        return DomainFieldBuilder(name, self)
 
-    def equals(self, value: Any) -> "DomainBuilder":
-        """Add equals condition.
+    def add_leaf(self, field: str, operator: DomainOperator, value: Any) -> None:
+        """Add leaf expression.
 
         Args:
-            value: Value to compare
-
-        Returns:
-            Self for chaining
-
-        Raises:
-            ValueError: If no field is set
+            field: Field name
+            operator: Operator
+            value: Value
         """
-        if not self._current_field:
-            raise ValueError("No field set")
-
-        self._domain.append([self._current_field, "=", value])
-        self._current_field = None
-        return self
-
-    def not_equals(self, value: Any) -> "DomainBuilder":
-        """Add not equals condition.
-
-        Args:
-            value: Value to compare
-
-        Returns:
-            Self for chaining
-
-        Raises:
-            ValueError: If no field is set
-        """
-        if not self._current_field:
-            raise ValueError("No field set")
-
-        self._domain.append([self._current_field, "!=", value])
-        self._current_field = None
-        return self
-
-    def greater_than(self, value: Union[int, float]) -> "DomainBuilder":
-        """Add greater than condition.
-
-        Args:
-            value: Value to compare
-
-        Returns:
-            Self for chaining
-
-        Raises:
-            ValueError: If no field is set
-        """
-        if not self._current_field:
-            raise ValueError("No field set")
-
-        self._domain.append([self._current_field, ">", value])
-        self._current_field = None
-        return self
-
-    def less_than(self, value: Union[int, float]) -> "DomainBuilder":
-        """Add less than condition.
-
-        Args:
-            value: Value to compare
-
-        Returns:
-            Self for chaining
-
-        Raises:
-            ValueError: If no field is set
-        """
-        if not self._current_field:
-            raise ValueError("No field set")
-
-        self._domain.append([self._current_field, "<", value])
-        self._current_field = None
-        return self
-
-    def in_(self, values: List[Any]) -> "DomainBuilder":
-        """Add in condition.
-
-        Args:
-            values: List of values
-
-        Returns:
-            Self for chaining
-
-        Raises:
-            ValueError: If no field is set
-        """
-        if not self._current_field:
-            raise ValueError("No field set")
-
-        self._domain.append([self._current_field, "in", values])
-        self._current_field = None
-        return self
-
-    def not_in(self, values: List[Any]) -> "DomainBuilder":
-        """Add not in condition.
-
-        Args:
-            values: List of values
-
-        Returns:
-            Self for chaining
-
-        Raises:
-            ValueError: If no field is set
-        """
-        if not self._current_field:
-            raise ValueError("No field set")
-
-        self._domain.append([self._current_field, "not in", values])
-        self._current_field = None
-        return self
+        self.expressions.append([field, operator, value])
 
     def and_(self) -> "DomainBuilder":
         """Add AND operator.
@@ -161,7 +233,7 @@ class DomainBuilder:
         Returns:
             Self for chaining
         """
-        self._domain.append(DomainOperator.AND)
+        self.expressions.append(LogicalOperator.AND)
         return self
 
     def or_(self) -> "DomainBuilder":
@@ -170,7 +242,7 @@ class DomainBuilder:
         Returns:
             Self for chaining
         """
-        self._domain.append(DomainOperator.OR)
+        self.expressions.append(LogicalOperator.OR)
         return self
 
     def not_(self) -> "DomainBuilder":
@@ -179,13 +251,31 @@ class DomainBuilder:
         Returns:
             Self for chaining
         """
-        self._domain.append(DomainOperator.NOT)
+        self.expressions.append(LogicalOperator.NOT)
         return self
 
-    def build(self) -> List[Any]:
+    def open_group(self) -> "DomainBuilder":
+        """Open expression group.
+
+        Returns:
+            Self for chaining
+        """
+        self.expressions.append("(")
+        return self
+
+    def close_group(self) -> "DomainBuilder":
+        """Close expression group.
+
+        Returns:
+            Self for chaining
+        """
+        self.expressions.append(")")
+        return self
+
+    def build(self) -> DomainExpression:
         """Build domain expression.
 
         Returns:
             Domain expression
         """
-        return self._domain
+        return DomainExpression(self.expressions)

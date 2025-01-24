@@ -12,8 +12,8 @@ This module provides validators for string fields, including:
 import re
 from typing import Any, Optional, Sequence, Union
 
+from earnorm.types import ValidatorFunc
 from earnorm.validators.base import BaseValidator, ValidationError, create_validator
-from earnorm.validators.types import ValidatorFunc
 
 
 class EmailValidator(BaseValidator):

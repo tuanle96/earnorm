@@ -60,3 +60,14 @@ class ServiceManager:
         """Initialize manager."""
         # Initialize lifecycle manager
         await self._lifecycle.init(**config)
+
+    def unregister(self, name: str) -> None:
+        """Unregister service.
+
+        Args:
+            name: Service name
+        """
+        if name in self._instances:
+            del self._instances[name]
+        if name in self._services:
+            del self._services[name]

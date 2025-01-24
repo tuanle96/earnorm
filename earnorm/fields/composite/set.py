@@ -1,139 +1,248 @@
-"""Set field type."""
+"""Set field implementation.
 
-from typing import Any, List, Optional, Set, Type, TypeVar
+This module provides set field types for handling unique collections of values.
+It supports:
+- Sets of any field type
+- Minimum and maximum size validation
+- Default values
+- Nested validation
+- Automatic deduplication
 
-from earnorm.fields.base import Field
-from earnorm.validators.types import ValidatorFunc
+Examples:
+    >>> class User(Model):
+    ...     roles = SetField(StringField(), default=set)
+    ...     permissions = SetField(StringField(), min_size=1)
+    ...     blocked_ips = SetField(IPAddressField())
+    ...     favorite_tags = SetField(StringField(), max_size=10)
+"""
 
-T = TypeVar("T")
+from typing import (
+    Any,
+    Generic,
+    Iterable,
+    List,
+    Optional,
+    Set,
+    Type,
+    TypeVar,
+    Union,
+    cast,
+)
+
+from earnorm.fields.base import Field, ValidationError
+
+T = TypeVar("T")  # Type of set items
 
 
-class SetField(Field[Set[T]]):
-    """Set field.
+class SetField(Field[Set[T]], Generic[T]):
+    """Field for set values.
 
-    Examples:
-        >>> tags = SetField(StringField())
-        >>> tags.convert(["python", "mongodb"])
-        {"python", "mongodb"}
-        >>> tags.convert({"python", "mongodb"})
-        {"python", "mongodb"}
-        >>> tags.convert(None)
-        set()
-
-        # With validation
-        >>> numbers = SetField(IntegerField(), min_length=1, max_length=5)
-        >>> numbers.convert([1, 2, 3])  # Valid
-        {1, 2, 3}
-        >>> numbers.convert([])  # Will raise ValidationError
-        ValidationError: Set must have at least 1 item
+    Attributes:
+        value_field: Field type for set values
+        min_size: Minimum set size
+        max_size: Maximum set size
     """
 
     def __init__(
         self,
-        field: Field[T],
+        value_field: Field[T],
         *,
-        required: bool = False,
-        unique: bool = False,
-        default: Any = None,
-        validators: Optional[List[ValidatorFunc]] = None,
-        min_length: Optional[int] = None,
-        max_length: Optional[int] = None,
-        **kwargs: Any,
+        min_size: Optional[int] = None,
+        max_size: Optional[int] = None,
+        default: Optional[Union[Set[T], Type[Set[Any]]]] = None,
+        **options: Any,
     ) -> None:
-        """Initialize field.
+        """Initialize set field.
 
         Args:
-            field: Field type for set items
-            required: Whether field is required
-            unique: Whether field value must be unique
-            default: Default value
-            validators: List of validator functions
-            min_length: Minimum set length
-            max_length: Maximum set length
+            value_field: Field type for set values
+            min_size: Minimum set size
+            max_size: Maximum set size
+            default: Default value or set type
+            **options: Additional field options
         """
-        super().__init__(
-            required=required,
-            unique=unique,
-            default=default,
-            validators=validators,
-            **kwargs,
+        # Handle default value
+        processed_default: Optional[Set[T]] = None
+        if default is not None:
+            if default is set:
+                processed_default = cast(Set[T], set())
+            else:
+                processed_default = cast(Set[T], default)
+
+        super().__init__(default=processed_default, **options)
+        self.value_field = value_field
+        self.min_size = min_size
+        self.max_size = max_size
+
+        # Update backend options
+        self.backend_options.update(
+            {
+                "mongodb": {
+                    "type": "array",
+                },
+                "postgres": {
+                    "type": "JSONB",
+                },
+                "mysql": {
+                    "type": "JSON",
+                },
+            }
         )
-        self.field = field
-        if min_length is not None or max_length is not None:
-            from earnorm.validators import validate_length
 
-            if not hasattr(self._metadata, "validators"):
-                self._metadata.validators = []  # type: ignore
-            self._metadata.validators.append(validate_length(min_length, max_length))  # type: ignore
+        # Set up value field
+        self.value_field.name = f"{self.name}[*]"
+        self.value_field.required = True  # Set items can't be None
 
-    def _get_field_type(self) -> Type[Set[T]]:
-        """Get field type.
+    async def validate(self, value: Any) -> None:
+        """Validate set value.
 
-        Returns:
-            Type object representing set type
+        Args:
+            value: Value to validate
+
+        Raises:
+            ValidationError: If validation fails
         """
-        return set  # type: ignore
+        await super().validate(value)
 
-    def convert(self, value: Any) -> Set[T]:
+        if value is not None:
+            if not isinstance(value, (set, list)):
+                raise ValidationError("Value must be a set or list", self.name)
+
+            # Convert to set and cast to correct type
+            value_items = cast(Iterable[Any], value)
+            value_set = cast(Set[T], set(value_items))
+
+            if self.min_size is not None and len(value_set) < self.min_size:
+                raise ValidationError(
+                    f"Set must have at least {self.min_size} items",
+                    self.name,
+                )
+
+            if self.max_size is not None and len(value_set) > self.max_size:
+                raise ValidationError(
+                    f"Set must have at most {self.max_size} items",
+                    self.name,
+                )
+
+            # Validate each item
+            for item in value_set:
+                try:
+                    await self.value_field.validate(item)
+                except ValidationError as e:
+                    raise ValidationError(
+                        f"Invalid item {item!r}: {str(e)}",
+                        self.name,
+                    )
+
+    async def convert(self, value: Any) -> Optional[Set[T]]:
         """Convert value to set.
 
         Args:
             value: Value to convert
 
         Returns:
-            Converted set value or empty set if value is None
+            Set value
 
-        Examples:
-            >>> field = SetField(StringField())
-            >>> field.convert(["a", "b"])
-            {"a", "b"}
-            >>> field.convert(None)
-            set()
+        Raises:
+            ValidationError: If conversion fails
         """
         if value is None:
-            return set()
-        if isinstance(value, (list, tuple, set)):
-            return {self.field.convert(item) for item in value}  # type: ignore
-        return {self.field.convert(value)}  # type: ignore
+            return self.default
 
-    def to_mongo(self, value: Optional[Set[T]]) -> Optional[List[Any]]:
-        """Convert Python set to MongoDB list.
+        try:
+            if isinstance(value, str):
+                # Try to parse as JSON array
+                import json
+
+                try:
+                    value = json.loads(value)
+                    if not isinstance(value, list):
+                        raise ValidationError(
+                            "JSON value must be an array",
+                            self.name,
+                        )
+                except json.JSONDecodeError as e:
+                    raise ValidationError(
+                        f"Invalid JSON array: {str(e)}",
+                        self.name,
+                    )
+            elif not isinstance(value, (set, list)):
+                raise ValidationError(
+                    f"Cannot convert {type(value).__name__} to set",
+                    self.name,
+                )
+
+            # Convert each item
+            result: Set[T] = set()
+            value_items = cast(Iterable[Any], value)
+            for item in value_items:
+                try:
+                    converted = await self.value_field.convert(item)
+                    if converted is None:
+                        raise ValidationError(
+                            "Set items cannot be None",
+                            self.name,
+                        )
+                    result.add(converted)
+                except ValidationError as e:
+                    raise ValidationError(
+                        f"Failed to convert item {item!r}: {str(e)}",
+                        self.name,
+                    )
+
+            return result
+        except Exception as e:
+            raise ValidationError(str(e), self.name)
+
+    async def to_db(self, value: Optional[Set[T]], backend: str) -> Optional[List[Any]]:
+        """Convert set to database format.
 
         Args:
-            value: Set value to convert
+            value: Set value
+            backend: Database backend type
 
         Returns:
-            MongoDB list value or None if value is None
-
-        Examples:
-            >>> field = SetField(StringField())
-            >>> field.to_mongo({"a", "b"})
-            ["a", "b"]
-            >>> field.to_mongo(None)
-            None
+            Database value
         """
         if value is None:
             return None
-        return [self.field.to_mongo(item) for item in value]  # type: ignore
 
-    def from_mongo(self, value: Any) -> Set[T]:
-        """Convert MongoDB list to Python set.
+        result: List[Any] = []
+        value_items = cast(Iterable[T], value)
+        for item in value_items:  # Don't sort to avoid comparison issues
+            db_value = await self.value_field.to_db(item, backend)
+            result.append(db_value)
+
+        return result
+
+    async def from_db(self, value: Any, backend: str) -> Optional[Set[T]]:
+        """Convert database value to set.
 
         Args:
-            value: MongoDB value to convert
+            value: Database value
+            backend: Database backend type
 
         Returns:
-            Python set value or empty set if value is None
-
-        Examples:
-            >>> field = SetField(StringField())
-            >>> field.from_mongo(["a", "b"])
-            {"a", "b"}
-            >>> field.from_mongo(None)
-            set()
+            Set value
         """
         if value is None:
-            return set()
-        if isinstance(value, (list, tuple)):
-            return {self.field.from_mongo(item) for item in value}  # type: ignore
-        return {self.field.from_mongo(value)}  # type: ignore
+            return None
+
+        if not isinstance(value, list):
+            raise ValidationError(
+                f"Expected list from database, got {type(value).__name__}",
+                self.name,
+            )
+
+        value_list = cast(List[Any], value)
+        result: Set[T] = set()
+        for item in value_list:
+            converted = await self.value_field.from_db(item, backend)
+            if converted is None:
+                raise ValidationError(
+                    "Set items cannot be None",
+                    self.name,
+                )
+            result.add(converted)
+
+        return result

@@ -22,29 +22,76 @@ Examples:
     ```
 """
 
+from typing import Any, Dict, Optional
+
 
 class CacheError(Exception):
-    """Base cache exception.
+    """Base exception for cache operations.
 
-    All cache-related exceptions inherit from this class.
+    This exception is raised when cache operation fails.
+    It provides context about the operation and error.
 
-    Args:
-        message: Error message describing the issue
+    Features:
+    - Operation context
+    - Error details
+    - Metadata
 
     Examples:
         ```python
-        raise CacheError("Cache operation failed")
+        # Basic error
+        raise CacheError("Failed to get value")
+
+        # Error with operation
+        raise CacheError("Failed to get value", operation="get")
+
+        # Error with key
+        raise CacheError("Failed to get value", key="user:123")
+
+        # Error with metadata
+        raise CacheError(
+            "Failed to get value",
+            operation="get",
+            key="user:123",
+            metadata={"ttl": 300}
+        )
         ```
     """
 
-    def __init__(self, message: str) -> None:
-        """Initialize exception.
+    def __init__(
+        self,
+        message: str,
+        operation: Optional[str] = None,
+        key: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Initialize cache error.
 
         Args:
             message: Error message
+            operation: Optional operation name
+            key: Optional cache key
+            metadata: Optional metadata dictionary
         """
         self.message = message
-        super().__init__(message)
+        self.operation = operation
+        self.key = key
+        self.metadata = metadata or {}
+        super().__init__(self.format_message())
+
+    def format_message(self) -> str:
+        """Format error message.
+
+        Returns:
+            str: Formatted error message
+        """
+        parts = [self.message]
+        if self.operation:
+            parts.append(f"operation={self.operation}")
+        if self.key:
+            parts.append(f"key={self.key}")
+        if self.metadata:
+            parts.append(f"metadata={self.metadata}")
+        return " ".join(parts)
 
 
 class ConnectionError(CacheError):

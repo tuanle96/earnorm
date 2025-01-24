@@ -29,13 +29,13 @@ Examples:
     ```
 """
 
-from earnorm.cache.backends.base import CacheBackend
+from earnorm.cache.core.backend import CacheBackendProtocol
 from earnorm.cache.core.exceptions import CacheError
 from earnorm.cache.core.manager import CacheManager
 from earnorm.cache.core.metrics import CacheMetrics
 
 __all__ = [
-    "CacheBackend",
+    "CacheBackendProtocol",
     "CacheError",
     "CacheManager",
     "CacheMetrics",

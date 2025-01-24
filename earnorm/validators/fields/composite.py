@@ -9,8 +9,8 @@ This module provides validators for composite fields, including:
 
 from typing import Any, Dict, Optional, Sequence, TypeVar, Union
 
+from earnorm.types import ValidatorFunc
 from earnorm.validators.base import BaseValidator, ValidationError
-from earnorm.validators.types import ValidatorFunc
 
 T = TypeVar("T")
 

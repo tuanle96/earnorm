@@ -54,3 +54,14 @@ class Container(ContainerInterface):
 
         # Initialize resolver
         await self._resolver.init(**config)
+
+    def unregister(self, name: str) -> None:
+        """Unregister service or factory.
+
+        Args:
+            name: Service or factory name
+        """
+        if self._service_manager.has(name):
+            self._service_manager.unregister(name)
+        elif self._factory_manager.has(name):
+            self._factory_manager.unregister(name)

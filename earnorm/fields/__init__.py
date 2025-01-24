@@ -1,51 +1,182 @@
-"""Field types for EarnORM."""
+"""Field types for EarnORM.
 
-from earnorm.fields.base import Field
-from earnorm.fields.composite import DictField as Dict
-from earnorm.fields.composite import EmbeddedField as Embedded
-from earnorm.fields.composite import ListField as List
-from earnorm.fields.composite import SetField as Set
-from earnorm.fields.composite import TupleField as Tuple
-from earnorm.fields.primitive import BooleanField as Boolean
-from earnorm.fields.primitive import DateField as Date
-from earnorm.fields.primitive import DateTimeField as DateTime
-from earnorm.fields.primitive import DecimalField as Decimal
-from earnorm.fields.primitive import EnumField as Enum
-from earnorm.fields.primitive import FileField as File
-from earnorm.fields.primitive import FloatField as Float
-from earnorm.fields.primitive import IntegerField as Integer
-from earnorm.fields.primitive import ObjectIdField as ObjectId
-from earnorm.fields.primitive import StringField as String
-from earnorm.fields.relation import BaseRelationField as BaseRelation
-from earnorm.fields.relation import Many2manyField as Many2many
-from earnorm.fields.relation import Many2oneField as Many2one
-from earnorm.fields.relation import One2manyField as One2many
-from earnorm.fields.relation import ReferenceField as Reference
+This module provides all field types supported by EarnORM:
+
+Base Classes:
+    - Field: Base field class
+    - ValidationError: Field validation error
+    - ValidatorFunc: Validator function type
+    - ModelProtocol: Protocol for model types
+    - RelationProtocol: Protocol for relation fields
+    - FieldProtocol: Protocol for field types
+
+Primitive Fields:
+    - StringField: String values
+    - IntegerField: Integer numbers
+    - FloatField: Floating point numbers
+    - BooleanField: Boolean values
+    - DateTimeField: Date and time values
+    - DecimalField: Decimal numbers
+    - UUIDField: UUID values
+    - JSONField: JSON data
+    - FileField: File storage
+    - EnumField: Enumeration values
+    - ObjectIdField: MongoDB ObjectId
+
+Composite Fields:
+    - ListField: List of values
+    - SetField: Set of unique values
+    - DictField: Dictionary/mapping
+    - TupleField: Fixed-size tuple
+    - EmbeddedField: Nested document
+
+Relation Fields:
+    - OneToOneField: One-to-one relationship
+    - OneToManyField: One-to-many relationship
+    - ManyToOneField: Many-to-one relationship
+    - ManyToManyField: Many-to-many relationship
+
+Validators:
+    - Validator: Base validator class
+    - ValidatorChain: Chain of validators
+    - RequiredValidator: Required field validator
+    - TypeValidator: Type validation
+    - RangeValidator: Value range validation
+    - RegexValidator: Pattern matching
+    - MinLengthValidator: Minimum length
+    - MaxLengthValidator: Maximum length
+    - EmailValidator: Email format
+    - URLValidator: URL format
+    - UniqueValidator: Unique values
+
+Events:
+    - EventEmitter: Base event emitter
+    - EventBus: Event dispatcher
+    - EventType: Event type enum
+    - FieldEvent: Event data container
+    - EventHandler: Event handler type
+    - LoggingHandler: Event logging
+    - ChangeTracker: Change tracking
+    - ValidationHandler: Validation handling
+    - CleanupHandler: Resource cleanup
+"""
+
+# Base classes
+from earnorm.fields.base import Field, ValidationError
+
+# Composite fields
+from earnorm.fields.composite import (
+    DictField,
+    EmbeddedField,
+    ListField,
+    SetField,
+    TupleField,
+)
+
+# Events
+from earnorm.fields.events import (
+    ChangeTracker,
+    CleanupHandler,
+    EventBus,
+    EventEmitter,
+    EventHandler,
+    EventType,
+    FieldEvent,
+    LoggingHandler,
+    ValidationHandler,
+)
+
+# Primitive fields
+from earnorm.fields.primitive import (
+    BooleanField,
+    DateTimeField,
+    DecimalField,
+    EnumField,
+    FileField,
+    FloatField,
+    IntegerField,
+    JSONField,
+    ObjectIdField,
+    StringField,
+    UUIDField,
+)
+
+# Relation fields
+from earnorm.fields.relation import (
+    ManyToManyField,
+    ManyToOneField,
+    OneToManyField,
+    OneToOneField,
+)
+from earnorm.fields.types import FieldProtocol, RelationProtocol, ValidatorFunc
+
+# Validators
+from earnorm.fields.validators.base import (
+    RangeValidator,
+    RegexValidator,
+    RequiredValidator,
+    TypeValidator,
+    Validator,
+    ValidatorChain,
+)
+from earnorm.fields.validators.common import (
+    EmailValidator,
+    MaxLengthValidator,
+    MinLengthValidator,
+    UniqueValidator,
+    URLValidator,
+)
 
 __all__ = [
-    # Base
+    # Base classes
     "Field",
-    # Primitive
-    "Boolean",
-    "Date",
-    "DateTime",
-    "Decimal",
-    "Enum",
-    "File",
-    "Float",
-    "Integer",
-    "ObjectId",
-    "String",
-    # Composite
-    "Dict",
-    "Embedded",
-    "List",
-    "Set",
-    "Tuple",
-    # Relation
-    "BaseRelation",
-    "Reference",
-    "Many2one",
-    "One2many",
-    "Many2many",
+    "ValidationError",
+    "ValidatorFunc",
+    "RelationProtocol",
+    "FieldProtocol",
+    # Primitive fields
+    "StringField",
+    "IntegerField",
+    "FloatField",
+    "BooleanField",
+    "DateTimeField",
+    "DecimalField",
+    "UUIDField",
+    "JSONField",
+    "FileField",
+    "EnumField",
+    "ObjectIdField",
+    # Composite fields
+    "ListField",
+    "SetField",
+    "DictField",
+    "TupleField",
+    "EmbeddedField",
+    # Relation fields
+    "OneToOneField",
+    "OneToManyField",
+    "ManyToOneField",
+    "ManyToManyField",
+    # Validators
+    "Validator",
+    "ValidatorChain",
+    "RequiredValidator",
+    "TypeValidator",
+    "RangeValidator",
+    "RegexValidator",
+    "MinLengthValidator",
+    "MaxLengthValidator",
+    "EmailValidator",
+    "URLValidator",
+    "UniqueValidator",
+    # Events
+    "EventEmitter",
+    "EventBus",
+    "EventType",
+    "FieldEvent",
+    "EventHandler",
+    "LoggingHandler",
+    "ChangeTracker",
+    "ValidationHandler",
+    "CleanupHandler",
 ]

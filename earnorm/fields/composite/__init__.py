@@ -1,9 +1,11 @@
 """Composite field types.
 
-This module provides composite field types for EarnORM:
-- SetField: Field for storing sets of values
-- TupleField: Field for storing tuples of values
-- EmbeddedField: Field for storing embedded documents
+This module provides field types for composite data structures:
+- ListField: List of values
+- SetField: Set of unique values
+- DictField: Dictionary/mapping
+- TupleField: Fixed-size tuple
+- EmbeddedField: Nested document
 """
 
 from earnorm.fields.composite.dict import DictField
@@ -13,9 +15,9 @@ from earnorm.fields.composite.set import SetField
 from earnorm.fields.composite.tuple import TupleField
 
 __all__ = [
-    "DictField",
-    "EmbeddedField",
     "ListField",
     "SetField",
+    "DictField",
     "TupleField",
+    "EmbeddedField",
 ]

@@ -37,16 +37,16 @@ Examples:
 """
 
 import logging
-from typing import Any, Awaitable, Callable, Generic, Optional, Type, TypeVar
+from typing import Any, Awaitable, Callable, Dict, Generic, Optional, Type, TypeVar
 
-from earnorm.base.models.base import Model
+from earnorm.base import BaseModel
 from earnorm.events.core.event import Event
 from earnorm.events.core.exceptions import HandlerError
 from earnorm.events.handlers.base import EventHandler
 
 logger = logging.getLogger(__name__)
 
-M = TypeVar("M", bound=Model)
+M = TypeVar("M", bound=BaseModel)
 
 
 class ModelEventHandler(EventHandler, Generic[M]):
@@ -285,3 +285,99 @@ def model_events(
         return model_cls
 
     return decorator
+
+
+class UserHandler(EventHandler):
+    """Handle user events."""
+
+    @property
+    def id(self) -> str:
+        """Get handler ID."""
+        return "user_handler"
+
+    @property
+    def data(self) -> Dict[str, Any]:
+        """Get handler data."""
+        return {"type": "user"}
+
+    async def handle(self, event: Event) -> None:
+        """Handle user event.
+
+        Args:
+            event: Event to handle
+        """
+        # Handle user event
+        pass
+
+    async def cleanup(self) -> None:
+        """Cleanup handler resources."""
+        # No resources to cleanup
+        pass
+
+
+class CreateUserHandler(EventHandler):
+    """Handle user creation events."""
+
+    @property
+    def id(self) -> str:
+        """Get handler ID."""
+        return "create_user_handler"
+
+    @property
+    def data(self) -> Dict[str, Any]:
+        """Get handler data."""
+        return {"type": "user.create"}
+
+    async def handle(self, event: Event) -> None:
+        """Handle user creation event.
+
+        Args:
+            event: Event to handle
+        """
+        # Handle user creation
+        pass
+
+    async def cleanup(self) -> None:
+        """Cleanup handler resources."""
+        # No resources to cleanup
+        pass
+
+
+async def default_logger(event: Event) -> None:
+    """Default event logger.
+
+    Args:
+        event: Event to log
+    """
+    # Log event
+    pass
+
+
+async def default_tracker(event: Event) -> None:
+    """Default event tracker.
+
+    Args:
+        event: Event to track
+    """
+    # Track event
+    pass
+
+
+async def default_validator(event: Event) -> None:
+    """Default event validator.
+
+    Args:
+        event: Event to validate
+    """
+    # Validate event
+    pass
+
+
+async def default_cleanup(event: Event) -> None:
+    """Default event cleanup.
+
+    Args:
+        event: Event to cleanup
+    """
+    # Cleanup after event
+    pass

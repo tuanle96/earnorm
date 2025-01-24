@@ -33,3 +33,12 @@ class FactoryManager:
         """Initialize manager."""
         # No initialization needed for now
         pass
+
+    def unregister(self, name: str) -> None:
+        """Unregister factory.
+
+        Args:
+            name: Factory name
+        """
+        if name in self._factories:
+            del self._factories[name]

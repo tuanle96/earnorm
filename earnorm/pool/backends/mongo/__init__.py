@@ -13,7 +13,7 @@ Example:
     ... )
     >>> await pool.init()
     >>> conn = await pool.acquire()
-    >>> await conn.execute("find_one", "users", {"name": "John"})
+    >>> await conn.execute_typed("find_one", "users", {"name": "John"})
     {"_id": "...", "name": "John", "age": 30}
     >>> await pool.release(conn)
     >>> await pool.close()

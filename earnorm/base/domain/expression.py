@@ -1,80 +1,207 @@
-"""Domain expression implementation."""
+"""Domain expressions for query building.
 
-from typing import Any, List, Optional, Union
+This module provides domain expressions for building complex queries.
 
-from earnorm.base.domain.operators import DomainOperator
+Examples:
+    >>> expr = DomainExpression([
+    ...     ["age", ">", 18],
+    ...     "AND",
+    ...     ["status", "=", "active"]
+    ... ])
+    >>> mongo_query = expr.to_mongo()
+    >>> {"$and": [{"age": {"$gt": 18}}, {"status": "active"}]}
+"""
+
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any, List, Optional, TypeVar, Union, cast
+
+from earnorm.types import DomainOperator, JsonDict
+
+T = TypeVar("T", bound=Union["DomainNode", "DomainLeaf"])
+DomainItem = Union[List[Any], str]
+
+
+class LogicalOperator(str, Enum):
+    """Logical operators for combining domain expressions."""
+
+    AND = "AND"
+    OR = "OR"
+    NOT = "NOT"
+
+
+@dataclass
+class DomainLeaf:
+    """Leaf node in domain expression tree.
+
+    Examples:
+        >>> leaf = DomainLeaf("age", ">", 18)
+        >>> leaf.to_mongo()
+        {"age": {"$gt": 18}}
+    """
+
+    field: str
+    operator: DomainOperator
+    value: Any
+
+    def to_mongo(self) -> JsonDict:
+        """Convert to MongoDB query.
+
+        Returns:
+            MongoDB query dict
+        """
+        if self.operator == "=":
+            return {self.field: self.value}
+        elif self.operator == "!=":
+            return {self.field: {"$ne": self.value}}
+        elif self.operator == ">":
+            return {self.field: {"$gt": self.value}}
+        elif self.operator == ">=":
+            return {self.field: {"$gte": self.value}}
+        elif self.operator == "<":
+            return {self.field: {"$lt": self.value}}
+        elif self.operator == "<=":
+            return {self.field: {"$lte": self.value}}
+        elif self.operator == "in":
+            return {self.field: {"$in": self.value}}
+        elif self.operator == "not in":
+            return {self.field: {"$nin": self.value}}
+        elif self.operator == "like":
+            return {self.field: {"$regex": self.value, "$options": "i"}}
+        elif self.operator == "ilike":
+            return {self.field: {"$regex": self.value, "$options": "i"}}
+        elif self.operator == "not like":
+            return {self.field: {"$not": {"$regex": self.value, "$options": "i"}}}
+        elif self.operator == "not ilike":
+            return {self.field: {"$not": {"$regex": self.value, "$options": "i"}}}
+        else:
+            raise ValueError(f"Unsupported operator: {self.operator}")
+
+
+@dataclass
+class DomainNode:
+    """Node in domain expression tree.
+
+    Examples:
+        >>> node = DomainNode(
+        ...     LogicalOperator.AND,
+        ...     [
+        ...         DomainLeaf("age", ">", 18),
+        ...         DomainLeaf("status", "=", "active")
+        ...     ]
+        ... )
+        >>> node.to_mongo()
+        {"$and": [{"age": {"$gt": 18}}, {"status": "active"}]}
+    """
+
+    operator: LogicalOperator
+    children: List[Union["DomainNode", DomainLeaf]]
+
+    def to_mongo(self) -> JsonDict:
+        """Convert to MongoDB query.
+
+        Returns:
+            MongoDB query dict
+        """
+        if self.operator == LogicalOperator.AND:
+            return {"$and": [child.to_mongo() for child in self.children]}
+        elif self.operator == LogicalOperator.OR:
+            return {"$or": [child.to_mongo() for child in self.children]}
+        elif self.operator == LogicalOperator.NOT:
+            return {"$not": self.children[0].to_mongo()}
+        else:
+            raise ValueError(f"Unsupported operator: {self.operator}")
 
 
 class DomainExpression:
     """Domain expression for building complex queries.
 
-    This class represents a domain expression that can be:
-    - Combined with other expressions
-    - Converted to MongoDB queries
-    - Validated and normalized
-
     Examples:
-        >>> expr = DomainExpression([["age", ">", 18], DomainOperator.AND, ["active", "=", True]])
-        >>> expr.to_list()
-        [["age", ">", 18], "AND", ["active", "=", True]]
+        >>> expr = DomainExpression([
+        ...     ["age", ">", 18],
+        ...     "AND",
+        ...     ["status", "=", "active"]
+        ... ])
+        >>> expr.to_mongo()
+        {"$and": [{"age": {"$gt": 18}}, {"status": "active"}]}
     """
 
-    def __init__(self, domain: Optional[List[Any]] = None) -> None:
+    def __init__(self, domain: List[DomainItem]) -> None:
         """Initialize domain expression.
 
         Args:
-            domain: Initial domain expression
+            domain: Domain expression list
         """
-        self._domain = domain or []
+        self.domain = domain
+        self.root = self._parse(domain)
 
-    def and_(self, other: Union["DomainExpression", List[Any]]) -> "DomainExpression":
-        """Combine with AND operator.
+    def _parse(
+        self, domain: List[DomainItem], pos: int = 0
+    ) -> Optional[Union[DomainNode, DomainLeaf]]:
+        """Parse domain expression list into tree.
 
         Args:
-            other: Other domain expression
+            domain: Domain expression list
+            pos: Current position in list
 
         Returns:
-            New combined expression
+            Root node of expression tree
         """
-        if isinstance(other, DomainExpression):
-            other = other._domain
+        if not domain:
+            return None
 
-        return DomainExpression(self._domain + [DomainOperator.AND] + other)
+        # Parse first expression
+        if isinstance(domain[pos], list):
+            operator = domain[pos][1]
+            if not isinstance(operator, str):
+                raise ValueError(f"Invalid operator type: {type(operator)}")
+            left = DomainLeaf(
+                field=domain[pos][0],
+                operator=cast(DomainOperator, operator),  # Safe cast after type check
+                value=domain[pos][2],
+            )
+        else:
+            left = self._parse(domain, pos + 1)
 
-    def or_(self, other: Union["DomainExpression", List[Any]]) -> "DomainExpression":
-        """Combine with OR operator.
+        # Check if we're done
+        if pos + 1 >= len(domain):
+            return left
 
-        Args:
-            other: Other domain expression
+        # Parse operator
+        if not isinstance(domain[pos + 1], str):
+            return left
+
+        op = LogicalOperator(domain[pos + 1])
+
+        # Parse right side
+        if pos + 2 >= len(domain):
+            raise ValueError("Missing right operand")
+
+        if isinstance(domain[pos + 2], list):
+            operator = domain[pos + 2][1]
+            if not isinstance(operator, str):
+                raise ValueError(f"Invalid operator type: {type(operator)}")
+            right = DomainLeaf(
+                field=domain[pos + 2][0],
+                operator=cast(DomainOperator, operator),  # Safe cast after type check
+                value=domain[pos + 2][2],
+            )
+        else:
+            right = self._parse(domain, pos + 3)
+
+        # Create node with type-safe children
+        children = [left] if left else []
+        if right:
+            children.append(right)
+
+        return DomainNode(op, children)
+
+    def to_mongo(self) -> JsonDict:
+        """Convert to MongoDB query.
 
         Returns:
-            New combined expression
+            MongoDB query dict
         """
-        if isinstance(other, DomainExpression):
-            other = other._domain
-
-        return DomainExpression(self._domain + [DomainOperator.OR] + other)
-
-    def not_(self) -> "DomainExpression":
-        """Negate expression.
-
-        Returns:
-            New negated expression
-        """
-        return DomainExpression([DomainOperator.NOT] + self._domain)
-
-    def to_list(self) -> List[Any]:
-        """Convert to list representation.
-
-        Returns:
-            Domain expression as list
-        """
-        return self._domain
-
-    def __str__(self) -> str:
-        """Get string representation."""
-        return str(self._domain)
-
-    def __repr__(self) -> str:
-        """Get string representation."""
-        return self.__str__()
+        if not self.root:
+            return {}
+        return self.root.to_mongo()

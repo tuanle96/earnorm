@@ -16,12 +16,6 @@ class ConfigValidationError(ConfigError):
     pass
 
 
-class ConfigEncryptionError(ConfigError):
-    """Raised when encryption/decryption fails."""
-
-    pass
-
-
 class ConfigMigrationError(ConfigError):
     """Raised when config migration fails."""
 

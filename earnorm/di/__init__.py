@@ -2,7 +2,6 @@
 
 from typing import Any, Optional
 
-from earnorm.cache.lifecycle import CacheLifecycleManager
 from earnorm.di.container.base import Container
 from earnorm.di.container.factory import FactoryManager
 from earnorm.di.container.service import ServiceManager
@@ -50,20 +49,9 @@ async def init_container(**config: Any) -> None:
     # Get lifecycle manager
     lifecycle = await container.get("lifecycle_manager")
 
-    # Initialize cache if configured
-    cache_config = config.get("cache", {})
-    if cache_config and lifecycle is not None:
-        # Create cache lifecycle manager
-        cache_lifecycle = CacheLifecycleManager(cache_config)
-
-        # Register with container
-        container.register("cache_lifecycle_manager", cache_lifecycle)
-
-        # Initialize cache
-        await lifecycle.init(cache_lifecycle, "cache_lifecycle_manager")
-
 
 __all__ = [
+    "container",
     # Container
     "Container",
     "ServiceManager",
@@ -72,7 +60,6 @@ __all__ = [
     "LifecycleAware",
     "LifecycleEvents",
     "LifecycleManager",
-    "CacheLifecycleManager",
     # Resolver
     "DependencyResolver",
     "CircularDependencyError",

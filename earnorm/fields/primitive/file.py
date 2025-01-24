@@ -1,7 +1,10 @@
-"""File field type using GridFS.
+"""File field implementation.
 
-This field type provides support for storing and managing files using MongoDB's GridFS.
-It handles file upload, download, streaming, and metadata management with proper validation.
+This field type provides support for storing and managing files with proper validation.
+It supports multiple storage backends:
+- Local filesystem storage
+- MongoDB GridFS storage
+- Extensible for cloud storage
 
 Features:
 - File upload/download with streaming support
@@ -12,33 +15,29 @@ Features:
 - Async operations
 
 Examples:
-    Basic usage:
-    >>> class Document(BaseModel):
+    Local storage:
+    >>> class Document(Model):
     ...     title = StringField()
-    ...     file = FileField(allowed_types=["application/pdf"])
+    ...     file = FileField(
+    ...         storage="local",
+    ...         upload_to="uploads/%Y/%m/%d/",
+    ...         allowed_types=["application/pdf"],
+    ...         max_size=10 * 1024 * 1024  # 10MB
+    ...     )
     ...
     >>> # Upload file
     >>> doc = Document(title="Report")
-    >>> with open("report.pdf", "rb") as f:
-    ...     await doc.file.save(f, filename="report.pdf")
-    ...
-    >>> # Download file
-    >>> with open("downloaded.pdf", "wb") as f:
-    ...     await doc.file.download(f)
-    ...
+    >>> await doc.file.save("report.pdf")
     >>> # Get file info
     >>> info = await doc.file.get_info()
-    >>> print(info.filename)
-    'report.pdf'
-    >>> print(info.content_type)
-    'application/pdf'
-    >>> print(info.length)
-    12345
+    >>> print(info.path)
+    'uploads/2024/03/21/report.pdf'
 
-    With size limit and type validation:
-    >>> class ImageDocument(BaseModel):
+    GridFS storage:
+    >>> class ImageDocument(Model):
     ...     name = StringField()
     ...     image = FileField(
+    ...         storage="gridfs",
     ...         allowed_types=["image/jpeg", "image/png"],
     ...         max_size=5 * 1024 * 1024  # 5MB
     ...     )
@@ -47,27 +46,13 @@ Examples:
     >>> doc = ImageDocument(name="Profile")
     >>> await doc.image.save(
     ...     "profile.jpg",
-    ...     content_type="image/jpeg",
-    ...     author="John",
-    ...     tags=["profile", "avatar"]
+    ...     metadata={"author": "John", "tags": ["profile", "avatar"]}
     ... )
-
-    Streaming large files:
-    >>> class VideoDocument(BaseModel):
-    ...     title = StringField()
-    ...     video = FileField(
-    ...         allowed_types=["video/mp4"],
-    ...         max_size=1024 * 1024 * 1024  # 1GB
-    ...     )
-    ...
-    >>> # Download with custom chunk size
-    >>> with open("video.mp4", "wb") as f:
-    ...     await doc.video.download(f, chunk_size=1024 * 1024)  # 1MB chunks
 
 Best Practices:
 1. Always set appropriate max_size to prevent large file uploads
 2. Use allowed_types to restrict file types for security
-3. Handle GridFSError for all file operations
+3. Handle storage-specific errors appropriately
 4. Use streaming for large files
 5. Clean up unused files by calling delete()
 6. Add relevant metadata during upload
@@ -75,171 +60,195 @@ Best Practices:
 
 import io
 import mimetypes
+import os
+from datetime import datetime
+from enum import Enum
 from pathlib import Path
-from typing import Any, BinaryIO, Dict, List, Optional, Type, Union
+from typing import Any, BinaryIO, Dict, Optional, Set, Tuple, Union, cast
 
 from bson import ObjectId
-from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorGridFSBucket
-from pymongo.errors import PyMongoError
+from motor.motor_asyncio import AsyncIOMotorGridFSBucket
 
-from earnorm.fields.base import Field
-from earnorm.validators.types import ValidatorFunc
+from earnorm.fields.base import Field, ValidationError
 
 
-class GridFSError(PyMongoError):
-    """GridFS operation error.
+class StorageType(str, Enum):
+    """Storage backend types."""
 
-    This exception is raised when a GridFS operation fails, such as:
-    - File upload fails
-    - File download fails
-    - File deletion fails
-    - File info retrieval fails
+    LOCAL = "local"  # Local filesystem
+    GRIDFS = "gridfs"  # MongoDB GridFS
+
+
+class FileInfo:
+    """File information container.
+
+    Attributes:
+        filename: Original filename
+        path: Storage path or ID
+        content_type: MIME type
+        size: File size in bytes
+        created_at: Creation timestamp
+        metadata: Additional metadata
     """
 
+    def __init__(
+        self,
+        filename: str,
+        path: Union[str, ObjectId],
+        content_type: Optional[str] = None,
+        size: Optional[int] = None,
+        created_at: Optional[datetime] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self.filename = filename
+        self.path = path
+        self.content_type = content_type
+        self.size = size
+        self.created_at = created_at or datetime.now()
+        self.metadata = metadata or {}
 
-class FileField(Field[ObjectId]):
-    """File field using GridFS.
 
-    Examples:
-        >>> class Document(BaseModel):
-        ...     title = StringField()
-        ...     file = FileField(allowed_types=["application/pdf"])
-        ...
-        >>> # Upload file
-        >>> doc = Document(title="Report")
-        >>> with open("report.pdf", "rb") as f:
-        ...     await doc.file.save(f, filename="report.pdf")
-        ...
-        >>> # Download file
-        >>> with open("downloaded.pdf", "wb") as f:
-        ...     await doc.file.download(f)
-        ...
-        >>> # Get file info
-        >>> info = await doc.file.get_info()
-        >>> print(info.filename)
-        'report.pdf'
-        >>> print(info.content_type)
-        'application/pdf'
-        >>> print(info.length)
-        12345
+class FileField(Field[Union[str, ObjectId]]):
+    """Field for file storage with multiple backend support.
+
+    This field handles:
+    - File validation and storage
+    - Multiple storage backends
+    - Size and type validation
+    - Metadata management
+    - Streaming support
+
+    Attributes:
+        storage: Storage backend type ('local' or 'gridfs')
+        upload_to: Upload directory template (for local storage)
+        allowed_types: Set of allowed MIME types
+        max_size: Maximum file size in bytes
+        required: Whether field is required
+        unique: Whether field value must be unique
+        default: Default value
+
+    Raises:
+        ValidationError: With codes:
+            - invalid_type: Value is not a valid file type
+            - invalid_size: File exceeds maximum size
+            - invalid_content_type: File type not allowed
+            - file_not_found: File does not exist
+            - storage_error: Storage backend error
     """
 
     def __init__(
         self,
         *,
+        storage: Union[str, StorageType] = StorageType.LOCAL,
+        upload_to: str = "",
+        allowed_types: Optional[Set[str]] = None,
+        max_size: Optional[int] = None,
         required: bool = False,
         unique: bool = False,
-        default: Any = None,
-        validators: Optional[List[ValidatorFunc]] = None,
-        allowed_types: Optional[List[str]] = None,
-        max_size: Optional[int] = None,  # in bytes
-        **kwargs: Any,
+        **options: Any,
     ) -> None:
-        """Initialize field.
+        """Initialize file field.
 
         Args:
+            storage: Storage backend type ('local' or 'gridfs')
+            upload_to: Upload directory template (for local storage)
+            allowed_types: Set of allowed MIME types
+            max_size: Maximum file size in bytes
             required: Whether field is required
             unique: Whether field value must be unique
-            default: Default value
-            validators: List of validator functions
-            allowed_types: List of allowed MIME types
-            max_size: Maximum file size in bytes
+            **options: Additional field options
         """
         super().__init__(
             required=required,
             unique=unique,
-            default=default,
-            validators=validators,
-            **kwargs,
+            **options,
         )
+        self.storage = StorageType(storage)
+        self.upload_to = upload_to
         self.allowed_types = allowed_types
         self.max_size = max_size
         self._fs: Optional[AsyncIOMotorGridFSBucket] = None
-        self._value: Optional[ObjectId] = None
-        self._files: Optional[AsyncIOMotorCollection[Dict[str, Any]]] = None
+        self._value: Optional[Union[str, ObjectId]] = None
 
-    def _get_field_type(self) -> Type[Any]:
-        """Get field type."""
-        return ObjectId
+    async def validate(self, value: Any) -> None:
+        """Validate file value.
 
-    async def _get_fs(self) -> AsyncIOMotorGridFSBucket:
-        """Get GridFS bucket."""
-        if self._fs is None:
-            from earnorm.di import container
+        Validates:
+        - Value is valid file path or ID
+        - File exists in storage
+        - Not None if required
 
-            db = await container.get("db")
-            self._fs = AsyncIOMotorGridFSBucket(db)
-            # Get files collection
-            self._files = AsyncIOMotorCollection(db, "fs.files")
-        return self._fs
+        Args:
+            value: Value to validate
 
-    def convert(self, value: Any) -> ObjectId:
-        """Convert value to ObjectId."""
-        if value is None:
-            return ObjectId()
-        if isinstance(value, ObjectId):
-            return value
-        return ObjectId(str(value))
+        Raises:
+            ValidationError: With codes:
+                - invalid_type: Value is not a valid file type
+                - file_not_found: File does not exist
+                - required: Value is required but None
+        """
+        await super().validate(value)
 
-    def to_mongo(self, value: Optional[ObjectId]) -> Optional[ObjectId]:
-        """Convert Python ObjectId to MongoDB ObjectId."""
-        return value
-
-    def from_mongo(self, value: Any) -> ObjectId:
-        """Convert MongoDB ObjectId to Python ObjectId."""
-        if value is None:
-            return ObjectId()
-        if isinstance(value, ObjectId):
-            return value
-        return ObjectId(str(value))
+        if value is not None:
+            if self.storage == StorageType.LOCAL:
+                if not isinstance(value, (str, Path)):
+                    raise ValidationError(
+                        message=f"Value must be string or Path, got {type(value).__name__}",
+                        field_name=self.name,
+                        code="invalid_type",
+                    )
+                path = Path(value)
+                if not path.exists():
+                    raise ValidationError(
+                        message=f"File {path} does not exist",
+                        field_name=self.name,
+                        code="file_not_found",
+                    )
+            else:  # GridFS
+                if not isinstance(value, (str, ObjectId)):
+                    raise ValidationError(
+                        message=f"Value must be string or ObjectId, got {type(value).__name__}",
+                        field_name=self.name,
+                        code="invalid_type",
+                    )
+                # GridFS existence check is done during operations
 
     async def save(
         self,
         file: Union[BinaryIO, bytes, str, Path],
         filename: Optional[str] = None,
         content_type: Optional[str] = None,
-        **metadata: Any,
-    ) -> ObjectId:
-        """Save file to GridFS.
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Union[str, ObjectId]:
+        """Save file to storage.
 
         Args:
             file: File to save (file object, bytes, string path or Path object)
             filename: Original filename
             content_type: MIME type of file
-            **metadata: Additional metadata
+            metadata: Additional metadata
 
         Returns:
-            ObjectId of saved file
+            File path (local) or ID (GridFS)
 
         Raises:
-            ValueError: If file type is not allowed or file is too large
-            GridFSError: If error occurs while saving file
+            ValidationError: With codes:
+                - invalid_size: File exceeds maximum size
+                - invalid_content_type: File type not allowed
+                - storage_error: Storage backend error
         """
-        fs = await self._get_fs()
+        # Convert file to bytes and validate
+        data = await self._read_file(file)
+        filename = filename or self._get_filename(file)
+        content_type = content_type or self._guess_content_type(filename)
 
-        # Convert file to bytes
-        if isinstance(file, (str, Path)):
-            path = Path(file)
-            if not path.exists():
-                raise ValueError(f"File not found: {path}")
-            with open(path, "rb") as f:
-                data = f.read()
-            filename = filename or str(path.name)
-        elif isinstance(file, bytes):
-            data = file
-        else:
-            data = file.read()
-
-        # Validate file size
+        # Validate size
         if self.max_size and len(data) > self.max_size:
-            raise ValueError(
-                f"File size ({len(data)} bytes) exceeds maximum allowed size "
-                f"({self.max_size} bytes)"
+            raise ValidationError(
+                message=f"File size {len(data)} bytes exceeds maximum {self.max_size} bytes",
+                field_name=self.name,
+                code="invalid_size",
             )
-
-        # Get content type
-        if content_type is None and filename:
-            content_type, _ = mimetypes.guess_type(filename)
 
         # Validate content type
         if (
@@ -247,102 +256,204 @@ class FileField(Field[ObjectId]):
             and self.allowed_types
             and content_type not in self.allowed_types
         ):
-            raise ValueError(
-                f"File type {content_type} not allowed. "
-                f"Allowed types: {', '.join(self.allowed_types)}"
+            raise ValidationError(
+                message=f"Content type {content_type} not allowed. Allowed types: {', '.join(sorted(self.allowed_types))}",
+                field_name=self.name,
+                code="invalid_content_type",
             )
 
         try:
-            file_id = await fs.upload_from_stream(
-                filename=filename or "unnamed",
-                source=data,
-                metadata={
-                    "content_type": content_type,
-                    **metadata,
-                },
-            )
-            return file_id
+            if self.storage == StorageType.LOCAL:
+                # Save to local filesystem
+                path = self._get_upload_path(filename)
+                os.makedirs(path.parent, exist_ok=True)
+                with open(path, "wb") as f:
+                    f.write(data)
+                return str(path)
+            else:
+                # Save to GridFS
+                fs = await self._get_fs()
+                file_id = await fs.upload_from_stream(
+                    filename=filename,
+                    source=data,
+                    metadata={
+                        "content_type": content_type,
+                        **(metadata or {}),
+                    },
+                )
+                return file_id
         except Exception as e:
-            raise GridFSError(f"Error saving file: {e}") from e
+            raise ValidationError(
+                message=f"Storage error: {str(e)}",
+                field_name=self.name,
+                code="storage_error",
+            )
 
-    async def download(
+    async def read(
         self,
-        file: Optional[Union[BinaryIO, str, Path]] = None,
-        chunk_size: int = 255 * 1024,  # 255KB
+        chunk_size: int = 256 * 1024,  # 256KB
     ) -> Optional[bytes]:
-        """Download file from GridFS.
+        """Read file from storage.
 
         Args:
-            file: File object or path to save to (if None, returns bytes)
             chunk_size: Size of chunks to read
 
         Returns:
-            File contents as bytes if no file object provided
+            File contents as bytes or None if file not found
 
         Raises:
-            GridFSError: If error occurs while downloading file
+            ValidationError: With code "storage_error" if read fails
         """
-        fs = await self._get_fs()
-        file_id = self.convert(self._value)
-
-        try:
-            if file is None:
-                # Return bytes
-                buffer = io.BytesIO()
-                await fs.download_to_stream(file_id, buffer)
-                return buffer.getvalue()
-
-            # Save to file
-            if isinstance(file, (str, Path)):
-                path = Path(file)
-                with open(path, "wb") as f:
-                    await fs.download_to_stream(file_id, f)
-            else:
-                await fs.download_to_stream(file_id, file)
+        if self._value is None:
             return None
 
+        try:
+            if self.storage == StorageType.LOCAL:
+                with open(str(self._value), "rb") as f:
+                    return f.read()
+            else:
+                fs = await self._get_fs()
+                buffer = io.BytesIO()
+                await fs.download_to_stream(ObjectId(self._value), buffer)
+                return buffer.getvalue()
         except Exception as e:
-            raise GridFSError(f"Error downloading file: {e}") from e
+            raise ValidationError(
+                message=f"Storage error: {str(e)}",
+                field_name=self.name,
+                code="storage_error",
+            )
 
     async def delete(self) -> None:
-        """Delete file from GridFS.
+        """Delete file from storage.
 
         Raises:
-            GridFSError: If error occurs while deleting file
+            ValidationError: With code "storage_error" if deletion fails
         """
-        fs = await self._get_fs()
-        file_id = self.convert(self._value)
+        if self._value is None:
+            return
 
         try:
-            await fs.delete(file_id)
+            if self.storage == StorageType.LOCAL:
+                os.unlink(str(self._value))
+            else:
+                fs = await self._get_fs()
+                await fs.delete(ObjectId(self._value))
         except Exception as e:
-            raise GridFSError(f"Error deleting file: {e}") from e
+            raise ValidationError(
+                message=f"Storage error: {str(e)}",
+                field_name=self.name,
+                code="storage_error",
+            )
 
-    async def get_info(self) -> Optional[Dict[str, Any]]:
+    async def get_info(self) -> Optional[FileInfo]:
         """Get file information.
 
         Returns:
-            Dict containing file information including:
-            - filename: Original filename
-            - content_type: MIME type
-            - length: File size in bytes
-            - upload_date: Upload timestamp
-            - metadata: Additional metadata
-            Or None if file not found
+            FileInfo object or None if file not found
 
         Raises:
-            GridFSError: If error occurs while getting file info
+            ValidationError: With code "storage_error" if info retrieval fails
         """
-        if self._files is None:
-            _ = await self._get_fs()
+        if self._value is None:
+            return None
 
-        file_id = self.convert(self._value)
         try:
-            if self._files is None:
-                return None
-            file_info: Optional[Dict[str, Any]] = await self._files.find_one(
-                {"_id": file_id}
-            )
-            return file_info
+            if self.storage == StorageType.LOCAL:
+                path = Path(str(self._value))
+                guess_result = cast(
+                    Tuple[Optional[str], Optional[str]],
+                    mimetypes.guess_type(str(path)),  # type: ignore
+                )
+                content_type = guess_result[0]
+                return FileInfo(
+                    filename=path.name,
+                    path=str(path),
+                    content_type=content_type,
+                    size=path.stat().st_size,
+                    created_at=datetime.fromtimestamp(path.stat().st_ctime),
+                )
+            else:
+                fs = await self._get_fs()
+                grid_out = await fs.open_download_stream(ObjectId(self._value))
+                if grid_out.filename is None:
+                    raise ValidationError(
+                        message="File has no filename",
+                        field_name=self.name,
+                        code="invalid_file",
+                    )
+                metadata = grid_out.metadata or {}
+                return FileInfo(
+                    filename=grid_out.filename,
+                    path=grid_out._id,
+                    content_type=metadata.get("content_type"),
+                    size=grid_out.length,
+                    created_at=grid_out.upload_date,
+                    metadata=dict(metadata),
+                )
         except Exception as e:
-            raise GridFSError(f"Error getting file info: {e}") from e
+            raise ValidationError(
+                message=f"Storage error: {str(e)}",
+                field_name=self.name,
+                code="storage_error",
+            )
+
+    async def _get_fs(self) -> AsyncIOMotorGridFSBucket:
+        """Get GridFS bucket for MongoDB storage."""
+        if self._fs is None:
+            from earnorm.di import container
+
+            db = await container.get("db")
+            self._fs = AsyncIOMotorGridFSBucket(db)
+        return self._fs
+
+    async def _read_file(self, file: Union[BinaryIO, bytes, str, Path]) -> bytes:
+        """Read file content to bytes."""
+        if isinstance(file, (str, Path)):
+            path = Path(file)
+            if not path.exists():
+                raise ValidationError(
+                    message=f"File {path} does not exist",
+                    field_name=self.name,
+                    code="file_not_found",
+                )
+            with open(path, "rb") as f:
+                return f.read()
+        elif isinstance(file, bytes):
+            return file
+        else:
+            return file.read()
+
+    def _get_filename(self, file: Union[BinaryIO, bytes, str, Path]) -> str:
+        """Get original filename from file object."""
+        if isinstance(file, (str, Path)):
+            return Path(file).name
+        elif isinstance(file, bytes):
+            return "unnamed"
+        elif hasattr(file, "name"):
+            name = getattr(file, "name", None)
+            if isinstance(name, str):
+                return Path(name).name
+        return "unnamed"
+
+    def _guess_content_type(self, filename: str) -> Optional[str]:
+        """Guess MIME type from filename.
+
+        Args:
+            filename: Name of file to check
+
+        Returns:
+            MIME type string or None if cannot be determined
+        """
+        guess_result = cast(
+            Tuple[Optional[str], Optional[str]], mimetypes.guess_type(filename)  # type: ignore
+        )
+        return guess_result[0]
+
+    def _get_upload_path(self, filename: str) -> Path:
+        """Get upload path for local storage."""
+        if not self.upload_to:
+            return Path(filename)
+
+        # Format upload path with date placeholders
+        upload_path = datetime.now().strftime(self.upload_to)
+        return Path(upload_path) / filename

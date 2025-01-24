@@ -1,138 +1,229 @@
-"""Tuple field type."""
+"""Tuple field implementation.
 
-from typing import Any, List, Optional, Tuple, Type, TypeVar
+This module provides tuple field types for handling fixed-length tuples of values.
+It supports:
+- Fixed-length tuples with different field types
+- Type validation for each position
+- Value conversion for each position
+- JSON array parsing
+- Database conversion
 
-from earnorm.fields.base import Field
-from earnorm.validators.types import ValidatorFunc
+Examples:
+    >>> class Point(Model):
+    ...     # (x, y) coordinates
+    ...     position = TupleField([FloatField(), FloatField()])
+    ...     # RGB color values (0-255)
+    ...     color = TupleField([
+    ...         IntegerField(min_value=0, max_value=255),
+    ...         IntegerField(min_value=0, max_value=255),
+    ...         IntegerField(min_value=0, max_value=255),
+    ...     ])
+    ...     # Start and end dates
+    ...     date_range = TupleField([DateField(), DateField()])
+"""
 
-T = TypeVar("T")
+from typing import Any, List, Optional, Sequence, Tuple, TypeVar, cast
+
+from earnorm.fields.base import Field, ValidationError
+
+T = TypeVar("T")  # Type of tuple items
 
 
-class TupleField(Field[Tuple[T, ...]]):
-    """Tuple field.
+class TupleField(Field[Tuple[Any, ...]]):
+    """Field for fixed-length tuples.
 
-    Examples:
-        >>> coordinates = TupleField(FloatField(), length=2)
-        >>> coordinates.convert([1.0, 2.0])
-        (1.0, 2.0)
-        >>> coordinates.convert((1.0, 2.0))
-        (1.0, 2.0)
-        >>> coordinates.convert(None)
-        ()
-
-        # With validation
-        >>> point = TupleField(IntegerField(), length=3)
-        >>> point.convert([1, 2, 3])  # Valid
-        (1, 2, 3)
-        >>> point.convert([1, 2])  # Will raise ValidationError
-        ValidationError: Tuple must have exactly 3 items
+    Attributes:
+        fields: List of fields for each position
     """
 
     def __init__(
         self,
-        field: Field[T],
-        *,
-        required: bool = False,
-        unique: bool = False,
-        default: Any = None,
-        validators: Optional[List[ValidatorFunc]] = None,
-        length: Optional[int] = None,
-        **kwargs: Any,
+        fields: Sequence[Field[Any]],
+        **options: Any,
     ) -> None:
-        """Initialize field.
+        """Initialize tuple field.
 
         Args:
-            field: Field type for tuple items
-            required: Whether field is required
-            unique: Whether field value must be unique
-            default: Default value
-            validators: List of validator functions
-            length: Required tuple length
+            fields: List of fields for each position
+            **options: Additional field options
         """
-        super().__init__(
-            required=required,
-            unique=unique,
-            default=default,
-            validators=validators,
-            **kwargs,
+        super().__init__(**options)
+        self.fields = list(fields)  # Convert to list for indexing
+
+        # Update backend options
+        self.backend_options.update(
+            {
+                "mongodb": {
+                    "type": "array",
+                },
+                "postgres": {
+                    "type": "JSONB",
+                },
+                "mysql": {
+                    "type": "JSON",
+                },
+            }
         )
-        self.field = field
-        self.length = length
-        if length is not None:
-            from earnorm.validators import validate_length
 
-            if not hasattr(self._metadata, "validators"):
-                self._metadata.validators = []  # type: ignore
-            self._metadata.validators.append(validate_length(length, length))  # type: ignore
+        # Set up field names
+        for i, field in enumerate(self.fields):
+            field.name = f"{self.name}[{i}]"
+            field.required = True  # Tuple items can't be None
 
-    def _get_field_type(self) -> Type[Tuple[T, ...]]:
-        """Get field type.
+    async def validate(self, value: Any) -> None:
+        """Validate tuple value.
 
-        Returns:
-            Type object representing tuple type
+        Args:
+            value: Value to validate
+
+        Raises:
+            ValidationError: If validation fails
         """
-        return tuple  # type: ignore
+        await super().validate(value)
 
-    def convert(self, value: Any) -> Tuple[T, ...]:
+        if value is not None:
+            if not isinstance(value, (tuple, list)):
+                raise ValidationError("Value must be a tuple or list", self.name)
+
+            value_seq = cast(Sequence[Any], value)
+            if len(value_seq) != len(self.fields):
+                raise ValidationError(
+                    f"Expected {len(self.fields)} items, got {len(value_seq)}",
+                    self.name,
+                )
+
+            # Validate each item
+            for i, (item, field) in enumerate(zip(value_seq, self.fields)):
+                try:
+                    await field.validate(item)
+                except ValidationError as e:
+                    raise ValidationError(
+                        f"Invalid item at index {i}: {str(e)}",
+                        self.name,
+                    )
+
+    async def convert(self, value: Any) -> Optional[Tuple[Any, ...]]:
         """Convert value to tuple.
 
         Args:
             value: Value to convert
 
         Returns:
-            Converted tuple value or empty tuple if value is None
+            Tuple value
 
-        Examples:
-            >>> field = TupleField(IntegerField())
-            >>> field.convert([1, 2, 3])
-            (1, 2, 3)
-            >>> field.convert(None)
-            ()
+        Raises:
+            ValidationError: If conversion fails
         """
         if value is None:
-            return tuple()
-        if isinstance(value, (list, tuple)):
-            return tuple(self.field.convert(item) for item in value)  # type: ignore
-        return (self.field.convert(value),)  # type: ignore
+            return self.default
 
-    def to_mongo(self, value: Optional[Tuple[T, ...]]) -> Optional[List[Any]]:
-        """Convert Python tuple to MongoDB list.
+        try:
+            if isinstance(value, str):
+                # Try to parse as JSON array
+                import json
+
+                try:
+                    value = json.loads(value)
+                    if not isinstance(value, list):
+                        raise ValidationError(
+                            "JSON value must be an array",
+                            self.name,
+                        )
+                except json.JSONDecodeError as e:
+                    raise ValidationError(
+                        f"Invalid JSON array: {str(e)}",
+                        self.name,
+                    )
+            elif not isinstance(value, (tuple, list)):
+                raise ValidationError(
+                    f"Cannot convert {type(value).__name__} to tuple",
+                    self.name,
+                )
+
+            # Convert each item
+            value_seq = cast(Sequence[Any], value)
+            if len(value_seq) != len(self.fields):
+                raise ValidationError(
+                    f"Expected {len(self.fields)} items, got {len(value_seq)}",
+                    self.name,
+                )
+
+            result: List[Any] = []
+            for i, (item, field) in enumerate(zip(value_seq, self.fields)):
+                try:
+                    converted = await field.convert(item)
+                    if converted is None:
+                        raise ValidationError(
+                            "Tuple items cannot be None",
+                            self.name,
+                        )
+                    result.append(converted)
+                except ValidationError as e:
+                    raise ValidationError(
+                        f"Failed to convert item at index {i}: {str(e)}",
+                        self.name,
+                    )
+
+            return tuple(result)
+        except Exception as e:
+            raise ValidationError(str(e), self.name)
+
+    async def to_db(
+        self, value: Optional[Tuple[Any, ...]], backend: str
+    ) -> Optional[List[Any]]:
+        """Convert tuple to database format.
 
         Args:
-            value: Tuple value to convert
+            value: Tuple value
+            backend: Database backend type
 
         Returns:
-            MongoDB list value or None if value is None
-
-        Examples:
-            >>> field = TupleField(IntegerField())
-            >>> field.to_mongo((1, 2, 3))
-            [1, 2, 3]
-            >>> field.to_mongo(None)
-            None
+            Database value
         """
         if value is None:
             return None
-        return [self.field.to_mongo(item) for item in value]  # type: ignore
 
-    def from_mongo(self, value: Any) -> Tuple[T, ...]:
-        """Convert MongoDB list to Python tuple.
+        result: List[Any] = []
+        for item, field in zip(value, self.fields):
+            db_value = await field.to_db(item, backend)
+            result.append(db_value)
+
+        return result
+
+    async def from_db(self, value: Any, backend: str) -> Optional[Tuple[Any, ...]]:
+        """Convert database value to tuple.
 
         Args:
-            value: MongoDB value to convert
+            value: Database value
+            backend: Database backend type
 
         Returns:
-            Python tuple value or empty tuple if value is None
-
-        Examples:
-            >>> field = TupleField(IntegerField())
-            >>> field.from_mongo([1, 2, 3])
-            (1, 2, 3)
-            >>> field.from_mongo(None)
-            ()
+            Tuple value
         """
         if value is None:
-            return tuple()
-        if isinstance(value, (list, tuple)):
-            return tuple(self.field.from_mongo(item) for item in value)  # type: ignore
-        return (self.field.from_mongo(value),)  # type: ignore
+            return None
+
+        if not isinstance(value, list):
+            raise ValidationError(
+                f"Expected list from database, got {type(value).__name__}",
+                self.name,
+            )
+
+        value_list = cast(List[Any], value)
+        if len(value_list) != len(self.fields):
+            raise ValidationError(
+                f"Expected {len(self.fields)} items, got {len(value_list)}",
+                self.name,
+            )
+
+        result: List[Any] = []
+        for item, field in zip(value_list, self.fields):
+            converted = await field.from_db(item, backend)
+            if converted is None:
+                raise ValidationError(
+                    "Tuple items cannot be None",
+                    self.name,
+                )
+            result.append(converted)
+
+        return tuple(result)

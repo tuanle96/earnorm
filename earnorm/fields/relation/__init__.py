@@ -1,15 +1,20 @@
-"""Relation field types."""
+"""Relation field types.
 
-from earnorm.fields.relation.base import BaseRelationField
-from earnorm.fields.relation.many2many import Many2manyField
-from earnorm.fields.relation.many2one import Many2oneField
-from earnorm.fields.relation.one2many import One2manyField
-from earnorm.fields.relation.reference import ReferenceField
+This module provides field types for database relationships:
+- OneToOneField: One-to-one relationship
+- OneToManyField: One-to-many relationship
+- ManyToOneField: Many-to-one relationship
+- ManyToManyField: Many-to-many relationship
+"""
+
+from earnorm.fields.relation.many_to_many import ManyToManyField
+from earnorm.fields.relation.many_to_one import ManyToOneField
+from earnorm.fields.relation.one_to_many import OneToManyField
+from earnorm.fields.relation.one_to_one import OneToOneField
 
 __all__ = [
-    "BaseRelationField",
-    "ReferenceField",
-    "Many2oneField",
-    "One2manyField",
-    "Many2manyField",
+    "OneToOneField",
+    "OneToManyField",
+    "ManyToOneField",
+    "ManyToManyField",
 ]

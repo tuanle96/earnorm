@@ -42,7 +42,6 @@ See Also:
     - cached: Decorator for caching function results
 """
 
-from earnorm.cache.backends.base import CacheBackend
 from earnorm.cache.backends.redis import RedisBackend
 from earnorm.cache.core.exceptions import (
     CacheError,
@@ -55,11 +54,9 @@ from earnorm.cache.core.lock import DistributedLock
 from earnorm.cache.core.manager import CacheManager
 from earnorm.cache.core.metrics import CacheMetrics, MetricsCollector
 from earnorm.cache.decorators.cached import cached
-from earnorm.cache.lifecycle import CacheLifecycleManager
 
 __all__ = [
     # Backends
-    "CacheBackend",
     "RedisBackend",
     # Core
     "CacheManager",
@@ -74,6 +71,4 @@ __all__ = [
     "ValidationError",
     # Decorators
     "cached",
-    # Lifecycle
-    "CacheLifecycleManager",
 ]

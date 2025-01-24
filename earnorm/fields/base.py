@@ -1,135 +1,88 @@
-"""Base field types for EarnORM.
+"""Base field implementation.
 
-This module provides the base field class that all field types inherit from.
-It implements the core functionality for field validation, conversion, and serialization.
+This module provides the base field class for all field types.
 """
 
-from abc import abstractmethod
-from typing import Any, Callable, Generic, List, Optional, Type, TypeVar, Union
+from typing import Any, Dict, Generic, List, Optional, TypeVar, Union, cast
 
-from earnorm.base.fields.metadata import FieldMetadata
-from earnorm.di import container
-from earnorm.types import FieldProtocol, ModelInterface
-from earnorm.validators import ValidationError
+from earnorm.fields.types import ValidatorFunc
 
-T = TypeVar("T")
-M = TypeVar("M", bound=ModelInterface)
-ValidatorFunc = Callable[[Any], None]
+T = TypeVar("T")  # Value type
 
 
-class Field(FieldProtocol, Generic[T]):
-    """Base field class.
-
-    This class implements the FieldProtocol and provides the core functionality
-    for all field types. It handles field validation, conversion between Python
-    and MongoDB types, and serialization.
-
-    Type Parameters:
-        T: The Python type this field represents
+class ValidationError(Exception):
+    """Validation error with field name and code.
 
     Attributes:
-        name: Name of the field
-        required: Whether the field is required
-        unique: Whether the field value must be unique
-        default: Default value for the field
-        _metadata: Field metadata containing configuration
-        _cache_manager: Cache manager for caching field operations
+        message: Error message
+        field_name: Name of field that failed validation
+        code: Error code for identifying error type
     """
 
-    name: str = ""
-    required: bool = False
-    unique: bool = False
-    default: Any = None
+    def __init__(
+        self,
+        message: str,
+        field_name: str,
+        *,
+        code: Optional[str] = None,
+    ) -> None:
+        """Initialize validation error.
+
+        Args:
+            message: Error message
+            field_name: Field name
+            code: Error code for identifying error type
+        """
+        self.message = message
+        self.field_name = field_name
+        self.code = code or "validation_error"
+        super().__init__(f"{field_name}: {message} (code={self.code})")
+
+
+class Field(Generic[T]):
+    """Base field class.
+
+    Attributes:
+        name: Field name
+        required: Whether field is required
+        readonly: Whether field is readonly
+        default: Default value
+        validators: List of validator functions
+        backend_options: Backend-specific options
+    """
 
     def __init__(
         self,
         *,
+        name: Optional[str] = None,
         required: bool = False,
-        unique: bool = False,
-        default: Any = None,
+        readonly: bool = False,
+        default: Optional[T] = None,
         validators: Optional[List[ValidatorFunc]] = None,
-        index: bool = False,
-        description: Optional[str] = None,
-        **kwargs: Any,
+        backend_options: Optional[Dict[str, Dict[str, Any]]] = None,
+        **options: Any,
     ) -> None:
         """Initialize field.
 
         Args:
-            required: Whether the field is required
-            unique: Whether the field value must be unique
-            default: Default value for the field
+            name: Field name
+            required: Whether field is required
+            readonly: Whether field is readonly
+            default: Default value
             validators: List of validator functions
-            index: Whether to create an index for this field
-            description: Field description
-            **kwargs: Additional field options
-
-        Examples:
-            >>> field = Field(required=True, unique=True)
-            >>> field = Field(default=42, validators=[validate_positive])
-            >>> field = Field(index=True, description="User's age")
+            backend_options: Backend-specific options
+            **options: Additional options
         """
-        self.name = ""
+        self.name = name or ""
         self.required = required
-        self.unique = unique
+        self.readonly = readonly
         self.default = default
-        self._metadata = FieldMetadata(
-            field=self,
-            name=self.name,
-            required=required,
-            unique=unique,
-            default=default,
-        )
-        self._cache_manager = container.get("cache_lifecycle_manager")
+        self.validators = validators or []
+        self.backend_options = backend_options or {}
+        self.options = options
+        self._value: Optional[T] = None
 
-    def _get_field_type(self) -> Type[T]:
-        """Get field type.
-
-        Returns:
-            Type object representing this field's type T
-
-        Examples:
-            >>> field = IntField()
-            >>> field._get_field_type()
-            <class 'int'>
-        """
-        return type(Any)  # type: ignore
-
-    @property
-    def metadata(self) -> FieldMetadata:
-        """Get field metadata.
-
-        Returns:
-            FieldMetadata object containing field configuration
-
-        Examples:
-            >>> field = Field(required=True)
-            >>> field.metadata.required
-            True
-        """
-        return self._metadata
-
-    def validate(self, value: Any) -> None:
-        """Validate field value.
-
-        Args:
-            value: Value to validate
-
-        Raises:
-            ValidationError: If validation fails
-
-        Examples:
-            >>> field = Field(validators=[lambda x: x > 0])
-            >>> field.validate(42)  # OK
-            >>> field.validate(-1)  # Raises ValidationError
-        """
-        try:
-            self._metadata.validate(value)
-        except (ValueError, TypeError) as e:
-            raise ValidationError(str(e))
-
-    def __get__(
-        self, instance: Optional[ModelInterface], owner: Type[ModelInterface]
-    ) -> Union["Field[T]", T]:
+    def __get__(self, instance: Any, owner: Any) -> Union["Field[T]", T]:
         """Get field value.
 
         Args:
@@ -137,123 +90,110 @@ class Field(FieldProtocol, Generic[T]):
             owner: Model class
 
         Returns:
-            Field value if instance is provided, otherwise returns self
-
-        Examples:
-            >>> class User(Model):
-            ...     age = IntField()
-            >>> user = User(age=42)
-            >>> user.age  # Returns 42
-            >>> User.age  # Returns IntField instance
+            Field value converted to the appropriate type
         """
         if instance is None:
             return self
-        value = instance.data.get(self.name)
-        if value is None:
-            return self.convert(self._metadata.default)
-        return self.from_mongo(value)
 
-    def __set__(self, instance: Optional[ModelInterface], value: Any) -> None:
+        # Return None if no value is set
+        if self._value is None:
+            return None  # type: ignore
+
+        # Each field type should override this method to implement proper conversion
+        return self._value  # type: ignore
+
+    def __set__(self, instance: Any, value: Any) -> None:
         """Set field value.
 
         Args:
             instance: Model instance
             value: Value to set
 
-        Examples:
-            >>> class User(Model):
-            ...     age = IntField()
-            >>> user = User()
-            >>> user.age = 42  # Sets age to 42
+        Raises:
+            ValidationError: If validation fails
         """
-        if instance is None:
-            return
+        if self.readonly:
+            raise ValidationError(
+                message="Field is readonly",
+                field_name=self.name,
+                code="readonly",
+            )
 
-        # Validate before setting
-        self.validate(value)
+        # Store the converted value
+        self._value = value
 
-        if isinstance(value, Field):
-            instance.data[self.name] = self.convert(value._metadata.default)
-        else:
-            instance.data[self.name] = self.convert(value)
-
-    def __delete__(self, instance: Optional[ModelInterface]) -> None:
-        """Delete field value.
+    async def validate(self, value: Any) -> None:
+        """Validate field value.
 
         Args:
-            instance: Model instance
+            value: Value to validate
 
-        Examples:
-            >>> class User(Model):
-            ...     age = IntField()
-            >>> user = User(age=42)
-            >>> del user.age  # Removes age field
+        Raises:
+            ValidationError: If validation fails
         """
-        if instance is None:
+        if value is None:
+            if self.required:
+                raise ValidationError(
+                    message="Field is required",
+                    field_name=self.name,
+                    code="required",
+                )
             return
-        instance.data.pop(self.name, None)
 
-    @abstractmethod
-    def convert(self, value: Any) -> T:
+        for validator in self.validators:
+            result = await validator(value)
+            if isinstance(result, tuple):
+                valid, message = result
+                if not valid:
+                    raise ValidationError(
+                        message=message,
+                        field_name=self.name,
+                        code="validation_failed",
+                    )
+            elif not result:
+                raise ValidationError(
+                    message="Validation failed",
+                    field_name=self.name,
+                    code="validation_failed",
+                )
+
+    async def convert(self, value: Any) -> Optional[T]:
         """Convert value to field type.
 
         Args:
             value: Value to convert
 
         Returns:
-            Converted value of type T
+            Converted value
 
-        Examples:
-            >>> field = IntField()
-            >>> field.convert("42")
-            42
+        Raises:
+            ValidationError: If conversion fails
         """
-        pass
+        if value is None:
+            return self.default
 
-    def to_dict(self, value: Optional[T]) -> Any:
-        """Convert value to dict representation.
+        return value
+
+    async def to_db(self, value: Optional[T], backend: str) -> Any:
+        """Convert value to database format.
 
         Args:
             value: Value to convert
+            backend: Database backend type
 
         Returns:
-            Dict representation of value
-
-        Examples:
-            >>> field = DateTimeField()
-            >>> field.to_dict(datetime(2024, 1, 1))
-            '2024-01-01T00:00:00'
+            Database value
         """
         return value
 
-    def to_mongo(self, value: Optional[T]) -> Any:
-        """Convert Python value to MongoDB value.
+    async def from_db(self, value: Any, backend: str) -> Optional[T]:
+        """Convert database value to field type.
 
         Args:
-            value: Value to convert
+            value: Database value
+            backend: Database backend type
 
         Returns:
-            MongoDB representation of value
-
-        Examples:
-            >>> field = ObjectIdField()
-            >>> field.to_mongo("507f1f77bcf86cd799439011")
-            ObjectId('507f1f77bcf86cd799439011')
+            Field value
         """
         return value
-
-    def from_mongo(self, value: Any) -> T:
-        """Convert MongoDB value to Python value.
-
-        Args:
-            value: Value to convert
-
-        Returns:
-            Python value of type T
-
-        Examples:
-            >>> field = ObjectIdField()
-            >>> field.from_mongo(ObjectId('507f1f77bcf86cd799439011'))
-            '507f1f77bcf86cd799439011'
-        """
-        return self.convert(value)

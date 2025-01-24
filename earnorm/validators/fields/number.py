@@ -10,8 +10,8 @@ This module provides validators for number fields, including:
 from decimal import Decimal
 from typing import Any, Optional, Union
 
+from earnorm.types import ValidatorFunc
 from earnorm.validators.base import BaseValidator, ValidationError, create_validator
-from earnorm.validators.types import ValidatorFunc
 
 # Type alias for number types
 Number = Union[int, float, Decimal]

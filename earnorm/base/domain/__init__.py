@@ -1,13 +1,46 @@
-"""Domain module for EarnORM.
+"""Domain module for query building.
 
-This module provides domain expression handling:
-- Domain builders and parsers
-- Domain operators and expressions
-- Domain validation and normalization
+This module provides domain expressions and builders for building complex queries.
+
+Examples:
+    >>> from earnorm.base.domain import DomainBuilder, MongoConverter
+    >>> builder = DomainBuilder()
+    >>> domain = (
+    ...     builder
+    ...     .field("age").greater_than(18)
+    ...     .and_()
+    ...     .field("status").equals("active")
+    ...     .build()
+    ... )
+    >>> converter = MongoConverter()
+    >>> mongo_query = converter.convert(domain)
+    >>> {"$and": [{"age": {"$gt": 18}}, {"status": "active"}]}
 """
 
-from earnorm.base.domain.builder import DomainBuilder
-from earnorm.base.domain.expression import DomainExpression
-from earnorm.base.domain.operators import DomainOperator
+from earnorm.base.domain.builder import DomainBuilder, DomainFieldBuilder
+from earnorm.base.domain.converter import (
+    DomainConverter,
+    MongoConverter,
+    PostgresConverter,
+)
+from earnorm.base.domain.expression import (
+    DomainExpression,
+    DomainLeaf,
+    DomainNode,
+    LogicalOperator,
+)
 
-__all__ = ["DomainBuilder", "DomainExpression", "DomainOperator"]
+__all__ = [
+    # Builder
+    "DomainBuilder",
+    "DomainFieldBuilder",
+    # Expression
+    "DomainExpression",
+    "DomainLeaf",
+    "DomainNode",
+    "LogicalOperator",
+    # Converter
+    "DomainConverter",
+    "MongoConverter",
+    "PostgresConverter",
+]

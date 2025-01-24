@@ -1,167 +1,94 @@
-# Pool Module
+# Connection Pool Module
 
-## Overview
-
-The Pool module provides connection pooling and resource management for database connections in EarnORM.
+This module provides a flexible and robust connection pooling implementation for various database backends.
 
 ## Structure
 
-```
-pool/
-├── core/          # Core pooling functionality
-│   ├── pool.py    # Connection pool implementation
-│   └── manager.py # Pool manager
-├── backends/      # Database backend implementations
-│   ├── mongo/     # MongoDB connection pool
-│   └── redis/     # Redis connection pool
-└── protocols/     # Pool protocols and interfaces
-```
+- `protocols/`: Protocol definitions for database operations
+  - `database.py`: Database protocol definitions
+  - `connection.py`: Connection protocol definitions
+  - `pool.py`: Pool protocol definitions
+  - `errors.py`: Custom exceptions
+  - `operations.py`: Operation type definitions
 
-## Features
+- `backends/`: Backend implementations
+  - `mongo/`: MongoDB implementation
+  - `redis/`: Redis implementation
+  - `mysql/`: MySQL implementation (placeholder)
+  - `postgres/`: PostgreSQL implementation (placeholder)
 
-### 1. Connection Pool
+- `utils.py`: Utility functions for connection management
+- `retry.py`: Retry mechanism with exponential backoff
+- `circuit.py`: Circuit breaker implementation
+- `decorators.py`: Decorators for retry and circuit breaker
 
+## Progress
+
+### Completed
+- Protocol layer implementation
+- Error handling and custom exceptions
+- MongoDB and Redis pool implementations
+- Retry mechanism and circuit breaker
+- Connection utilities and helper functions
+
+### In Progress
+- Testing (unit tests and integration tests)
+- Documentation (docstrings and examples)
+- Type hints improvements
+
+### Pending
+- Monitoring and metrics
+- Performance optimization
+- Redis pub/sub support
+- CI/CD pipeline setup
+
+## Known Issues
+- Type hints need improvement in some areas
+- Some unused imports in protocol files (used in docstrings)
+- Need to review error handling in backend implementations
+
+## Next Steps
+1. Complete test suite
+2. Improve documentation
+3. Add monitoring and metrics
+4. Set up CI/CD pipeline
+
+## Usage Examples
+
+### MongoDB Pool
 ```python
-from earnorm.pool import Pool
+from motor.motor_asyncio import AsyncIOMotorDatabase, AsyncIOMotorCollection
+from earnorm.pool.backends.mongo import MongoPool
+from earnorm.pool.retry import RetryPolicy
+from earnorm.pool.circuit import CircuitBreaker
 
-# Create pool
-pool = await Pool.create(
+pool = MongoPool(
     uri="mongodb://localhost:27017",
-    min_size=5,
-    max_size=20
+    database="test",
+    min_size=1,
+    max_size=10,
+    retry_policy=RetryPolicy(max_retries=3),
+    circuit_breaker=CircuitBreaker(failure_threshold=5),
 )
 
-# Get connection
-async with pool.acquire() as conn:
-    await conn.find_one("users", {"id": "123"})
+async with pool.connection() as conn:
+    await conn.execute_typed("find_one", "users", filter={"name": "test"})
 ```
 
-### 2. Pool Management
-
+### Redis Pool
 ```python
-from earnorm.pool import pool_manager
+from earnorm.pool.backends.redis import RedisPool
+from earnorm.pool.retry import RetryPolicy
+from earnorm.pool.circuit import CircuitBreaker
 
-# Register pool
-await pool_manager.register("default", pool)
-
-# Get pool
-pool = pool_manager.get("default")
-
-# Close all pools
-await pool_manager.close_all()
-```
-
-### 3. Connection Lifecycle
-
-```python
-from earnorm.pool import lifecycle
-
-@lifecycle.on_connect
-async def setup_connection(conn):
-    await conn.set_read_concern("majority")
-
-@lifecycle.on_release
-async def cleanup_connection(conn):
-    await conn.reset()
-```
-
-### 4. Pool Monitoring
-
-```python
-from earnorm.pool import metrics
-
-# Get pool stats
-stats = await pool.get_stats()
-print(f"Active connections: {stats.active}")
-print(f"Available connections: {stats.available}")
-
-# Monitor pool events
-@pool.on("overflow")
-async def handle_overflow(pool):
-    logger.warning(f"Pool {pool.name} is at capacity")
-```
-
-## Configuration
-
-```python
-from earnorm.pool import setup_pool
-
-# MongoDB pool
-await setup_pool(
-    backend="mongodb",
-    uri="mongodb://localhost:27017",
-    min_size=5,
-    max_size=20,
-    max_idle_time=300,
-    connect_timeout=30
+pool = RedisPool(
+    uri="redis://localhost:6379",
+    min_size=1,
+    max_size=10,
+    retry_policy=RetryPolicy(max_retries=3),
+    circuit_breaker=CircuitBreaker(failure_threshold=5),
 )
 
-# Redis pool
-await setup_pool(
-    backend="redis",
-    host="localhost",
-    port=6379,
-    min_size=2,
-    max_size=10
-)
-```
-
-## Best Practices
-
-1. **Pool Sizing**
-
-- Set appropriate min/max sizes
-- Monitor connection usage
-- Consider application load
-- Handle peak periods
-
-2. **Connection Lifecycle**
-
-- Implement connection validation
-- Handle connection errors
-- Clean up resources
-- Monitor connection age
-
-3. **Error Handling**
-
-- Handle connection failures
-- Implement retries
-- Log connection errors
-- Monitor error rates
-
-4. **Performance**
-
-- Use connection pooling
-- Monitor pool metrics
-- Optimize pool size
-- Handle backpressure
-
-## Common Issues & Solutions
-
-1. **Connection Leaks**
-
-- Use context managers
-- Implement timeouts
-- Monitor active connections
-- Clean up stale connections
-
-2. **Pool Exhaustion**
-
-- Implement backpressure
-- Monitor pool capacity
-- Handle overflow gracefully
-- Scale pool size
-
-3. **Performance**
-
-- Optimize connection reuse
-- Monitor connection lifetime
-- Handle connection errors
-- Use appropriate pool size
-
-## Contributing
-
-1. Follow code style guidelines
-2. Add comprehensive docstrings
-3. Write unit tests
-4. Update documentation
+async with pool.connection() as conn:
+    await conn.execute_typed("get", "key")
+``` 

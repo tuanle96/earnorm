@@ -1,4 +1,38 @@
-"""Cache decorator implementation."""
+"""Cache decorator implementation.
+
+This module provides a decorator for caching async function results.
+It supports:
+- TTL configuration
+- Custom key prefixes
+- Custom cache managers
+- Automatic key generation
+- JSON serialization
+
+Examples:
+    ```python
+    from earnorm.cache.decorators import cached
+
+    # Basic usage
+    @cached
+    async def get_user(user_id: int) -> Dict[str, Any]:
+        return await db.fetch_user(user_id)
+
+    # With TTL
+    @cached(ttl=300)
+    async def get_stats() -> Dict[str, int]:
+        return await calculate_stats()
+
+    # With custom key prefix
+    @cached(key_prefix="user")
+    async def get_user_by_email(email: str) -> Dict[str, Any]:
+        return await db.fetch_user_by_email(email)
+
+    # With custom cache manager
+    @cached(manager=redis_cache)
+    async def get_config() -> Dict[str, Any]:
+        return await load_config()
+    ```
+"""
 
 import functools
 import hashlib
@@ -30,6 +64,23 @@ def _make_cached_decorator(
 
     Returns:
         Callable: Decorator function
+
+    Examples:
+        ```python
+        # Create decorator with TTL
+        cache_for_5min = _make_cached_decorator(ttl=300)
+
+        @cache_for_5min
+        async def get_data() -> Dict[str, Any]:
+            return await fetch_data()
+
+        # Create decorator with prefix
+        cache_user = _make_cached_decorator(key_prefix="user")
+
+        @cache_user
+        async def get_user(user_id: int) -> Dict[str, Any]:
+            return await fetch_user(user_id)
+        ```
     """
 
     def decorator(func: F) -> F:
@@ -144,25 +195,32 @@ def cached(
 
     Examples:
         ```python
-        # Basic usage
+        # Basic usage - cache with default settings
         @cached
         async def get_user(user_id: int) -> Dict[str, Any]:
             return await db.fetch_user(user_id)
 
-        # With TTL
+        # Cache with 5 minute TTL
         @cached(ttl=300)
         async def get_stats() -> Dict[str, int]:
-            return await calculate_stats()
+            stats = await calculate_stats()
+            return {"total": stats.total, "average": stats.avg}
 
-        # With custom key prefix
+        # Cache with custom key prefix
         @cached(key_prefix="user")
         async def get_user_by_email(email: str) -> Dict[str, Any]:
             return await db.fetch_user_by_email(email)
 
-        # With custom cache manager
-        @cached(manager=redis_cache)
+        # Cache with custom manager and TTL
+        @cached(manager=redis_cache, ttl=3600)
         async def get_config() -> Dict[str, Any]:
             return await load_config()
+
+        # Cache method in class
+        class UserService:
+            @cached(key_prefix="user_service")
+            async def get_user(self, user_id: int) -> Dict[str, Any]:
+                return await self.db.fetch_user(user_id)
         ```
 
     Raises:

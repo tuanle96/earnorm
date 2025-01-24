@@ -36,6 +36,14 @@ Examples:
             await process_data()
         finally:
             await lock.release()
+
+    # Extend lock timeout
+    if await lock.extend(30):
+        print("Lock extended by 30 seconds")
+
+    # Force unlock (use with caution)
+    if await lock.force_unlock():
+        print("Lock forcefully released")
     ```
 """
 
@@ -63,6 +71,36 @@ class DistributedLock:
     - Lock owner tracking to prevent release by non-owner
     - Retry with exponential backoff
     - Health checks via PING
+    - Lock extension
+    - Force unlock capability
+
+    Examples:
+        ```python
+        # Create lock with custom settings
+        lock = DistributedLock(
+            client=redis_client,
+            name="process_lock",
+            timeout=30,
+            retry_count=10,
+            retry_delay=0.5
+        )
+
+        # Use in async context
+        async with lock as acquired:
+            if acquired:
+                await process_data()
+            else:
+                print("Failed to acquire lock")
+
+        # Manual lock management
+        if await lock.acquire():
+            try:
+                await process_data()
+                # Extend lock if needed
+                await lock.extend(30)
+            finally:
+                await lock.release()
+        ```
 
     Attributes:
         client: Redis client instance
@@ -92,9 +130,16 @@ class DistributedLock:
 
         Examples:
             ```python
+            # Basic lock
             lock = DistributedLock(
                 client=redis_client,
-                name="my_lock",
+                name="my_lock"
+            )
+
+            # Lock with custom timeout and retries
+            lock = DistributedLock(
+                client=redis_client,
+                name="process_lock",
                 timeout=30,
                 retry_count=10,
                 retry_delay=0.5
@@ -123,6 +168,9 @@ class DistributedLock:
                 if acquired:
                     # Lock acquired
                     await process_data()
+                else:
+                    # Lock acquisition failed
+                    print("Failed to acquire lock")
             ```
         """
         return await self.acquire()
@@ -153,11 +201,21 @@ class DistributedLock:
 
         Examples:
             ```python
+            # Basic acquisition
             if await lock.acquire():
                 try:
                     await process_data()
                 finally:
                     await lock.release()
+
+            # With timeout handling
+            try:
+                if await lock.acquire():
+                    await process_data()
+                else:
+                    print("Lock acquisition failed")
+            finally:
+                await lock.release()
             ```
         """
         self._owner = f"{id(self)}:{time.time()}"
@@ -189,7 +247,15 @@ class DistributedLock:
 
         Examples:
             ```python
-            await lock.release()  # Release lock manually
+            # Manual release
+            await lock.release()
+
+            # Release in try/finally
+            try:
+                if await lock.acquire():
+                    await process_data()
+            finally:
+                await lock.release()
             ```
         """
         if self._owner is None:
@@ -215,6 +281,25 @@ class DistributedLock:
 
         Returns:
             bool: True if lock was extended
+
+        Examples:
+            ```python
+            # Extend lock by 30 seconds
+            if await lock.extend(30):
+                print("Lock extended")
+            else:
+                print("Failed to extend lock")
+
+            # Extend during processing
+            if await lock.acquire():
+                try:
+                    while processing:
+                        await process_chunk()
+                        if not await lock.extend(30):
+                            break
+                finally:
+                    await lock.release()
+            ```
         """
         if not self._owner:
             return False
@@ -241,6 +326,20 @@ class DistributedLock:
 
         Returns:
             bool: True if lock exists
+
+        Examples:
+            ```python
+            # Check lock status
+            if await lock.is_locked():
+                print("Lock is held")
+            else:
+                print("Lock is available")
+
+            # Check before acquiring
+            if not await lock.is_locked():
+                if await lock.acquire():
+                    await process_data()
+            ```
         """
         try:
             return bool(await self.client.exists(self.name))
@@ -249,15 +348,27 @@ class DistributedLock:
             return False
 
     async def force_unlock(self) -> bool:
-        """Force unlock regardless of owner.
+        """Force unlock the lock regardless of owner.
 
         Returns:
             bool: True if lock was deleted
+
+        Examples:
+            ```python
+            # Force unlock with warning
+            if await lock.is_locked():
+                if await lock.force_unlock():
+                    logger.warning("Lock forcefully released")
+
+            # Clear stuck lock
+            if await lock.force_unlock():
+                print("Cleared stuck lock")
+            ```
         """
         try:
             deleted = bool(await self.client.delete(self.name))
             if deleted:
-                logger.warning(f"Force unlocked {self.name}")
+                logger.warning(f"Forced unlock of {self.name}")
             return deleted
         except RedisError as e:
             logger.error(f"Failed to force unlock {self.name}: {str(e)}")

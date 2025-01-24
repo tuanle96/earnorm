@@ -1,122 +1,96 @@
-"""Pool registry implementation."""
+"""Pool registry implementation.
 
-import logging
-from typing import Any, Dict, Optional, Union
+This module provides a registry for managing database connection pool implementations.
+It supports registration and retrieval of pool classes.
+
+Examples:
+    ```python
+    # Register custom pool
+    PoolRegistry.register("custom", CustomPool)
+
+    # Get pool class
+    pool_class = PoolRegistry.get("mongodb")
+    pool = pool_class(uri="mongodb://localhost:27017")
+    ```
+"""
+
+from typing import Any, Dict, Type, TypeVar
 
 from earnorm.pool.backends.mongo.pool import MongoPool
+from earnorm.pool.backends.mysql.pool import MySQLPool
+from earnorm.pool.backends.postgres.pool import PostgresPool
 from earnorm.pool.backends.redis.pool import RedisPool
-from earnorm.pool.factory import PoolFactory
+from earnorm.pool.protocols.pool import PoolProtocol
 
-logger = logging.getLogger(__name__)
+# Define type variables for database and collection types
+DB = TypeVar("DB")
+COLL = TypeVar("COLL")
 
 
 class PoolRegistry:
-    """Registry for managing pool instances.
+    """Pool registry for managing pool implementations."""
 
-    This registry provides a centralized way to manage pool instances in the application.
-    It ensures that pools are properly initialized, tracked, and cleaned up when no
-    longer needed.
+    _pools: Dict[str, Type[PoolProtocol[Any, Any]]] = {
+        "mongodb": MongoPool,
+        "redis": RedisPool,
+        "mysql": MySQLPool,
+        "postgres": PostgresPool,
+    }
 
-    Examples:
-        ```python
-        # Create registry
-        registry = PoolRegistry()
-
-        # Create and register MongoDB pool
-        mongo_pool = await PoolFactory.create_mongo_pool(
-            uri="mongodb://localhost:27017",
-            database="test"
-        )
-        registry.register("mongodb", mongo_pool)
-
-        # Get pool by name
-        pool = registry.get("mongodb")
-        if pool:
-            async with pool.acquire() as conn:
-                await conn.execute(...)
-
-        # Close all pools
-        await registry.close_all()
-        ```
-    """
-
-    def __init__(self) -> None:
-        """Initialize pool registry."""
-        self._pools: Dict[str, Union[MongoPool, RedisPool]] = {}
-        self._factory = PoolFactory()
-
-    def register(self, name: str, pool: Union[MongoPool, RedisPool]) -> None:
-        """Register pool instance.
+    @classmethod
+    def register(cls, name: str, pool_class: Type[PoolProtocol[DB, COLL]]) -> None:
+        """Register pool implementation.
 
         Args:
             name: Pool name
-            pool: Pool instance
+            pool_class: Pool class
 
-        Raises:
-            ValueError: If pool with given name already exists
+        Examples:
+            ```python
+            # Register custom pool
+            PoolRegistry.register("custom", CustomPool)
+            ```
         """
-        if name in self._pools:
-            raise ValueError(f"Pool already exists: {name}")
-        self._pools[name] = pool
-        logger.info("Registered pool: %s", name)
+        cls._pools[name] = pool_class  # type: ignore
 
-    def unregister(self, name: str) -> None:
-        """Unregister pool instance.
-
-        Args:
-            name: Pool name
-        """
-        if name in self._pools:
-            del self._pools[name]
-            logger.info("Unregistered pool: %s", name)
-
-    def get(self, name: str) -> Optional[Union[MongoPool, RedisPool]]:
-        """Get pool by name.
+    @classmethod
+    def get(cls, name: str) -> Type[PoolProtocol[Any, Any]]:
+        """Get pool class by name.
 
         Args:
             name: Pool name
 
         Returns:
-            Pool instance or None if not found
-        """
-        return self._pools.get(name)
-
-    async def create_and_register(
-        self, name: str, pool_type: str, **config: Any
-    ) -> Union[MongoPool, RedisPool]:
-        """Create and register pool instance.
-
-        Args:
-            name: Pool name
-            pool_type: Pool type ("mongodb" or "redis")
-            **config: Pool configuration
-
-        Returns:
-            Pool instance
+            Pool class
 
         Raises:
-            ValueError: If pool with given name already exists
-            KeyError: If pool type is not registered
+            ValueError: If pool name is unknown
+
+        Examples:
+            ```python
+            # Get MongoDB pool class
+            pool_class = PoolRegistry.get("mongodb")
+            pool = pool_class(uri="mongodb://localhost:27017")
+            ```
         """
-        if name in self._pools:
-            raise ValueError(f"Pool already exists: {name}")
+        if name not in cls._pools:
+            raise ValueError(f"Unknown pool: {name}")
 
-        if pool_type == "mongodb":
-            pool = await self._factory.create_mongo_pool(**config)
-        elif pool_type == "redis":
-            pool = await self._factory.create_redis_pool(**config)
-        else:
-            raise KeyError(f"Unknown pool type: {pool_type}")
+        return cls._pools[name]
 
-        self.register(name, pool)
-        return pool
+    @classmethod
+    def list(cls) -> Dict[str, Type[PoolProtocol[Any, Any]]]:
+        """Get all registered pools.
 
-    async def close_all(self) -> None:
-        """Close all registered pools."""
-        for name, pool in self._pools.items():
-            try:
-                await pool.close()
-                logger.info("Closed pool: %s", name)
-            except Exception:
-                logger.exception("Failed to close pool: %s", name)
-        self._pools.clear()
+        Returns:
+            Dictionary of pool names and classes
+
+        Examples:
+            ```python
+            # List all pools
+            pools = PoolRegistry.list()
+            for name, pool_class in pools.items():
+                print(f"{name}: {pool_class.__name__}")
+            ```
+        """
+        return cls._pools.copy()

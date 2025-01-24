@@ -271,3 +271,110 @@ EarnORM is released under the Creative Commons Attribution-NonCommercial (CC BY-
 ## ⭐️ Credits
 
 EarnORM is developed by the EarnBase team and the open source community.
+
+## Connection Pool Module
+
+### Progress
+
+#### Completed
+- Protocol layer implementation (database, connection, operations)
+- Error handling and custom exceptions
+- MongoDB pool implementation with retry and circuit breaker
+- Redis pool implementation with retry and circuit breaker
+- Retry mechanism with exponential backoff
+- Circuit breaker implementation
+- Integration of retry and circuit breaker into pools
+- Basic MySQL & PostgreSQL implementations with NotImplementedError
+- Factory and Registry integration
+- Cleanup of unused files (context.py)
+
+#### In Progress
+- Type hints fixes and improvements
+- Documentation updates
+- Testing setup
+
+#### Pending (Future)
+- Monitoring and metrics
+- Redis pub/sub support
+- Performance optimization
+- Full MySQL & PostgreSQL implementations
+- CI/CD pipeline setup
+
+### Known Issues
+1. Type hints:
+   - Type variables `DB` and `COLL` need better definition
+   - Method overrides have incompatible return types
+   - MongoDB and Redis driver types need completion
+   - Dictionary key type mismatch in pool implementations
+
+2. Code Quality:
+   - Unused imports in protocol files
+   - Decorator type hints need improvement
+   - Some methods lack proper error handling
+
+### Next Steps
+1. **Immediate Tasks**:
+   - Fix type hints and linter errors
+   - Complete documentation with new examples
+   - Set up testing framework
+
+2. **Future Tasks**:
+   - Implement monitoring and metrics
+   - Add Redis pub/sub support
+   - Optimize performance
+   - Implement full MySQL & PostgreSQL support
+   - Set up CI/CD pipeline
+
+### Usage Examples
+
+```python
+# Using Factory Pattern
+from earnorm.pool.factory import PoolFactory
+
+# Create MongoDB Pool
+mongo_pool = PoolFactory.create(
+    "mongodb",
+    uri="mongodb://localhost:27017",
+    database="test",
+    min_size=1,
+    max_size=10,
+    retry_policy=RetryPolicy(
+        max_retries=3,
+        base_delay=1.0,
+        max_delay=5.0,
+    ),
+    circuit_breaker=CircuitBreaker(
+        failure_threshold=5,
+        reset_timeout=30.0,
+        half_open_timeout=5.0,
+    ),
+)
+
+# Create Redis Pool
+redis_pool = PoolFactory.create(
+    "redis",
+    uri="redis://localhost:6379",
+    min_size=1,
+    max_size=10,
+    retry_policy=RetryPolicy(
+        max_retries=3,
+        base_delay=1.0,
+        max_delay=5.0,
+    ),
+    circuit_breaker=CircuitBreaker(
+        failure_threshold=5,
+        reset_timeout=30.0,
+        half_open_timeout=5.0,
+    ),
+)
+
+# Using Registry Pattern
+from earnorm.pool.registry import PoolRegistry
+
+# Register custom pool implementation
+PoolRegistry.register("custom", CustomPool)
+
+# Get pool class
+pool_class = PoolRegistry.get("mongodb")
+pool = pool_class(uri="mongodb://localhost:27017")
+```

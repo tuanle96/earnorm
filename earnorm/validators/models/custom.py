@@ -8,7 +8,7 @@ This module provides custom validators for model validation:
 
 from typing import Any, Coroutine, Optional, TypeVar
 
-from earnorm.base.types import ModelProtocol
+from earnorm.types import ModelProtocol
 from earnorm.validators.base import BaseValidator
 
 M = TypeVar("M", bound=ModelProtocol)
