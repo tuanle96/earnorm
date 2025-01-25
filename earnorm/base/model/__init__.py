@@ -21,9 +21,9 @@ Examples:
     ...         return cls.browse(cls._search(domain))
 """
 
-from earnorm.base.model.base import BaseModel
-from earnorm.base.model.decorators import depends, model, multi
-from earnorm.base.model.meta import MetaModel
+from .base import BaseModel
+from .decorators import depends, model, multi
+from .meta import MetaModel
 
 __all__ = [
     "BaseModel",

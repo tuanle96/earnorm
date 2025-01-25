@@ -17,10 +17,11 @@ from typing import Any, Dict
 
 from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
 
+from earnorm.base.database.adapter import DatabaseAdapter
 from earnorm.base.database.backends import MongoBackend
 from earnorm.config import SystemConfig
 from earnorm.di import container
-from earnorm.pool import PoolRegistry, create_mongo_pool
+from earnorm.pool import PoolRegistry, create_mongo_pool, create_redis_pool
 
 # Type hints for MongoDB
 DB = AsyncIOMotorDatabase[Dict[str, Any]]
@@ -56,7 +57,7 @@ async def register_database_services(config: SystemConfig) -> None:
     - MongoDB backend
     - Database registry
     """
-    from earnorm.registry.database import DatabaseRegistry
+    from earnorm.base.registry import DatabaseRegistry
 
     # Register backend
     container.register("mongodb", MongoBackend)
@@ -68,10 +69,10 @@ async def register_database_services(config: SystemConfig) -> None:
     # Initialize with MongoDB
     await registry.switch(
         "mongodb",
-        uri=config.mongodb_uri,
-        database=config.mongodb_database,
-        min_pool_size=config.mongodb_min_pool_size,
-        max_pool_size=config.mongodb_max_pool_size,
+        uri=str(config.mongodb_uri),
+        database=str(config.mongodb_database),
+        min_pool_size=int(config.mongodb_min_pool_size),
+        max_pool_size=int(config.mongodb_max_pool_size),
     )
 
 
@@ -80,53 +81,56 @@ async def register_pool_services(config: SystemConfig) -> None:
 
     This includes:
     - MongoDB connection pool
+    - Redis pool for event system
     """
     # Create MongoDB pool
     mongo_pool = await create_mongo_pool(
-        uri=config.mongodb_uri,
-        database=config.mongodb_database,
-        min_size=config.mongodb_min_pool_size,
-        max_size=config.mongodb_max_pool_size,
-        timeout=config.mongodb_pool_timeout,
-        max_lifetime=config.mongodb_max_lifetime,
-        idle_timeout=config.mongodb_idle_timeout,
-        validate_on_borrow=config.mongodb_validate_on_borrow,
-        test_on_return=config.mongodb_test_on_return,
+        uri=str(config.mongodb_uri),
+        database=str(config.mongodb_database),
+        min_size=int(config.mongodb_min_pool_size),
+        max_size=int(config.mongodb_max_pool_size),
+        timeout=int(config.mongodb_pool_timeout),
+        max_lifetime=int(config.mongodb_max_lifetime),
+        idle_timeout=int(config.mongodb_idle_timeout),
+        validate_on_borrow=bool(config.mongodb_validate_on_borrow),
+        test_on_return=bool(config.mongodb_test_on_return),
     )
 
-    # Register pool
-    PoolRegistry.register("default", mongo_pool)
+    # Create Redis pool for event and cache system
+    redis_pool = await create_redis_pool(
+        host=str(config.redis_host),
+        port=int(config.redis_port),
+        db=int(config.redis_db),
+        min_size=int(config.redis_min_pool_size),
+        max_size=int(config.redis_max_pool_size),
+        timeout=int(config.redis_pool_timeout),
+    )
 
-    # Initialize pool
+    # Register pools
+    PoolRegistry.register("mongodb", mongo_pool)
+    PoolRegistry.register("redis", redis_pool)
+
+    # Initialize pools
     await mongo_pool.init()
+    await redis_pool.init()
 
 
 async def register_cache_services(config: SystemConfig) -> None:
     """Register cache services.
 
     This includes:
-    - Redis connection pool
     - Cache manager
     """
-    from earnorm.cache.backends.redis import RedisPool
     from earnorm.cache.core.manager import CacheManager
-
-    # Register Redis pool
-    container.register(
-        "redis_pool",
-        RedisPool(
-            uri=f"redis://{config.redis_host}:{config.redis_port}/{config.redis_db}"
-        ),
-    )
 
     # Register cache manager
     container.register(
         "cache_manager",
-        CacheManager(container=container, ttl=config.cache_ttl),
+        CacheManager(container=container, ttl=int(config.cache_ttl)),
     )
 
 
-async def register_event_services(config: SystemConfig) -> None:
+async def register_event_services() -> None:
     """Register event services.
 
     This includes:
@@ -203,11 +207,11 @@ async def register_all(config: SystemConfig) -> None:
     # 3. Pool services
     await register_pool_services(config)
 
-    # 4. Cache services depend on pools
+    # 4. Cache services
     await register_cache_services(config)
 
     # 5. Event services
-    await register_event_services(config)
+    await register_event_services()
 
     # 6. Validator services
     await register_validator_services()

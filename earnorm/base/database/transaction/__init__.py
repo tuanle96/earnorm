@@ -1,47 +1,20 @@
-"""Transaction management package.
+"""Transaction module.
 
-This package provides transaction management for different databases.
-It includes base classes and implementations for:
-- MongoDB
-- PostgreSQL
-- MySQL
-
-Examples:
-    ```python
-    # MongoDB
-    async with MongoTransactionManager(pool) as tx:
-        await tx.execute(query)
-        await tx.commit()
-
-    # PostgreSQL
-    async with PostgresTransactionManager(pool) as tx:
-        await tx.execute(query)
-        await tx.commit()
-
-    # MySQL
-    async with MySQLTransactionManager(pool) as tx:
-        await tx.execute(query)
-        await tx.commit()
-    ```
+This module provides transaction support for database operations.
 """
 
-from earnorm.base.database.transaction.base import Transaction, TransactionManager
-from earnorm.base.database.transaction.mongo import (
+from .backends.mongo.transaction import (
     MongoTransaction,
-    MongoTransactionCommitError,
     MongoTransactionError,
     MongoTransactionManager,
-    MongoTransactionRollbackError,
 )
+from .base import Transaction, TransactionError, TransactionManager
 
 __all__ = [
-    # Base classes
     "Transaction",
+    "TransactionError",
     "TransactionManager",
-    # MongoDB
     "MongoTransaction",
     "MongoTransactionError",
     "MongoTransactionManager",
-    "MongoTransactionCommitError",
-    "MongoTransactionRollbackError",
 ]

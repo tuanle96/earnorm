@@ -76,7 +76,6 @@ class CacheBackendProtocol(Protocol):
         Returns:
             Optional[str]: Cached value or None if not found
         """
-        ...
 
     async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
         """Set value in cache.
@@ -86,7 +85,6 @@ class CacheBackendProtocol(Protocol):
             value: Value to cache
             ttl: Optional TTL in seconds
         """
-        ...
 
     async def delete(self, key: str) -> None:
         """Delete value from cache.
@@ -94,7 +92,6 @@ class CacheBackendProtocol(Protocol):
         Args:
             key: Cache key
         """
-        ...
 
     async def get_many(self, keys: List[str]) -> Dict[str, Any]:
         """Get multiple values from cache.
@@ -105,7 +102,7 @@ class CacheBackendProtocol(Protocol):
         Returns:
             Dict[str, Any]: Dictionary of key-value pairs
         """
-        ...
+        return {}
 
     async def set_many(
         self, mapping: Dict[str, Any], ttl: Optional[int] = None
@@ -116,7 +113,6 @@ class CacheBackendProtocol(Protocol):
             mapping: Dictionary of key-value pairs
             ttl: Optional TTL in seconds
         """
-        ...
 
     async def delete_many(self, keys: List[str]) -> None:
         """Delete multiple values from cache.
@@ -124,7 +120,6 @@ class CacheBackendProtocol(Protocol):
         Args:
             keys: List of cache keys
         """
-        ...
 
 
 class BaseCacheBackend(CacheBackendProtocol, abc.ABC):

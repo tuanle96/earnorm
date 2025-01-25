@@ -1,143 +1,146 @@
 """MongoDB query implementation.
 
-This module provides MongoDB query implementation.
-It supports all MongoDB query operators and aggregation pipeline.
+This module provides MongoDB-specific query implementation that integrates with
+domain expressions for query building.
 
 Examples:
-    ```python
-    query = MongoQuery(
-        collection="users",
-        filter={"age": {"$gt": 18}},
-        projection={"name": 1, "email": 1},
-        sort=[("name", 1)],
-        skip=0,
-        limit=10
-    )
-    ```
+    >>> # Using MongoQuery directly
+    >>> query = MongoQuery[User](collection)
+    >>> query.filter(
+    ...     DomainBuilder()
+    ...     .field("age").greater_than(18)
+    ...     .and_()
+    ...     .field("status").equals("active")
+    ...     .build()
+    ... )
+    >>> query.sort("name", ascending=True)
+    >>> query.limit(10)
+    >>> query.offset(20)
+    >>> results = await query.execute_async()
 """
 
-from copy import deepcopy
-from typing import Any, Dict, Generic, List, Optional, Tuple, TypeVar, Union
+from typing import List, Optional, TypeVar, Union
 
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from motor.motor_asyncio import AsyncIOMotorCollection
+from pymongo import ASCENDING, DESCENDING
 
-from earnorm.base.database.query.base import Query
+from earnorm.base.database.query.backends.mongo.converter import MongoConverter
+from earnorm.base.database.query.base.query import AsyncQuery
+from earnorm.base.domain.expression import DomainExpression
+from earnorm.types import DatabaseModel, JsonDict, ValueType
 
-JsonDict = Dict[str, Any]
-SortSpec = List[Tuple[str, int]]
-T = TypeVar("T")
+ModelT = TypeVar("ModelT", bound=DatabaseModel)
 
 
-class MongoQuery(Query[AsyncIOMotorDatabase[Any]], Generic[T]):
+class MongoQuery(AsyncQuery[ModelT]):
     """MongoDB query implementation.
 
-    This class represents a MongoDB query with support for:
-    - Find operations
-    - Aggregation pipeline
-    - Sort, skip, limit
-    - Projection
-    - Index hints
+    This class implements the Query interface for MongoDB using Motor for async operations.
+    It converts domain expressions to MongoDB filter format and executes queries.
 
-    Examples:
-        ```python
-        query = MongoQuery(
-            collection="users",
-            filter={"age": {"$gt": 18}},
-            projection={"name": 1, "email": 1},
-            sort=[("name", 1)],
-            skip=0,
-            limit=10
-        )
-        ```
+    Args:
+        collection: MongoDB collection to query
+        model_cls: Model class for type hints
     """
 
     def __init__(
-        self,
-        collection: str,
-        filter: Optional[JsonDict] = None,
-        projection: Optional[JsonDict] = None,
-        sort: Optional[SortSpec] = None,
-        skip: Optional[int] = None,
-        limit: Optional[int] = None,
-        pipeline: Optional[List[JsonDict]] = None,
-        allow_disk_use: bool = False,
-        hint: Optional[Union[str, List[Tuple[str, int]]]] = None,
+        self, collection: AsyncIOMotorCollection[JsonDict], model_cls: type[ModelT]
     ) -> None:
-        """Initialize MongoDB query.
+        """Initialize query.
 
         Args:
-            collection: Collection name
-            filter: Query filter
-            projection: Field projection
-            sort: Sort specification
-            skip: Number of documents to skip
-            limit: Maximum number of documents to return
-            pipeline: Aggregation pipeline
-            allow_disk_use: Allow disk use for large queries
-            hint: Index hint
-
-        Raises:
-            ValueError: If any parameter is invalid
+            collection: MongoDB collection to query
+            model_cls: Model class for type hints
         """
-        self.collection = collection
-        self.filter = filter or {}
-        self.projection = projection
-        self.sort = sort
-        self.skip = skip
-        self.limit = limit
-        self.pipeline = pipeline
-        self.allow_disk_use = allow_disk_use
-        self.hint = hint
-        self.validate()
+        super().__init__()
+        self._collection = collection
+        self._model_cls = model_cls
+        self._converter = MongoConverter()
+        self._raw_filter: Optional[JsonDict] = None
 
-    def validate(self) -> None:
-        """Validate query parameters.
+    def filter(
+        self, domain: Union[DomainExpression[ValueType], JsonDict]
+    ) -> "MongoQuery[ModelT]":
+        """Add filter conditions.
 
-        This method validates:
-        - Collection name is not empty
-        - Filter is valid JSON
-        - Projection is valid
-        - Sort specification is valid
-        - Skip and limit are non-negative
-        - Pipeline is valid
-        - Index hint is valid
-
-        Raises:
-            ValueError: If any parameter is invalid
-        """
-        if not self.collection:
-            raise ValueError("Collection name is required")
-
-        if self.sort is not None:
-            for item in self.sort:
-                if item[1] not in (-1, 1):
-                    raise ValueError("Sort direction must be 1 or -1")
-
-        if self.skip is not None and self.skip < 0:
-            raise ValueError("Skip must be non-negative")
-
-        if self.limit is not None and self.limit < 0:
-            raise ValueError("Limit must be non-negative")
-
-        if self.hint is not None and isinstance(self.hint, list):
-            for item in self.hint:
-                if item[1] not in (-1, 1):
-                    raise ValueError("Hint direction must be 1 or -1")
-
-    def clone(self) -> "MongoQuery[T]":
-        """Create deep copy of query.
+        Args:
+            domain: Domain expression or MongoDB filter dict
 
         Returns:
-            New MongoQuery instance with same parameters
+            Self for chaining
         """
-        return MongoQuery(
-            collection=self.collection,
-            filter=deepcopy(self.filter),
-            projection=deepcopy(self.projection),
-            sort=deepcopy(self.sort),
-            skip=self.skip,
-            limit=self.limit,
-            pipeline=deepcopy(self.pipeline),
-            allow_disk_use=self.allow_disk_use,
-            hint=deepcopy(self.hint),
+        if isinstance(domain, DomainExpression):
+            super().filter(domain)
+        else:
+            self._raw_filter = domain
+        return self
+
+    def to_filter(self) -> JsonDict:
+        """Convert domain expression to MongoDB filter.
+
+        Returns:
+            MongoDB filter format
+        """
+        if self._raw_filter is not None:
+            return self._raw_filter
+        if not self._domain:
+            return {}
+        return self._converter.convert(self._domain.root)
+
+    def to_sort(self) -> List[tuple[str, int]]:
+        """Convert sort fields to MongoDB sort.
+
+        Returns:
+            List of (field, direction) tuples
+        """
+        return [
+            (field, ASCENDING if ascending else DESCENDING)
+            for field, ascending in self._sort_fields
+        ]
+
+    async def execute_async(self) -> List[ModelT]:
+        """Execute query and return results asynchronously.
+
+        Returns:
+            Query results
+        """
+        cursor = self._collection.find(
+            filter=self.to_filter(),
+            sort=self.to_sort(),
+            skip=self._offset,
+            limit=self._limit,
         )
+        results: List[ModelT] = []
+        async for doc in cursor:
+            results.append(self._model_cls.from_dict(doc))
+        return results
+
+    async def count_async(self) -> int:
+        """Count results without fetching them asynchronously.
+
+        Returns:
+            Number of results
+        """
+        return await self._collection.count_documents(self.to_filter())
+
+    async def exists_async(self) -> bool:
+        """Check if any results exist asynchronously.
+
+        Returns:
+            True if results exist
+        """
+        count = await self.count_async()
+        return count > 0
+
+    async def first_async(self) -> Optional[ModelT]:
+        """Get first result or None asynchronously.
+
+        Returns:
+            First result or None
+        """
+        doc = await self._collection.find_one(
+            filter=self.to_filter(), sort=self.to_sort(), skip=self._offset
+        )
+        if not doc:
+            return None
+        return self._model_cls.from_dict(doc)

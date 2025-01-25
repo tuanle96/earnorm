@@ -29,15 +29,15 @@ Examples:
 import logging
 from typing import Any, Dict, List, Optional, Sequence, cast
 
+# pylint: disable=no-name-in-module,import-error
 from redis.asyncio import Redis
 
 from earnorm.cache.core.backend import BaseCacheBackend
 from earnorm.cache.core.exceptions import CacheError
 from earnorm.cache.core.serializer import SerializerProtocol
 from earnorm.di import Container
-from earnorm.pool.backends.redis import RedisPool
-from earnorm.pool.circuit import CircuitBreaker
-from earnorm.pool.retry import RetryPolicy
+from earnorm.pool.protocols.pool import PoolProtocol
+from earnorm.pool.registry import PoolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -64,12 +64,10 @@ class RedisBackend(BaseCacheBackend):
         self._container = container
         self._prefix = prefix
         self._ttl = ttl
-        self._pool: Optional[RedisPool[Redis, Redis]] = None
-        self._retry_policy = RetryPolicy(max_retries=3, base_delay=1.0, max_delay=5.0)
-        self._circuit_breaker = CircuitBreaker(failure_threshold=5, reset_timeout=60.0)
+        self._pool: Optional[PoolProtocol[Redis, Redis]] = None
 
     @property
-    def pool(self) -> RedisPool[Redis, Redis]:
+    def pool(self) -> PoolProtocol[Redis, Redis]:
         """Get Redis pool.
 
         Returns:
@@ -81,7 +79,8 @@ class RedisBackend(BaseCacheBackend):
         if self._pool is None:
             try:
                 self._pool = cast(
-                    RedisPool[Redis, Redis], self._container.get("redis_pool")
+                    PoolProtocol[Redis, Redis],
+                    PoolRegistry.get("redis")
                 )
             except Exception as e:
                 raise CacheError("Failed to get Redis pool") from e

@@ -135,7 +135,7 @@ class SerializationError(EventError):
     pass
 
 
-class ConnectionError(EventError):
+class RedisConnectionError(EventError):
     """Exception for event backend connection errors.
 
     This exception is raised when connecting to a backend fails.
@@ -151,9 +151,19 @@ class ConnectionError(EventError):
         try:
             # Connect to backend
             await backend.connect()
-        except ConnectionError as e:
+        except RedisConnectionError as e:
             logger.error("Failed to connect: %s", str(e))
         ```
+    """
+
+    pass
+
+
+class EventConnectionError(EventError):
+    """Exception for event connection errors.
+
+    This exception is raised when connecting to a backend fails.
+    It includes details about the connection failure.
     """
 
     pass

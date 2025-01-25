@@ -3,7 +3,7 @@
 This module provides the base field class for all field types.
 """
 
-from typing import Any, Dict, Generic, List, Optional, TypeVar, Union, cast
+from typing import Any, Dict, Generic, List, Optional, TypeVar, Union
 
 from earnorm.fields.types import ValidatorFunc
 

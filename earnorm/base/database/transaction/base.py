@@ -1,273 +1,230 @@
-"""Transaction management base classes.
+"""Base transaction interface.
 
-This module provides base classes for transaction management.
-It includes:
-- Transaction interface
-- Transaction manager
-- Transaction context
+This module provides the base interface for database transactions.
 
 Examples:
-    ```python
-    async with TransactionManager(pool) as tx:
-        await tx.execute(query)
-        await tx.commit()
-    ```
+    >>> with adapter.transaction() as tx:
+    ...     user = User(name="John", age=25)
+    ...     tx.insert(user)
+    ...     tx.update(user)
+    ...     tx.delete(user)
+    ...     tx.commit()
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Generic, Optional, TypeVar, cast
+from contextlib import AbstractContextManager
+from types import TracebackType
+from typing import Generic, List, Optional, Type, TypeVar
 
-from earnorm.pool.protocols.connection import ConnectionProtocol
-from earnorm.pool.protocols.pool import PoolProtocol
+from earnorm.types import DatabaseModel
 
-# Type variables for database and collection
-DBType = TypeVar("DBType")
-CollType = TypeVar("CollType")
-
-# Type variables for query and result
-QueryType = TypeVar("QueryType")
-ResultType = TypeVar("ResultType")
+ModelT = TypeVar("ModelT", bound=DatabaseModel)
 
 
-class Transaction(ABC, Generic[DBType, CollType, QueryType, ResultType]):
-    """Abstract transaction.
+class TransactionError(Exception):
+    """Base class for transaction errors."""
 
-    This class defines the interface for database transactions.
-    It provides methods for executing queries within a transaction.
+    pass
 
-    Type Parameters:
-        DBType: Database type (e.g. AsyncIOMotorDatabase)
-        CollType: Collection type (e.g. AsyncIOMotorCollection)
-        QueryType: Query type (e.g. MongoQuery)
-        ResultType: Result type (e.g. Dict[str, Any])
 
-    Examples:
-        ```python
-        async with backend.transaction() as tx:
-            await tx.execute(query1)
-            await tx.execute(query2)
-        ```
+class Transaction(ABC, Generic[ModelT]):
+    """Base class for database transactions.
+
+    This class defines the interface that all database transactions must implement.
+    It provides methods for inserting, updating, and deleting models.
     """
 
-    def __init__(self, conn: ConnectionProtocol[DBType, CollType]) -> None:
-        """Initialize transaction.
-
-        Args:
-            conn: Database connection from pool
-        """
-        self._conn = conn
-        self._active = False
-
-    @property
-    def connection(self) -> ConnectionProtocol[DBType, CollType]:
-        """Get current connection.
-
-        Returns:
-            Database connection
-        """
-        return self._conn
-
-    @property
-    def is_active(self) -> bool:
-        """Check if transaction is active.
-
-        Returns:
-            True if transaction is active
-        """
-        return self._active
-
     @abstractmethod
-    async def validate(self) -> None:
-        """Validate transaction state.
-
-        This method should check if:
-        - Connection is valid
-        - Transaction is active
-        - Any other database-specific validation
-
-        Raises:
-            TransactionError: If validation fails
-        """
-        pass
-
-    @abstractmethod
-    async def execute(self, query: QueryType) -> ResultType:
-        """Execute query in transaction.
-
-        Args:
-            query: Query to execute
-
-        Returns:
-            Query results
-
-        Examples:
-            ```python
-            async with backend.transaction() as tx:
-                result = await tx.execute(query)
-            ```
-        """
-        pass
-
-    @abstractmethod
-    async def rollback(self) -> None:
-        """Rollback transaction.
-
-        Examples:
-            ```python
-            async with backend.transaction() as tx:
-                try:
-                    await tx.execute(query)
-                except:
-                    await tx.rollback()
-            ```
-        """
-        pass
-
-    @abstractmethod
-    async def commit(self) -> None:
-        """Commit transaction.
-
-        Examples:
-            ```python
-            async with backend.transaction() as tx:
-                await tx.execute(query)
-                await tx.commit()
-            ```
-        """
-        pass
-
-
-class TransactionManager(ABC, Generic[DBType, CollType, QueryType, ResultType]):
-    """Abstract transaction manager.
-
-    This class provides interface for managing database transactions.
-    It handles transaction lifecycle and resource management.
-
-    Type Parameters:
-        DBType: Database type (e.g. AsyncIOMotorDatabase)
-        CollType: Collection type (e.g. AsyncIOMotorCollection)
-        QueryType: Query type (e.g. MongoQuery)
-        ResultType: Result type (e.g. Dict[str, Any])
-
-    Examples:
-        ```python
-        async with TransactionManager(pool) as tx:
-            await tx.execute(query)
-            await tx.commit()
-        ```
-    """
-
-    def __init__(self, pool: PoolProtocol[DBType, CollType]) -> None:
-        """Initialize transaction manager.
-
-        Args:
-            pool: Connection pool
-        """
-        self._pool = pool
-        self._conn: Optional[ConnectionProtocol[DBType, CollType]] = None
-        self._transaction: Optional[
-            Transaction[DBType, CollType, QueryType, ResultType]
-        ] = None
-
-    @property
-    def connection(self) -> Optional[ConnectionProtocol[DBType, CollType]]:
-        """Get current connection.
-
-        Returns:
-            Database connection or None if not connected
-        """
-        return self._conn
-
-    @property
-    def transaction(
-        self,
-    ) -> Optional[Transaction[DBType, CollType, QueryType, ResultType]]:
-        """Get current transaction.
-
-        Returns:
-            Transaction instance or None if not started
-        """
-        return self._transaction
-
-    @abstractmethod
-    async def _create_transaction(
-        self, conn: ConnectionProtocol[DBType, CollType]
-    ) -> Transaction[DBType, CollType, QueryType, ResultType]:
-        """Create new transaction.
-
-        Args:
-            conn: Database connection
-
-        Returns:
-            New transaction instance
-        """
-        pass
-
-    async def begin(self) -> Transaction[DBType, CollType, QueryType, ResultType]:
-        """Begin new transaction.
-
-        Returns:
-            New transaction
-
-        Raises:
-            ValueError: If no connection available
-
-        Examples:
-            ```python
-            tx = await manager.begin()
-            ```
-        """
-        if not self._conn:
-            conn = await self._pool.acquire()
-            self._conn = cast(ConnectionProtocol[DBType, CollType], conn)
-
-        if not self._conn:
-            raise ValueError("No connection available")
-
-        self._transaction = await self._create_transaction(self._conn)
-        return self._transaction
-
-    async def __aenter__(self) -> Transaction[DBType, CollType, QueryType, ResultType]:
+    def __enter__(self) -> "Transaction[ModelT]":
         """Enter transaction context.
 
         Returns:
-            Transaction context
-
-        Examples:
-            ```python
-            async with TransactionManager(pool) as tx:
-                await tx.execute(query)
-            ```
+            Transaction instance
         """
-        return await self.begin()
+        pass
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    @abstractmethod
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
+    ) -> None:
         """Exit transaction context.
 
         Args:
-            exc_type: Exception type if error occurred
-            exc_val: Exception value if error occurred
-            exc_tb: Exception traceback if error occurred
-
-        Examples:
-            ```python
-            async with TransactionManager(pool) as tx:
-                await tx.execute(query)
-            # Transaction is automatically committed or rolled back
-            ```
+            exc_type: Exception type
+            exc_val: Exception value
+            exc_tb: Exception traceback
         """
-        try:
-            if self._transaction:
-                if exc_type:
-                    # Error occurred, rollback
-                    await self._transaction.rollback()
-                else:
-                    # No error, commit
-                    await self._transaction.commit()
-                self._transaction = None
+        pass
 
-            if self._conn:
-                await self._pool.release(self._conn)
-                self._conn = None
-        except Exception:  # Ignore cleanup errors
-            pass
+    @abstractmethod
+    def insert(self, model: ModelT) -> ModelT:
+        """Insert model into database.
+
+        Args:
+            model: Model to insert
+
+        Returns:
+            Inserted model with ID
+        """
+        pass
+
+    @abstractmethod
+    def insert_many(self, models: List[ModelT]) -> List[ModelT]:
+        """Insert multiple models into database.
+
+        Args:
+            models: Models to insert
+
+        Returns:
+            Inserted models with IDs
+        """
+        pass
+
+    @abstractmethod
+    def update(self, model: ModelT) -> ModelT:
+        """Update model in database.
+
+        Args:
+            model: Model to update
+
+        Returns:
+            Updated model
+
+        Raises:
+            ValueError: If model has no ID
+        """
+        pass
+
+    @abstractmethod
+    def update_many(self, models: List[ModelT]) -> List[ModelT]:
+        """Update multiple models in database.
+
+        Args:
+            models: Models to update
+
+        Returns:
+            Updated models
+
+        Raises:
+            ValueError: If any model has no ID
+        """
+        pass
+
+    @abstractmethod
+    def delete(self, model: ModelT) -> None:
+        """Delete model from database.
+
+        Args:
+            model: Model to delete
+
+        Raises:
+            ValueError: If model has no ID
+        """
+        pass
+
+    @abstractmethod
+    def delete_many(self, models: List[ModelT]) -> None:
+        """Delete multiple models from database.
+
+        Args:
+            models: Models to delete
+
+        Raises:
+            ValueError: If any model has no ID
+        """
+        pass
+
+    @abstractmethod
+    def commit(self) -> None:
+        """Commit transaction.
+
+        Raises:
+            TransactionError: If transaction cannot be committed
+        """
+        pass
+
+    @abstractmethod
+    def rollback(self) -> None:
+        """Rollback transaction.
+
+        Raises:
+            TransactionError: If transaction cannot be rolled back
+        """
+        pass
+
+
+class TransactionManager(AbstractContextManager[Transaction[ModelT]]):
+    """Context manager for database transactions.
+
+    This class provides a context manager interface for managing transactions.
+    It ensures that transactions are properly committed or rolled back.
+
+    Examples:
+        >>> with adapter.transaction() as tx:
+        ...     user = User(name="John", age=25)
+        ...     tx.insert(user)
+        ...     tx.update(user)
+        ...     tx.delete(user)
+        ...     tx.commit()
+    """
+
+    def __init__(self) -> None:
+        """Initialize transaction manager."""
+        self._transaction: Optional[Transaction[ModelT]] = None
+
+    def __enter__(self) -> Transaction[ModelT]:
+        """Enter transaction context.
+
+        Returns:
+            Transaction instance
+        """
+        self._transaction = self._begin_transaction()
+        return self._transaction
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
+    ) -> None:
+        """Exit transaction context.
+
+        Args:
+            exc_type: Exception type
+            exc_val: Exception value
+            exc_tb: Exception traceback
+        """
+        if exc_type is not None:
+            if self._transaction is not None:
+                self._transaction.rollback()
+        else:
+            if self._transaction is not None:
+                self._transaction.commit()
+
+    @abstractmethod
+    def set_model_type(self, model_type: Type[ModelT]) -> None:
+        """Set model type for transaction.
+
+        This method must be called before starting a transaction.
+        It sets the type of model that will be used in the transaction.
+
+        Args:
+            model_type: Type of model to use in transaction
+        """
+        pass
+
+    @abstractmethod
+    def _begin_transaction(self) -> Transaction[ModelT]:
+        """Begin new transaction.
+
+        Returns:
+            Transaction instance
+
+        Raises:
+            TransactionError: If transaction cannot be started
+            ValueError: If model type is not set
+        """
+        raise NotImplementedError

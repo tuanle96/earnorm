@@ -321,7 +321,11 @@ class IntegerField(NumberField[int]):
                 message=f"Cannot convert {type(value).__name__} to integer: {str(e)}",
                 field_name=self.name,
                 code="conversion_failed",
-            )
+            ) from e
+
+    def __int__(self) -> int:
+        """Convert field value to int."""
+        return int(self._value if self._value is not None else 0)
 
 
 class FloatField(NumberField[float]):
@@ -471,7 +475,7 @@ class FloatField(NumberField[float]):
                 message=f"Cannot convert {type(value).__name__} to float: {str(e)}",
                 field_name=self.name,
                 code="conversion_failed",
-            )
+            ) from e
 
 
 class DecimalField(NumberField[Decimal]):
@@ -562,7 +566,7 @@ class DecimalField(NumberField[Decimal]):
                 try:
                     value = Decimal(str(value))
                 except (TypeError, InvalidOperation) as e:
-                    raise ValidationError(str(e), self.name)
+                    raise ValidationError(str(e), self.name) from e
 
             if self.max_digits is not None:
                 digit_tuple = value.as_tuple()
@@ -610,7 +614,7 @@ class DecimalField(NumberField[Decimal]):
                 raise ValueError("Boolean values are not allowed")
             return Decimal(str(value))
         except (TypeError, InvalidOperation) as e:
-            raise ValidationError(str(e), self.name)
+            raise ValidationError(str(e), self.name) from e
 
 
 class PositiveIntegerField(IntegerField):

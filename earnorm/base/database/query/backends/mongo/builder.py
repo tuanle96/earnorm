@@ -1,37 +1,50 @@
 """MongoDB query builder implementation.
 
 This module provides MongoDB query builder implementation.
-It supports all MongoDB query operators and aggregation pipeline.
+It supports all MongoDB query operators, aggregation pipeline, and domain expressions.
 
 Examples:
     ```python
+    # Basic query
     builder = MongoQueryBuilder("users")
     builder.filter({"age": {"$gt": 18}})
     builder.project({"name": 1, "email": 1})
     builder.sort([("name", 1)])
     query = await builder.build()
+
+    # Domain expression query
+    builder = MongoQueryBuilder("users")
+    query = builder.from_domain([("age", ">", 18)]).build()
     ```
 """
 
-from typing import Any, Dict, Generic, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Type, TypeVar, Union, cast
 
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from motor.motor_asyncio import AsyncIOMotorCollection
 
-from earnorm.base.database.query.backends.mongo.query import MongoQuery
-from earnorm.base.database.query.base import QueryBuilder
+from earnorm.base.database.query.base.query import QueryBuilder
+from earnorm.base.domain.expression import (
+    DomainExpression,
+    DomainLeaf,
+    DomainNode,
+    Operator,
+)
+from earnorm.types import DatabaseModel, JsonDict, ValueType
 
-JsonDict = Dict[str, Any]
+from .converter import MongoConverter
+from .query import MongoQuery
+
 SortSpec = List[Tuple[str, int]]
-T = TypeVar("T")
+ModelT = TypeVar("ModelT", bound=DatabaseModel)
+
+Operation = Literal["insert_one", "update", "delete", None]
 
 
-class MongoQueryBuilder(
-    QueryBuilder[AsyncIOMotorDatabase[Any], MongoQuery[T]], Generic[T]
-):
+class MongoQueryBuilder(QueryBuilder[ModelT]):
     """MongoDB query builder implementation.
 
     This class provides a fluent interface for building MongoDB queries.
-    It supports all MongoDB query operators and aggregation pipeline.
+    It supports all MongoDB query operators, aggregation pipeline, and domain expressions.
 
     Examples:
         ```python
@@ -43,19 +56,20 @@ class MongoQueryBuilder(
         ```
     """
 
-    def __init__(self, collection: str) -> None:
+    def __init__(
+        self, collection: AsyncIOMotorCollection[JsonDict], model_type: Type[ModelT]
+    ) -> None:
         """Initialize builder.
 
         Args:
-            collection: Collection name
+            collection: MongoDB collection
+            model_type: Type of model being queried
 
         Raises:
-            ValueError: If collection name is empty
+            ValueError: If collection is None
         """
-        if not collection:
-            raise ValueError("Collection name is required")
-
         self.collection = collection
+        self.model_type = model_type
         self._filter: Optional[JsonDict] = None
         self._projection: Optional[JsonDict] = None
         self._sort: Optional[SortSpec] = None
@@ -64,23 +78,232 @@ class MongoQueryBuilder(
         self._pipeline: Optional[List[JsonDict]] = None
         self._allow_disk_use = False
         self._hint: Optional[Union[str, List[Tuple[str, int]]]] = None
+        self._operation: Optional[Operation] = None
+        self._document: Optional[JsonDict] = None
+        self._update: Optional[JsonDict] = None
+        self._options: Dict[str, Any] = {}
+        self._current_field: Optional[str] = None
+        self._converter = MongoConverter()
 
-    def filter(self, filter: JsonDict) -> "MongoQueryBuilder[T]":
-        """Set query filter.
+    def where(self, field: str) -> "MongoQueryBuilder[ModelT]":
+        """Start building field expression.
 
         Args:
-            filter: MongoDB query filter
+            field: Field name
 
         Returns:
             Self for chaining
 
         Raises:
-            ValueError: If filter is not a dict
+            ValueError: If field name is empty
         """
-        self._filter = filter
+        if not field:
+            raise ValueError("Field name cannot be empty")
+        self._current_field = field
         return self
 
-    def project(self, projection: JsonDict) -> "MongoQueryBuilder[T]":
+    def _create_expression(
+        self, operator: Operator, value: ValueType
+    ) -> DomainExpression[ValueType]:
+        """Create domain expression from current field and value.
+
+        Args:
+            operator: Comparison operator
+            value: Value to compare
+
+        Returns:
+            Domain expression
+
+        Raises:
+            ValueError: If no field is selected
+        """
+        if not self._current_field:
+            raise ValueError("No field selected")
+        expr = DomainExpression[ValueType]([])
+        expr.root = DomainLeaf[ValueType](self._current_field, operator, value)
+        return expr
+
+    def equals(self, value: ValueType) -> "MongoQueryBuilder[ModelT]":
+        """Field equals value.
+
+        Args:
+            value: Value to compare
+
+        Returns:
+            Self for chaining
+
+        Raises:
+            ValueError: If no field is selected
+        """
+        expr = self._create_expression("=", value)
+        self._filter = self._converter.convert(expr.root)
+        return self
+
+    def not_equals(self, value: ValueType) -> "MongoQueryBuilder[ModelT]":
+        """Field not equals value.
+
+        Args:
+            value: Value to compare
+
+        Returns:
+            Self for chaining
+
+        Raises:
+            ValueError: If no field is selected
+        """
+        expr = self._create_expression("!=", value)
+        self._filter = self._converter.convert(expr.root)
+        return self
+
+    def greater_than(self, value: ValueType) -> "MongoQueryBuilder[ModelT]":
+        """Field greater than value.
+
+        Args:
+            value: Value to compare
+
+        Returns:
+            Self for chaining
+
+        Raises:
+            ValueError: If no field is selected
+        """
+        expr = self._create_expression(">", value)
+        self._filter = self._converter.convert(expr.root)
+        return self
+
+    def greater_than_or_equal(self, value: ValueType) -> "MongoQueryBuilder[ModelT]":
+        """Field greater than or equal to value.
+
+        Args:
+            value: Value to compare
+
+        Returns:
+            Self for chaining
+
+        Raises:
+            ValueError: If no field is selected
+        """
+        expr = self._create_expression(">=", value)
+        self._filter = self._converter.convert(expr.root)
+        return self
+
+    def less_than(self, value: ValueType) -> "MongoQueryBuilder[ModelT]":
+        """Field less than value.
+
+        Args:
+            value: Value to compare
+
+        Returns:
+            Self for chaining
+
+        Raises:
+            ValueError: If no field is selected
+        """
+        expr = self._create_expression("<", value)
+        self._filter = self._converter.convert(expr.root)
+        return self
+
+    def less_than_or_equal(self, value: ValueType) -> "MongoQueryBuilder[ModelT]":
+        """Field less than or equal to value.
+
+        Args:
+            value: Value to compare
+
+        Returns:
+            Self for chaining
+
+        Raises:
+            ValueError: If no field is selected
+        """
+        expr = self._create_expression("<=", value)
+        self._filter = self._converter.convert(expr.root)
+        return self
+
+    def in_list(self, values: List[ValueType]) -> "MongoQueryBuilder[ModelT]":
+        """Field value in list.
+
+        Args:
+            values: List of values to compare
+
+        Returns:
+            Self for chaining
+
+        Raises:
+            ValueError: If no field is selected
+        """
+        expr = self._create_expression("in", cast(ValueType, values))
+        self._filter = self._converter.convert(expr.root)
+        return self
+
+    def not_in_list(self, values: List[ValueType]) -> "MongoQueryBuilder[ModelT]":
+        """Field value not in list.
+
+        Args:
+            values: List of values to compare
+
+        Returns:
+            Self for chaining
+
+        Raises:
+            ValueError: If no field is selected
+        """
+        expr = self._create_expression("not in", cast(ValueType, values))
+        self._filter = self._converter.convert(expr.root)
+        return self
+
+    def and_(self) -> "MongoQueryBuilder[ModelT]":
+        """Add AND operator.
+
+        Returns:
+            Self for chaining
+        """
+        if not self._filter:
+            return self
+        expr = DomainExpression[ValueType]([])
+        expr.root = DomainNode[ValueType]("&", [])
+        self._filter = self._converter.convert(expr.root)
+        return self
+
+    def or_(self) -> "MongoQueryBuilder[ModelT]":
+        """Add OR operator.
+
+        Returns:
+            Self for chaining
+        """
+        if not self._filter:
+            return self
+        expr = DomainExpression[ValueType]([])
+        expr.root = DomainNode[ValueType]("|", [])
+        self._filter = self._converter.convert(expr.root)
+        return self
+
+    def not_(self) -> "MongoQueryBuilder[ModelT]":
+        """Add NOT operator.
+
+        Returns:
+            Self for chaining
+        """
+        if not self._filter:
+            return self
+        expr = DomainExpression[ValueType]([])
+        expr.root = DomainNode[ValueType]("!", [])
+        self._filter = self._converter.convert(expr.root)
+        return self
+
+    def filter(self, **conditions: Any) -> "MongoQueryBuilder[ModelT]":
+        """Add filter conditions.
+
+        Args:
+            **conditions: Filter conditions
+
+        Returns:
+            Self for chaining
+        """
+        self._filter = self._filter or {}
+        self._filter.update(conditions)
+        return self
+
+    def project(self, projection: JsonDict) -> "MongoQueryBuilder[ModelT]":
         """Set field projection.
 
         Args:
@@ -95,25 +318,20 @@ class MongoQueryBuilder(
         self._projection = projection
         return self
 
-    def sort(self, sort: SortSpec) -> "MongoQueryBuilder[T]":
-        """Set sort specification.
+    def sort(self, field: str, ascending: bool = True) -> "MongoQueryBuilder[ModelT]":
+        """Add sort specification.
 
         Args:
-            sort: List of (field, direction) tuples
+            field: Field name to sort by
+            ascending: Sort direction (True for ascending, False for descending)
 
         Returns:
             Self for chaining
-
-        Raises:
-            ValueError: If sort specification is invalid
         """
-        for item in sort:
-            if item[1] not in (-1, 1):
-                raise ValueError("Sort direction must be 1 or -1")
-        self._sort = sort
+        self._sort = [(field, 1 if ascending else -1)]
         return self
 
-    def skip(self, skip: int) -> "MongoQueryBuilder[T]":
+    def skip(self, skip: int) -> "MongoQueryBuilder[ModelT]":
         """Set number of documents to skip.
 
         Args:
@@ -130,7 +348,7 @@ class MongoQueryBuilder(
         self._skip = skip
         return self
 
-    def limit(self, limit: int) -> "MongoQueryBuilder[T]":
+    def limit(self, limit: int) -> "MongoQueryBuilder[ModelT]":
         """Set maximum number of documents to return.
 
         Args:
@@ -147,7 +365,7 @@ class MongoQueryBuilder(
         self._limit = limit
         return self
 
-    def pipeline(self, pipeline: List[JsonDict]) -> "MongoQueryBuilder[T]":
+    def pipeline(self, pipeline: List[JsonDict]) -> "MongoQueryBuilder[ModelT]":
         """Set aggregation pipeline.
 
         Args:
@@ -162,7 +380,7 @@ class MongoQueryBuilder(
         self._pipeline = pipeline
         return self
 
-    def allow_disk_use(self, allow: bool = True) -> "MongoQueryBuilder[T]":
+    def allow_disk_use(self, allow: bool = True) -> "MongoQueryBuilder[ModelT]":
         """Allow disk use for large queries.
 
         Args:
@@ -174,7 +392,9 @@ class MongoQueryBuilder(
         self._allow_disk_use = allow
         return self
 
-    def hint(self, hint: Union[str, List[Tuple[str, int]]]) -> "MongoQueryBuilder[T]":
+    def hint(
+        self, hint: Union[str, List[Tuple[str, int]]]
+    ) -> "MongoQueryBuilder[ModelT]":
         """Set index hint.
 
         Args:
@@ -193,45 +413,83 @@ class MongoQueryBuilder(
         self._hint = hint
         return self
 
-    async def build(self) -> MongoQuery[T]:
+    def insert_one(self, document: JsonDict) -> "MongoQueryBuilder[ModelT]":
+        """Set document to insert.
+
+        Args:
+            document: Document to insert
+
+        Returns:
+            Self for chaining
+        """
+        self._operation = "insert_one"
+        self._document = document
+        return self
+
+    def update(self, update: JsonDict) -> "MongoQueryBuilder[ModelT]":
+        """Set update operation.
+
+        Args:
+            update: Update operation
+
+        Returns:
+            Self for chaining
+        """
+        self._operation = "update"
+        self._update = update
+        return self
+
+    def delete(self) -> "MongoQueryBuilder[ModelT]":
+        """Set delete operation.
+
+        Returns:
+            Self for chaining
+        """
+        self._operation = "delete"
+        return self
+
+    def options(self, **kwargs: Any) -> "MongoQueryBuilder[ModelT]":
+        """Set additional options.
+
+        Args:
+            **kwargs: Query options
+
+        Returns:
+            Self for chaining
+        """
+        self._options.update(kwargs)
+        return self
+
+    def from_domain(
+        self, domain: DomainExpression[ValueType]
+    ) -> "MongoQueryBuilder[ModelT]":
+        """Build query from domain expression.
+
+        Args:
+            domain: Domain expression
+
+        Returns:
+            Self for chaining
+        """
+        self._filter = self._converter.convert(domain.root)
+        return self
+
+    def build(self) -> MongoQuery[ModelT]:
         """Build MongoDB query.
 
         Returns:
-            MongoDB query object
-
-        Raises:
-            ValueError: If builder state is invalid
+            MongoDB query
         """
-        self.validate()
-        return MongoQuery(
-            collection=self.collection,
-            filter=self._filter,
-            projection=self._projection,
-            sort=self._sort,
-            skip=self._skip,
-            limit=self._limit,
-            pipeline=self._pipeline,
-            allow_disk_use=self._allow_disk_use,
-            hint=self._hint,
-        )
+        query = MongoQuery(self.collection, self.model_type)
 
-    def validate(self) -> None:
-        """Validate builder state.
+        if self._filter:
+            query.filter(self._filter)
 
-        Raises:
-            ValueError: If builder state is invalid
-        """
-        if not self.collection:
-            raise ValueError("Collection name is required")
-
-        if self._pipeline is not None and (
-            self._filter is not None
-            or self._projection is not None
-            or self._sort is not None
-            or self._skip is not None
-            or self._limit is not None
-        ):
-            raise ValueError(
-                "Cannot use find options (filter, projection, sort, skip, limit) "
-                "with aggregation pipeline"
-            )
+        if self._sort:
+            for field, direction in self._sort:
+                query.sort(field, direction == 1)
+        if self._skip is not None:
+            query.offset(self._skip)
+        if self._limit is not None:
+            query.limit(self._limit)
+        return query

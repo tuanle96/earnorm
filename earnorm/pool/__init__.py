@@ -28,7 +28,7 @@ Example:
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Type
 
-from earnorm.pool.factory import create_mongo_pool
+from earnorm.pool.factory import create_mongo_pool, create_redis_pool
 
 from .backends.base import BasePool
 from .backends.mongo import MongoPool
@@ -88,7 +88,9 @@ def register_pool_class(
         >>> from earnorm.pool.backends.mongo import MongoPool
         >>> register_pool_class("mongodb", MongoPool)
     """
-    PoolRegistry.register(backend_type, pool_class)
+    # Create instance before registering
+    pool = pool_class()  # type: ignore
+    PoolRegistry.register(backend_type, pool)
 
 
 __all__ = [
@@ -119,5 +121,6 @@ __all__ = [
     "check_pool_health",
     "cleanup_stale_connections",
     "create_mongo_pool",
+    "create_redis_pool",
     "retry",
 ]

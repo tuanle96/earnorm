@@ -27,8 +27,10 @@ Examples:
 from typing import Any, Dict, Iterator, List, Optional, Set, Type, TypeVar, Union, cast
 
 from earnorm.base.env import Environment
-from earnorm.base.model.base import BaseModel
 from earnorm.types import FieldProtocol
+
+from .base import BaseModel
+
 
 T = TypeVar("T", bound="BaseModel")
 
@@ -41,7 +43,6 @@ class RecordSetType(BaseModel):
     and attributes while providing list operations.
     """
 
-    __slots__ = ["_ids", "_prefetch"]
     __annotations__ = {"_ids": List[int], "_prefetch": Dict[str, Set[int]]}
 
     def __init__(
@@ -251,7 +252,7 @@ class MetaModel(type):
             attrs: Class attributes
             **kwargs: Additional arguments
         """
-        super().__init__(name, bases, attrs)
+        super().__init__(name, bases, attrs, **kwargs)
 
         # Skip initialization for BaseModel
         if attrs.get("__module__") == "earnorm.base.model.base":
@@ -263,6 +264,7 @@ class MetaModel(type):
         # Initialize methods
         cls._setup_methods()
 
+    @classmethod
     def _setup_field_triggers(cls) -> None:
         """Setup field triggers.
 
@@ -271,6 +273,7 @@ class MetaModel(type):
         for field in cls._fields.values():
             field.setup_triggers()
 
+    @classmethod
     def _setup_methods(cls) -> None:
         """Setup model methods.
 
@@ -284,8 +287,9 @@ class MetaModel(type):
 
         # Setup method attributes
         for name, method in methods.items():
-            cls._setup_method(name, method)
+            cls._setup_method(name=name, method=method)
 
+    @classmethod
     def _get_methods(cls) -> Dict[str, Any]:
         """Get all model methods.
 
@@ -301,6 +305,7 @@ class MetaModel(type):
                 methods[name] = value
         return methods
 
+    @classmethod
     def _setup_method(cls, name: str, method: Any) -> None:
         """Setup single method.
 
@@ -314,7 +319,7 @@ class MetaModel(type):
 
         # Setup computed methods
         if hasattr(method, "_compute"):
-            field = cls._fields.get(method._compute)
+            field = cls._fields.get(method._compute)  # pylint: disable=W0212
             if field:
                 field.compute = method
                 field.compute_depends = getattr(method, "_depends", set())  # type: ignore

@@ -94,7 +94,7 @@ class CacheError(Exception):
         return " ".join(parts)
 
 
-class ConnectionError(CacheError):
+class CacheConnectionError(CacheError):
     """Cache connection error.
 
     Raised when connection to cache server fails.

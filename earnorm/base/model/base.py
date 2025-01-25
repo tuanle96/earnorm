@@ -35,16 +35,24 @@ from typing import (
     overload,
 )
 
+from earnorm.base.database.query.backends.mongo.builder import MongoQueryBuilder
+from earnorm.base.database.query.backends.mongo.executor import MongoQueryExecutor
+from earnorm.base.domain.converter import MongoConverter
+from earnorm.base.domain.expression import DomainExpression
 from earnorm.base.env import Environment
 from earnorm.base.model.meta import MetaModel, RecordSetType
 from earnorm.di import container
 from earnorm.fields.base import Field
+from earnorm.types import JsonDict
 from earnorm.validators.base import ValidationError
 
 # Type variable for self-referencing
 Self = TypeVar("Self", bound="BaseModel")
 
 T = TypeVar("T", bound="BaseModel")
+
+# Domain expression types
+DomainItem = Union[List[Any], str]
 
 
 class EnvironmentDescriptor:
@@ -412,7 +420,9 @@ class BaseModel(metaclass=MetaModel):
             try:
                 await field.validate(value)
             except ValidationError as e:
-                raise ValidationError(f"Invalid value for {field_name}: {str(e)}")
+                raise ValidationError(
+                    f"Invalid value for {field_name}: {str(e)}"
+                ) from e
 
     async def write(self: Self, values: Dict[str, Any]) -> Self:
         """Update record values.
@@ -449,16 +459,39 @@ class BaseModel(metaclass=MetaModel):
 
         return await self._unlink(ids)
 
-    async def _search(self, domain: List[Any]) -> List[int]:
-        """Search for record IDs matching domain.
+    async def _search(self, query: JsonDict) -> List[int]:
+        """Search for records matching query.
 
         Args:
-            domain: Search domain criteria
+            query: Database query dict
 
         Returns:
             List of matching record IDs
+
+        Examples:
+            >>> ids = await model._search({"age": {"$gt": 18}})
+            >>> print(ids)  # [1, 2, 3]
         """
-        raise NotImplementedError
+        # Get database connection from environment
+        if not self._instance_env:
+            raise ValidationError("No environment available")
+
+        # Build and execute query
+        backend_type = self._instance_env.backend_type
+        if backend_type == "mongodb":
+            # Build MongoDB query
+            builder = MongoQueryBuilder(self._name)
+            builder.filter(query).project({"_id": 1})
+            query = await builder.build()
+
+            # Execute query
+            executor = MongoQueryExecutor(self._instance_env)
+            result = await executor.execute(query)
+
+            # Extract IDs from result
+            return [doc["_id"] for doc in result.get("documents", [])]
+        else:
+            raise NotImplementedError(f"Backend {backend_type} not supported yet")
 
     def __str__(self) -> str:
         """String representation showing model name and record IDs.
@@ -473,17 +506,227 @@ class BaseModel(metaclass=MetaModel):
 
     # Private methods for record operations
     async def _create(self, values: Dict[str, Any]) -> "RecordSetType":
-        """Internal method to create record."""
-        raise NotImplementedError
+        """Create record in database.
+
+        Args:
+            values: Field values for new record
+
+        Returns:
+            RecordSet containing the new record
+
+        Raises:
+            ValidationError: If validation fails
+        """
+        # 1. Validate values
+        await self._validate_values(values)
+
+        # 2. Get database connection from environment
+        if not self._instance_env:
+            raise ValidationError("No environment available")
+
+        # 3. Build and execute query
+        backend_type = self._instance_env.backend_type
+        if backend_type == "mongodb":
+            # Build MongoDB query
+            builder = MongoQueryBuilder(self._name)
+            builder.insert_one(values)
+            query = await builder.build()
+
+            # Execute query in transaction
+            async with self._instance_env.transaction() as tx:
+                # Pre-create hooks
+                await self._before_create(values)
+
+                # Execute create
+                executor = MongoQueryExecutor(tx)
+                result = await executor.execute(query)
+
+                # Get created record ID
+                record_id = result.get("inserted_id")
+                if not record_id:
+                    raise ValidationError("Failed to create record: No ID returned")
+
+                # Post-create hooks
+                record = await self._browse([record_id])
+                await self._after_create(record)
+
+                return record
+        else:
+            raise NotImplementedError(f"Backend {backend_type} not supported yet")
 
     async def _write(self, values: Dict[str, Any]) -> "RecordSetType":
-        """Internal method to write record."""
-        raise NotImplementedError
+        """Update record in database.
+
+        Args:
+            values: Field values to update
+
+        Returns:
+            RecordSet containing the updated record
+
+        Raises:
+            ValidationError: If validation fails or no records to update
+        """
+        # 1. Check records exist
+        if not self._ids:
+            raise ValidationError("No records to update")
+
+        # 2. Validate values
+        await self._validate_values(values)
+
+        # 3. Get database connection from environment
+        if not self._instance_env:
+            raise ValidationError("No environment available")
+
+        # 4. Build and execute query
+        backend_type = self._instance_env.backend_type
+        if backend_type == "mongodb":
+            # Build MongoDB query
+            builder = MongoQueryBuilder(self._name)
+            builder.filter({"_id": {"$in": self._ids}}).update({"$set": values})
+            query = await builder.build()
+
+            # Execute query in transaction
+            async with self._instance_env.transaction() as tx:
+                # Pre-write hooks
+                await self._before_write(values)
+
+                # Execute update
+                executor = MongoQueryExecutor(tx)
+                result = await executor.execute(query)
+
+                # Check update success
+                if not result.get("modified_count"):
+                    raise ValidationError("Failed to update records")
+
+                # Post-write hooks
+                record = await self._browse(self._ids)
+                await self._after_write(record)
+
+                return record
+        else:
+            raise NotImplementedError(f"Backend {backend_type} not supported yet")
 
     async def _unlink(self, ids: List[int]) -> bool:
-        """Internal method to unlink record."""
-        raise NotImplementedError
+        """Delete records from database.
 
-    def _domain_to_query(self, domain: List[Any]) -> Any:
-        """Internal method to convert domain to query."""
-        raise NotImplementedError
+        Args:
+            ids: List of record IDs to delete
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValidationError: If validation fails or no records to delete
+
+        Examples:
+            >>> success = await model._unlink([1, 2, 3])
+            >>> print(success)  # True
+        """
+        # 1. Check records exist
+        if not ids:
+            raise ValidationError("No records to delete")
+
+        # 2. Get database connection from environment
+        if not self._instance_env:
+            raise ValidationError("No environment available")
+
+        # 3. Build and execute query
+        backend_type = self._instance_env.backend_type
+        if backend_type == "mongodb":
+            # Build MongoDB query
+            builder = MongoQueryBuilder(self._name)
+            builder.filter({"_id": {"$in": ids}}).delete()
+            query = await builder.build()
+
+            # Execute query in transaction
+            async with self._instance_env.transaction() as tx:
+                # Pre-unlink hooks
+                await self._before_unlink(ids)
+
+                # Execute delete
+                executor = MongoQueryExecutor(tx)
+                result = await executor.execute(query)
+
+                # Check delete success
+                if not result.get("deleted_count"):
+                    raise ValidationError("Failed to delete records")
+
+                # Post-unlink hooks
+                await self._after_unlink(ids)
+
+                return True
+        else:
+            raise NotImplementedError(f"Backend {backend_type} not supported yet")
+
+    def _domain_to_query(self, domain: List[Any]) -> JsonDict:
+        """Convert domain expression to database query.
+
+        Args:
+            domain: Domain expression list
+
+        Returns:
+            Database query dict
+
+        Examples:
+            >>> model._domain_to_query([["age", ">", 18], "AND", ["status", "=", "active"]])
+            {"$and": [{"age": {"$gt": 18}}, {"status": "active"}]}
+        """
+        # Create domain expression
+        expr = DomainExpression(domain)
+
+        # Convert to database query based on backend type
+        backend_type = self._instance_env.backend_type
+        if backend_type == "mongodb":
+            converter = MongoConverter()
+        else:
+            raise NotImplementedError(f"Backend {backend_type} not supported yet")
+
+        return converter.convert(expr)
+
+    async def _before_create(self, values: Dict[str, Any]) -> None:
+        """Hook called before creating record.
+
+        Args:
+            values: Field values for new record
+        """
+        pass
+
+    async def _after_create(self, record: "RecordSetType") -> None:
+        """Hook called after creating record.
+
+        Args:
+            record: Created record
+        """
+        pass
+
+    async def _before_write(self, values: Dict[str, Any]) -> None:
+        """Hook called before writing record.
+
+        Args:
+            values: Field values to update
+        """
+        pass
+
+    async def _after_write(self, record: "RecordSetType") -> None:
+        """Hook called after writing record.
+
+        Args:
+            record: Updated record
+        """
+        pass
+
+    async def _before_unlink(self, ids: List[int]) -> None:
+        """Hook called before deleting records.
+
+        Args:
+            ids: List of record IDs to delete
+        """
+        pass
+
+    async def _after_unlink(self, ids: List[int]) -> None:
+        """Hook called after deleting records.
+
+        Args:
+            ids: List of record IDs deleted
+        """
+        pass

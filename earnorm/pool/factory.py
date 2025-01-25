@@ -96,11 +96,7 @@ async def create_mongo_pool(
     database: str,
     min_size: int = 1,
     max_size: int = 10,
-    connection_timeout: float = 30.0,
     max_lifetime: int = 3600,
-    idle_timeout: int = 300,
-    validate_on_borrow: bool = True,
-    test_on_return: bool = True,
     **kwargs: Any,
 ) -> MongoPool[Any, Any]:
     """Create MongoDB connection pool.
@@ -143,6 +139,62 @@ async def create_mongo_pool(
         min_size=min_size,
         max_size=max_size,
         max_lifetime=max_lifetime,
+        **kwargs,
+    )
+
+    await pool.init()
+    return pool
+
+
+async def create_redis_pool(
+    *,
+    host: str,
+    port: int,
+    db: int = 0,
+    min_size: int = 1,
+    max_size: int = 10,
+    timeout: float = 30.0,
+    **kwargs: Any,
+) -> RedisPool[Any, Any]:
+    """Create Redis connection pool.
+
+    Args:
+        host: Redis host
+        port: Redis port
+        db: Redis database number
+        min_size: Minimum pool size
+        max_size: Maximum pool size
+        timeout: Connection timeout
+        **kwargs: Additional pool options
+            - username: Redis username
+            - password: Redis password
+            - ssl: Whether to use SSL
+            - ssl_ca_certs: Path to CA certificates file
+            - ssl_certfile: Path to client certificate file
+            - ssl_keyfile: Path to client key file
+            - ssl_cert_reqs: SSL certificate requirements
+
+    Returns:
+        Redis connection pool
+
+    Examples:
+        ```python
+        pool = await create_redis_pool(
+            host="localhost",
+            port=6379,
+            db=0,
+            min_size=1,
+            max_size=5
+        )
+        ```
+    """
+    pool = RedisPool[Any, Any](
+        host=host,
+        port=port,
+        db=db,
+        min_size=min_size,
+        max_size=max_size,
+        timeout=timeout,
         **kwargs,
     )
 

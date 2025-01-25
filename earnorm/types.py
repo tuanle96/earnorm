@@ -8,6 +8,7 @@ Core Types:
 - ValidatorFunc: Type for validator functions
 
 Model Types:
+- BaseModel: Base class for all models
 - Model: Regular persisted model
 - TransientModel: Temporary model
 - AbstractModel: Abstract base model
@@ -45,7 +46,6 @@ Examples:
     ...     active = fields.Boolean(default=True)
 """
 
-from abc import abstractmethod
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -56,14 +56,13 @@ from typing import (
     Optional,
     Protocol,
     Set,
-    Type,
     TypeAlias,
     TypeVar,
     Union,
     runtime_checkable,
 )
 
-from earnorm.base.env import Environment
+from bson import ObjectId
 
 # Type variables
 V = TypeVar("V", covariant=True)  # Field value type
@@ -91,6 +90,9 @@ DomainOperator: TypeAlias = Literal[
 # JSON-serializable types
 JsonValue = Union[str, int, float, bool, None, List[Any], Dict[str, Any]]
 JsonDict: TypeAlias = Dict[str, Any]
+
+# Domain value type
+ValueType = Union[str, int, float, bool, None]
 
 # Model and field types
 ModelName = str  # e.g. "res.partner"
@@ -128,285 +130,55 @@ else:
 
 
 @runtime_checkable
-class ModelInterface(Protocol):
-    """Protocol for model classes.
+class DatabaseModel(Protocol):
+    """Protocol for database models.
 
-    This protocol defines the interface that all model classes must implement.
-    It includes methods for converting between Python objects and database documents.
+    This protocol defines the interface that all database models must implement.
+    It provides methods for converting between Python objects and database formats.
 
-    Attributes:
-        data: Dictionary containing the model's data
-        id: Model's unique identifier
+    Examples:
+        >>> class User(DatabaseModel):
+        ...     def __init__(self, name: str, age: int) -> None:
+        ...         self.id: Optional[ObjectId] = None
+        ...         self.name = name
+        ...         self.age = age
+        ...
+        ...     def to_dict(self) -> Dict[str, Any]:
+        ...         return {
+        ...             "_id": self.id,
+        ...             "name": self.name,
+        ...             "age": self.age,
+        ...         }
+        ...
+        ...     @classmethod
+        ...     def from_dict(cls, data: Dict[str, Any]) -> "User":
+        ...         user = cls(name=data["name"], age=data["age"])
+        ...         user.id = data.get("_id")
+        ...         return user
     """
 
-    data: Dict[str, Any]
-
-    @property
-    @abstractmethod
-    def id(self) -> Optional[str]:
-        """Get model ID.
-
-        Returns:
-            Model's unique identifier or None if not saved
-        """
-        pass
-
-    @abstractmethod
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert model to dict representation.
-
-        Returns:
-            Dict containing the model's data in Python format
-        """
-        pass
-
-    @abstractmethod
-    def to_db(self, backend: str) -> Dict[str, Any]:
-        """Convert model to database representation.
-
-        Args:
-            backend: Database backend type ('mongodb', 'postgres', 'mysql')
-
-        Returns:
-            Dict containing the model's data in database format
-        """
-        pass
-
-    @abstractmethod
-    def from_db(self, data: Dict[str, Any], backend: str) -> None:
-        """Convert database data to model.
-
-        Args:
-            data: Dict containing the model's data in database format
-            backend: Database backend type ('mongodb', 'postgres', 'mysql')
-        """
-        pass
-
-    @classmethod
-    @abstractmethod
-    async def find_by_id(cls, id: str) -> Optional["ModelInterface"]:
-        """Find model by ID.
-
-        Args:
-            id: Model ID
-
-        Returns:
-            Model instance if found, None otherwise
-        """
-        pass
-
-
-@runtime_checkable
-class FieldProtocol(Protocol[V]):
-    """Protocol for field interface.
-
-    This protocol defines the interface that all field classes must implement.
-    It includes methods for validation, conversion, and database interaction.
-
-    Attributes:
-        name: Field name
-        model_name: Model name
-        relational: Whether this is a relational field
-        comodel_name: Related model name for relational fields
-    """
-
-    name: str
-    model_name: str
-    relational: bool
-    comodel_name: str
-
-    async def validate(self, value: Any) -> None:
-        """Validate field value.
-
-        Args:
-            value: Value to validate
-
-        Raises:
-            ValidationError: If validation fails
-        """
-        ...
-
-    async def convert(self, value: Any) -> V:
-        """Convert value to field type.
-
-        Args:
-            value: Value to convert
-
-        Returns:
-            Converted value
-        """
-        ...
-
-    def get_model(self) -> Type["BaseModel"]:
-        """Get related model class for relational fields.
-
-        Returns:
-            Related model class
-        """
-        ...
-
-    def setup(self, name: str, model_name: str) -> None:
-        """Setup field with name and model.
-
-        Args:
-            name: Field name
-            model_name: Model name
-        """
-        ...
-
-    def setup_triggers(self) -> None:
-        """Setup field triggers."""
-        ...
-
-    def copy(self) -> "FieldProtocol[V]":
-        """Create copy of field.
-
-        Returns:
-            New field instance with same configuration
-        """
-        ...
-
-    def to_db(self, value: Any, backend: str) -> DatabaseValue:
-        """Convert Python value to database format.
-
-        Args:
-            value: Value to convert
-            backend: Database backend type ('mongodb', 'postgres', 'mysql')
-
-        Returns:
-            Database value
-        """
-        ...
-
-    def from_db(self, value: DatabaseValue, backend: str) -> V:
-        """Convert database value to Python format.
-
-        Args:
-            value: Database value
-            backend: Database backend type ('mongodb', 'postgres', 'mysql')
-
-        Returns:
-            Python value
-        """
-        ...
-
-    @property
-    def compute(self) -> Optional[ComputeMethod]:
-        """Get compute method.
-
-        Returns:
-            Compute method or None if not computed
-        """
-        ...
-
-    @compute.setter
-    def compute(self, method: ComputeMethod) -> None:
-        """Set compute method.
-
-        Args:
-            method: Compute method
-        """
-        ...
-
-    @property
-    def compute_depends(self) -> FieldDependencies:
-        """Get compute dependencies.
-
-        Returns:
-            Set of field names that this field depends on
-        """
-        ...
-
-    @compute_depends.setter
-    def compute_depends(self, depends: FieldDependencies) -> None:
-        """Set compute dependencies.
-
-        Args:
-            depends: Set of field names that this field depends on
-        """
-        ...
-
-
-class BaseModel:
-    """Base class for all models.
-
-    This class provides common functionality for all model types.
-
-    Attributes:
-        _auto: Whether to create database backend
-        _register: Whether to register in model registry
-        _abstract: Whether this is an abstract model
-        _transient: Whether this is a transient model
-        _name: Technical name of the model
-        _description: User-readable name of the model
-        _inherit: Parent models to inherit from
-        _inherits: Parent models to delegate to
-        _order: Default ordering
-        _rec_name: Field to use for record name
-    """
-
-    _auto: bool = True
-    _register: bool = True
-    _abstract: bool = False
-    _transient: bool = False
-
-    _name: str
-    _description: Optional[str] = None
-    _inherit: Optional[Union[str, List[str]]] = None
-    _inherits: Dict[str, str] = {}
-    _order: str = "id"
-    _rec_name: Optional[str] = None
-
-    def __init__(self, env: Environment) -> None:
-        """Initialize model instance.
-
-        Args:
-            env: Current environment
-        """
-        self.env = env
-        self._inherited_fields: Dict[str, FieldProtocol[Any]] = {}
-        self._delegated_fields: Dict[str, FieldProtocol[Any]] = {}
-
-
-class Model(BaseModel):
-    """Regular persisted model.
-
-    This is the standard model type that persists to database.
-    """
-
-    pass
-
-
-class TransientModel(Model):
-    """Temporary model that is automatically cleaned up.
-
-    This model type is used for temporary data like wizards.
-    Records are automatically deleted after some time.
-    """
-
-    _auto: bool = True
-    _transient: bool = True
-
-
-class AbstractModel(Model):
-    """Abstract base model that is not persisted.
-
-    This model type is used as a base class for other models.
-    It cannot be instantiated directly.
-    """
-
-    _auto: bool = False
-    _abstract: bool = True
-
-
-class ModelProtocol(Protocol):
-    """Protocol for model types."""
+    id: Optional[ObjectId]
+    """Document ID in database."""
 
     __collection__: str
-    __tablename__: str
-    id: Any
+    """Collection name in database."""
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert model to dictionary.
+
+        Returns:
+            Dictionary representation of model
+        """
+        ...
 
     @classmethod
-    async def get(cls, id: Any) -> "ModelProtocol":
-        """Get model instance by ID."""
+    def from_dict(cls, data: Dict[str, Any]) -> "DatabaseModel":
+        """Create model from dictionary.
+
+        Args:
+            data: Dictionary representation of model
+
+        Returns:
+            Model instance
+        """
         ...

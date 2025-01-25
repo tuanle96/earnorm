@@ -27,6 +27,11 @@ class User(BaseModel):
     age = fields.IntegerField(required=True)
 
     async def get_all_users(self):
+        """Retrieve and return all users from the database.
+
+        Returns:
+            list: A list of User objects representing all users in the database.
+        """
         users = await User.search([])
 
         for user in users:

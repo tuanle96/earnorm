@@ -1,7 +1,7 @@
 """Event handlers module."""
 
-from earnorm.events.handlers.base import EventHandler
-from earnorm.events.handlers.model import (
+from .base import EventHandler
+from .model import (
     CreateUserHandler,
     UserHandler,
     default_cleanup,

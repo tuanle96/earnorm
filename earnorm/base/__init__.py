@@ -8,11 +8,25 @@ This module provides core functionality:
 - Event handling and lifecycle hooks
 """
 
-from earnorm.base.model import BaseModel
-from earnorm.types import FieldProtocol, ModelProtocol
+from earnorm.base.database import (
+    MongoTransaction,
+    MongoTransactionError,
+    MongoTransactionManager,
+    Transaction,
+    TransactionError,
+    TransactionManager,
+)
+
+from .model import BaseModel
+from .registry import DatabaseRegistry
 
 __all__ = [
     "BaseModel",
-    "FieldProtocol",
-    "ModelProtocol",
+    "DatabaseRegistry",
+    "Transaction",
+    "TransactionError",
+    "TransactionManager",
+    "MongoTransaction",
+    "MongoTransactionError",
+    "MongoTransactionManager",
 ]

@@ -94,7 +94,7 @@ def _make_cached_decorator(
             if cache_manager is None:
                 try:
                     cache_manager = await container.get("cache_manager")
-                except Exception as e:
+                except (ImportError, AttributeError, ValueError) as e:
                     # Log error but continue without caching
                     logger.warning("Failed to get cache manager: %s", e)
                     return await func(*args, **kwargs)

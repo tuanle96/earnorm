@@ -31,8 +31,10 @@ Examples:
     ```
 """
 
-from typing import Any, Coroutine, Dict, Optional, TypeVar, cast
+from typing import Any, AsyncContextManager, Coroutine, Dict, Optional, TypeVar, cast
 
+# pylint: disable=no-name-in-module,import-error
+# pyright: ignore[import]
 from redis.asyncio import Redis
 
 from earnorm.pool.backends.redis.connection import RedisConnection
@@ -48,40 +50,99 @@ COLL = TypeVar("COLL", bound=Redis)
 T = TypeVar("T", bound=RedisConnection)
 
 
+class RedisConnectionContextManager(AsyncContextManager[ConnectionProtocol[DB, COLL]]):
+    """Redis connection context manager."""
+
+    def __init__(
+        self,
+        pool: "RedisPool[DB, COLL]",
+        connection: ConnectionProtocol[DB, COLL],
+    ) -> None:
+        """Initialize Redis connection context manager.
+
+        Args:
+            pool: Redis connection pool
+            connection: Redis connection
+        """
+        self._pool = pool
+        self._connection = connection
+
+    async def __aenter__(self) -> ConnectionProtocol[DB, COLL]:
+        """Enter context manager.
+
+        Returns:
+            Redis connection
+        """
+        return self._connection
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        """Exit context manager.
+
+        Args:
+            exc_type: Exception type
+            exc: Exception instance
+            tb: Traceback
+        """
+        await self._pool.release(self._connection)
+
+
 class RedisPool(PoolProtocol[DB, COLL]):
     """Redis connection pool implementation."""
 
     def __init__(
         self,
-        uri: str,
+        host: str,
+        port: int,
+        db: int = 0,
         min_size: int = 1,
         max_size: int = 10,
-        max_idle_time: float = 300,
-        max_lifetime: float = 3600,
+        timeout: float = 30.0,
         retry_policy: Optional[RetryPolicy] = None,
         circuit_breaker: Optional[CircuitBreaker] = None,
     ) -> None:
         """Initialize Redis connection pool.
 
         Args:
-            uri: Redis URI
+            host: Redis host
+            port: Redis port
+            db: Redis database number
             min_size: Minimum pool size
             max_size: Maximum pool size
-            max_idle_time: Maximum idle time in seconds
-            max_lifetime: Maximum lifetime in seconds
+            timeout: Connection timeout in seconds
             retry_policy: Retry policy configuration
             circuit_breaker: Circuit breaker configuration
         """
-        self._uri = uri
+        self._host = host
+        self._port = port
+        self._db = db
         self._min_size = min_size
         self._max_size = max_size
-        self._max_idle_time = max_idle_time
-        self._max_lifetime = max_lifetime
+        self._timeout = timeout
         self._retry_policy = retry_policy
         self._circuit_breaker = circuit_breaker
 
         self._pool: Dict[int, ConnectionProtocol[DB, COLL]] = {}
         self._acquiring = 0
+
+    async def connection(
+        self,
+    ) -> AsyncContextManager[ConnectionProtocol[DB, COLL]]:
+        """Get connection from pool.
+
+        Returns:
+            Connection instance
+
+        Raises:
+            PoolError: If no connections are available
+            ConnectionError: If connection is invalid
+        """
+        conn = await self._acquire_impl()
+        return RedisConnectionContextManager(self, conn)
+
+    @property
+    def database_name(self) -> str:
+        """Get database name."""
+        return str(self._db)
 
     @property
     def min_size(self) -> int:
@@ -130,7 +191,12 @@ class RedisPool(PoolProtocol[DB, COLL]):
     async def _create_connection_impl(self) -> ConnectionProtocol[DB, COLL]:
         """Internal create connection implementation."""
         try:
-            client = Redis.from_url(self._uri)  # type: ignore
+            client = Redis(
+                host=self._host,
+                port=self._port,
+                db=self._db,
+                socket_timeout=self._timeout,
+            )  # type: ignore
             conn = cast(
                 ConnectionProtocol[DB, COLL],
                 RedisConnection(
@@ -173,21 +239,9 @@ class RedisPool(PoolProtocol[DB, COLL]):
                 f"Failed to acquire Redis connection: {str(e)}"
             ) from e
 
-    async def acquire(self) -> Coroutine[Any, Any, ConnectionProtocol[DB, COLL]]:
-        """Acquire connection from pool.
-
-        Returns:
-            Redis connection
-
-        Raises:
-            PoolExhaustedError: If pool is exhausted
-            ConnectionError: If connection cannot be created
-        """
-
-        async def _acquire() -> ConnectionProtocol[DB, COLL]:
-            return await self._acquire_impl()
-
-        return _acquire()
+    async def acquire(self) -> ConnectionProtocol[DB, COLL]:
+        """Acquire connection from pool"""
+        return await self._acquire_impl()
 
     @with_resilience()
     async def _release_impl(self, conn: ConnectionProtocol[DB, COLL]) -> None:
@@ -317,15 +371,26 @@ class RedisPool(PoolProtocol[DB, COLL]):
 
     async def init(self) -> None:
         """Initialize pool."""
-        self._pool = await Redis.from_url(self._uri)  # type: ignore
+        # Create initial connections
+        for _ in range(self._min_size):
+            conn = await self._create_connection_impl()
+            self._pool[id(conn)] = conn
 
     def _create_connection(self) -> ConnectionProtocol[DB, COLL]:
-        """Create new Redis connection.
+        """Create new connection.
 
         Returns:
             Redis connection
+
+        Raises:
+            ConnectionError: If connection cannot be created
         """
-        client = Redis.from_url(self._uri)  # type: ignore
+        client = Redis(
+            host=self._host,
+            port=self._port,
+            db=self._db,
+            socket_timeout=self._timeout,
+        )  # type: ignore
         return cast(
             ConnectionProtocol[DB, COLL],
             RedisConnection(

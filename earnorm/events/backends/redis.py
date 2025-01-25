@@ -38,15 +38,18 @@ Examples:
 
 import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
+# pylint: disable=no-name-in-module,import-error
+# pyright: ignore[import]
 import redis.asyncio as redis
-from redis.asyncio.client import Redis
 from redis.exceptions import RedisError
 
+from earnorm.di import container
 from earnorm.events.backends.base import EventBackend
 from earnorm.events.core.event import Event
-from earnorm.events.core.exceptions import ConnectionError, PublishError
+from earnorm.events.core.exceptions import RedisConnectionError, PublishError
+from earnorm.pool.backends.redis import RedisConnection, RedisPool
 
 logger = logging.getLogger(__name__)
 
@@ -111,12 +114,14 @@ class RedisBackend(EventBackend):
             )
             ```
         """
+        super().__init__()
         self._host = host
         self._port = port
         self._db = db
         self._password = password
         self._kwargs = kwargs
-        self._client: Optional[Redis] = None
+        self._client: Optional[redis.Redis] = None
+        self._pool: Optional[RedisPool[redis.Redis, redis.Redis]] = None
 
     @property
     def id(self) -> str:
@@ -153,51 +158,32 @@ class RedisBackend(EventBackend):
         return self._client is not None
 
     async def connect(self) -> None:
-        """Connect to Redis.
-
-        This method creates and configures the Redis client.
-
-        Raises:
-            ConnectionError: If connection fails
-
-        Examples:
-            ```python
-            await backend.connect()
-            ```
-        """
+        """Connect to Redis using pool from DI container."""
         try:
-            # Create Redis client
-            self._client = redis.Redis(
-                host=self._host,
-                port=self._port,
-                db=self._db,
-                password=self._password,
-                decode_responses=True,
-                **self._kwargs,
-            )
-            # Test connection
-            await self._client.ping()  # type: ignore
-            logger.info(
-                "Connected to Redis at %s:%s/%s", self._host, self._port, self._db
-            )
+            # Get Redis pool from container
+            pool = await container.get("redis_pool")
+            if not pool:
+                raise RedisConnectionError("Redis pool not found in container")
+
+            self._pool = cast(RedisPool[redis.Redis, redis.Redis], pool)
+
+            # Get connection from pool
+            async with await self._pool.connection() as conn:
+                self._client = cast(redis.Redis, conn)
+                await self._client.ping()  # type: ignore
+                logger.info(
+                    "Connected to Redis at %s:%s/%s", self._host, self._port, self._db
+                )
         except RedisError as e:
             logger.error("Failed to connect to Redis: %s", str(e))
-            raise ConnectionError(f"Failed to connect to Redis: {str(e)}")
+            raise RedisConnectionError(f"Failed to connect to Redis: {str(e)}") from e
 
     async def disconnect(self) -> None:
-        """Disconnect from Redis.
-
-        This method closes the Redis client and releases all connections
-        in the connection pool.
-
-        Examples:
-            ```python
-            await backend.disconnect()
-            ```
-        """
-        if self._client:
-            await self._client.close()
+        """Disconnect from Redis."""
+        if self._client and self._pool:
+            await self._pool.release(RedisConnection(self._client))
             self._client = None
+            self._pool = None
             logger.info(
                 "Disconnected from Redis at %s:%s/%s",
                 self._host,
@@ -225,7 +211,7 @@ class RedisBackend(EventBackend):
             ```
         """
         if not self._client:
-            raise ConnectionError("Not connected to Redis")
+            raise RedisConnectionError("Not connected to Redis")
 
         try:
             # Serialize event
@@ -242,7 +228,7 @@ class RedisBackend(EventBackend):
             logger.debug("Published event %s", event.name)
         except (RedisError, TypeError) as e:
             logger.error("Failed to publish event %s: %s", event.name, str(e))
-            raise PublishError(f"Failed to publish event: {str(e)}")
+            raise PublishError(f"Failed to publish event: {str(e)}") from e
 
     async def subscribe(self, pattern: str) -> None:
         """Subscribe to events matching pattern.
@@ -266,7 +252,7 @@ class RedisBackend(EventBackend):
             ```
         """
         if not self._client:
-            raise ConnectionError("Not connected to Redis")
+            raise RedisConnectionError("Not connected to Redis")
 
         try:
             pubsub = self._client.pubsub()  # type: ignore
@@ -274,4 +260,4 @@ class RedisBackend(EventBackend):
             logger.info("Subscribed to pattern %s", pattern)
         except RedisError as e:
             logger.error("Failed to subscribe to pattern %s: %s", pattern, str(e))
-            raise ConnectionError(f"Failed to subscribe to pattern: {str(e)}")
+            raise RedisConnectionError(f"Failed to subscribe to pattern: {str(e)}") from e

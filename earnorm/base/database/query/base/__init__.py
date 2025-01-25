@@ -1,16 +1,8 @@
 """Base query module.
 
-This module provides base classes and protocols for database queries.
+This module provides base classes for database queries and query building.
 """
 
-from earnorm.base.database.query.base.builder import QueryBuilder
-from earnorm.base.database.query.base.bulk import BulkOperation
-from earnorm.base.database.query.base.executor import QueryExecutor
-from earnorm.base.database.query.base.query import Query
+from .query import Query, QueryBuilder
 
-__all__ = [
-    "QueryBuilder",
-    "QueryExecutor",
-    "Query",
-    "BulkOperation",
-]
+__all__ = ["Query", "QueryBuilder"]

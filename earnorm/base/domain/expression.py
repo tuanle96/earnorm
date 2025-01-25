@@ -1,207 +1,221 @@
 """Domain expressions for query building.
 
 This module provides domain expressions for building complex queries.
+It uses visitor pattern for database-specific conversions.
 
 Examples:
     >>> expr = DomainExpression([
-    ...     ["age", ">", 18],
-    ...     "AND",
-    ...     ["status", "=", "active"]
+    ...     ("age", ">", 18),
+    ...     "&",
+    ...     ("status", "=", "active")
     ... ])
-    >>> mongo_query = expr.to_mongo()
+    >>> visitor = MongoDomainVisitor()
+    >>> mongo_query = expr.accept(visitor)
     >>> {"$and": [{"age": {"$gt": 18}}, {"status": "active"}]}
 """
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from enum import Enum
-from typing import Any, List, Optional, TypeVar, Union, cast
+from typing import Any, Generic, List, Literal, Tuple, TypeVar, Union
 
-from earnorm.types import DomainOperator, JsonDict
-
-T = TypeVar("T", bound=Union["DomainNode", "DomainLeaf"])
-DomainItem = Union[List[Any], str]
+T = TypeVar("T")  # Value type
+Operator = Literal["=", ">", "<", ">=", "<=", "!=", "in", "not in"]
+LogicalOp = Literal["&", "|", "!"]
 
 
-class LogicalOperator(str, Enum):
-    """Logical operators for combining domain expressions."""
+class DomainVisitor(ABC):
+    """Visitor for domain expressions."""
 
-    AND = "AND"
-    OR = "OR"
-    NOT = "NOT"
+    @abstractmethod
+    def visit_leaf(self, leaf: "DomainLeaf[T]") -> Any:
+        """Visit leaf node.
+
+        Args:
+            leaf: Leaf node to visit
+
+        Returns:
+            Database-specific query format
+        """
+        pass
+
+    @abstractmethod
+    def visit_node(self, node: "DomainNode[T]") -> Any:
+        """Visit logical node.
+
+        Args:
+            node: Logical node to visit
+
+        Returns:
+            Database-specific query format
+        """
+        pass
 
 
 @dataclass
-class DomainLeaf:
+class DomainLeaf(Generic[T]):
     """Leaf node in domain expression tree.
 
     Examples:
         >>> leaf = DomainLeaf("age", ">", 18)
-        >>> leaf.to_mongo()
+        >>> visitor = MongoDomainVisitor()
+        >>> leaf.accept(visitor)
         {"age": {"$gt": 18}}
     """
 
     field: str
-    operator: DomainOperator
-    value: Any
+    operator: Operator
+    value: T
 
-    def to_mongo(self) -> JsonDict:
-        """Convert to MongoDB query.
+    def accept(self, visitor: DomainVisitor) -> Any:
+        """Accept visitor.
+
+        Args:
+            visitor: Domain visitor
 
         Returns:
-            MongoDB query dict
+            Database-specific query format
         """
-        if self.operator == "=":
-            return {self.field: self.value}
-        elif self.operator == "!=":
-            return {self.field: {"$ne": self.value}}
-        elif self.operator == ">":
-            return {self.field: {"$gt": self.value}}
-        elif self.operator == ">=":
-            return {self.field: {"$gte": self.value}}
-        elif self.operator == "<":
-            return {self.field: {"$lt": self.value}}
-        elif self.operator == "<=":
-            return {self.field: {"$lte": self.value}}
-        elif self.operator == "in":
-            return {self.field: {"$in": self.value}}
-        elif self.operator == "not in":
-            return {self.field: {"$nin": self.value}}
-        elif self.operator == "like":
-            return {self.field: {"$regex": self.value, "$options": "i"}}
-        elif self.operator == "ilike":
-            return {self.field: {"$regex": self.value, "$options": "i"}}
-        elif self.operator == "not like":
-            return {self.field: {"$not": {"$regex": self.value, "$options": "i"}}}
-        elif self.operator == "not ilike":
-            return {self.field: {"$not": {"$regex": self.value, "$options": "i"}}}
-        else:
-            raise ValueError(f"Unsupported operator: {self.operator}")
+        return visitor.visit_leaf(self)
+
+    def validate(self) -> None:
+        """Validate leaf node.
+
+        Raises:
+            ValueError: If node is invalid
+        """
+        if not self.field:
+            raise ValueError("Field name is required")
+        if not self.operator:
+            raise ValueError("Operator is required")
 
 
 @dataclass
-class DomainNode:
-    """Node in domain expression tree.
+class DomainNode(Generic[T]):
+    """Logical node in domain expression tree.
 
     Examples:
         >>> node = DomainNode(
-        ...     LogicalOperator.AND,
-        ...     [
-        ...         DomainLeaf("age", ">", 18),
-        ...         DomainLeaf("status", "=", "active")
-        ...     ]
+        ...     "&",
+        ...     [DomainLeaf("age", ">", 18), DomainLeaf("status", "=", "active")]
         ... )
-        >>> node.to_mongo()
+        >>> visitor = MongoDomainVisitor()
+        >>> node.accept(visitor)
         {"$and": [{"age": {"$gt": 18}}, {"status": "active"}]}
     """
 
-    operator: LogicalOperator
-    children: List[Union["DomainNode", DomainLeaf]]
+    operator: LogicalOp
+    children: List[Union["DomainNode[T]", "DomainLeaf[T]"]]
 
-    def to_mongo(self) -> JsonDict:
-        """Convert to MongoDB query.
+    def accept(self, visitor: DomainVisitor) -> Any:
+        """Accept visitor.
+
+        Args:
+            visitor: Domain visitor
 
         Returns:
-            MongoDB query dict
+            Database-specific query format
         """
-        if self.operator == LogicalOperator.AND:
-            return {"$and": [child.to_mongo() for child in self.children]}
-        elif self.operator == LogicalOperator.OR:
-            return {"$or": [child.to_mongo() for child in self.children]}
-        elif self.operator == LogicalOperator.NOT:
-            return {"$not": self.children[0].to_mongo()}
-        else:
-            raise ValueError(f"Unsupported operator: {self.operator}")
+        return visitor.visit_node(self)
+
+    def validate(self) -> None:
+        """Validate logical node.
+
+        Raises:
+            ValueError: If node is invalid
+        """
+        if not self.operator:
+            raise ValueError("Operator is required")
+        if not self.children:
+            raise ValueError("Children are required")
+        for child in self.children:
+            child.validate()
 
 
-class DomainExpression:
+class DomainExpression(Generic[T]):
     """Domain expression for building complex queries.
+
+    This class represents a domain expression tree that can be converted
+    to different database query formats using visitors.
 
     Examples:
         >>> expr = DomainExpression([
-        ...     ["age", ">", 18],
-        ...     "AND",
-        ...     ["status", "=", "active"]
+        ...     ("age", ">", 18),
+        ...     "&",
+        ...     ("status", "=", "active")
         ... ])
-        >>> expr.to_mongo()
+        >>> visitor = MongoDomainVisitor()
+        >>> expr.accept(visitor)
         {"$and": [{"age": {"$gt": 18}}, {"status": "active"}]}
     """
 
-    def __init__(self, domain: List[DomainItem]) -> None:
+    def __init__(self, domain: List[Union[Tuple[str, Operator, T], LogicalOp]]) -> None:
         """Initialize domain expression.
 
         Args:
-            domain: Domain expression list
+            domain: Domain expression in list format
         """
-        self.domain = domain
         self.root = self._parse(domain)
 
-    def _parse(
-        self, domain: List[DomainItem], pos: int = 0
-    ) -> Optional[Union[DomainNode, DomainLeaf]]:
-        """Parse domain expression list into tree.
+    def accept(self, visitor: DomainVisitor) -> Any:
+        """Accept visitor.
 
         Args:
-            domain: Domain expression list
-            pos: Current position in list
+            visitor: Domain visitor
+
+        Returns:
+            Database-specific query format
+        """
+        return self.root.accept(visitor)
+
+    def validate(self) -> None:
+        """Validate expression tree.
+
+        Raises:
+            ValueError: If tree is invalid
+        """
+        self.root.validate()
+
+    def _parse(
+        self, domain: List[Union[Tuple[str, Operator, T], LogicalOp]]
+    ) -> Union[DomainNode[T], DomainLeaf[T]]:
+        """Parse domain list into expression tree.
+
+        Args:
+            domain: Domain expression in list format
 
         Returns:
             Root node of expression tree
+
+        Raises:
+            ValueError: If domain list is invalid
         """
         if not domain:
-            return None
+            raise ValueError("Domain list is empty")
 
-        # Parse first expression
-        if isinstance(domain[pos], list):
-            operator = domain[pos][1]
-            if not isinstance(operator, str):
-                raise ValueError(f"Invalid operator type: {type(operator)}")
-            left = DomainLeaf(
-                field=domain[pos][0],
-                operator=cast(DomainOperator, operator),  # Safe cast after type check
-                value=domain[pos][2],
-            )
-        else:
-            left = self._parse(domain, pos + 1)
+        # Handle single leaf case
+        if len(domain) == 1:
+            item = domain[0]
+            if isinstance(item, tuple):
+                field, op, value = item
+                return DomainLeaf[T](field, op, value)
+            raise ValueError("Invalid domain format")
 
-        # Check if we're done
-        if pos + 1 >= len(domain):
-            return left
+        # Find logical operator
+        for i, item in enumerate(domain):
+            if isinstance(item, str) and item in ("&", "|", "!"):
+                # Split domain list at operator
+                left = domain[:i]
+                right = domain[i + 1 :]
 
-        # Parse operator
-        if not isinstance(domain[pos + 1], str):
-            return left
+                # Create leaf nodes
+                left_node = self._parse(left)
+                right_node = self._parse(right)
 
-        op = LogicalOperator(domain[pos + 1])
+                # Create logical node
+                return DomainNode[T](item, [left_node, right_node])
 
-        # Parse right side
-        if pos + 2 >= len(domain):
-            raise ValueError("Missing right operand")
-
-        if isinstance(domain[pos + 2], list):
-            operator = domain[pos + 2][1]
-            if not isinstance(operator, str):
-                raise ValueError(f"Invalid operator type: {type(operator)}")
-            right = DomainLeaf(
-                field=domain[pos + 2][0],
-                operator=cast(DomainOperator, operator),  # Safe cast after type check
-                value=domain[pos + 2][2],
-            )
-        else:
-            right = self._parse(domain, pos + 3)
-
-        # Create node with type-safe children
-        children = [left] if left else []
-        if right:
-            children.append(right)
-
-        return DomainNode(op, children)
-
-    def to_mongo(self) -> JsonDict:
-        """Convert to MongoDB query.
-
-        Returns:
-            MongoDB query dict
-        """
-        if not self.root:
-            return {}
-        return self.root.to_mongo()
+        # No logical operator found, must be a leaf
+        if isinstance(domain[0], tuple):
+            field, op, value = domain[0]
+            return DomainLeaf[T](field, op, value)
+        raise ValueError("Invalid domain format")

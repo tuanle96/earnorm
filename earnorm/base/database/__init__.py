@@ -1,9 +1,9 @@
-"""EarnORM - A simple and elegant ORM for Python.
+"""Database module.
 
-This module provides a simple and elegant ORM for Python.
+This module provides database functionality for EarnORM.
 """
 
-from earnorm.base import (
+from .transaction import (
     MongoTransaction,
     MongoTransactionError,
     MongoTransactionManager,

@@ -33,7 +33,8 @@ from typing import Any, Dict, Optional, Protocol
 
 from earnorm.di.lifecycle import LifecycleAware
 from earnorm.events.core.event import Event
-from earnorm.events.core.exceptions import ConnectionError
+from earnorm.events.core.exceptions import EventConnectionError
+
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +170,7 @@ class EventBackend(LifecycleAware, EventBackendProtocol):
                 logger.info("Event backend initialized")
         except Exception as e:
             logger.error("Failed to initialize event backend: %s", str(e))
-            raise ConnectionError(f"Failed to initialize event backend: {str(e)}")
+            raise EventConnectionError(f"Failed to initialize event backend: {str(e)}") from e
 
     async def destroy(self) -> None:
         """Destroy backend.

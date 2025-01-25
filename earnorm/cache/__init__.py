@@ -45,7 +45,7 @@ See Also:
 from earnorm.cache.backends.redis import RedisBackend
 from earnorm.cache.core.exceptions import (
     CacheError,
-    ConnectionError,
+    CacheConnectionError,
     LockError,
     SerializationError,
     ValidationError,
@@ -65,7 +65,7 @@ __all__ = [
     "MetricsCollector",
     # Exceptions
     "CacheError",
-    "ConnectionError",
+    "CacheConnectionError",
     "LockError",
     "SerializationError",
     "ValidationError",

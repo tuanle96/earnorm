@@ -3,7 +3,7 @@
 This module provides domain expressions and builders for building complex queries.
 
 Examples:
-    >>> from earnorm.base.domain import DomainBuilder, MongoConverter
+    >>> from earnorm.base.domain import DomainBuilder
     >>> builder = DomainBuilder()
     >>> domain = (
     ...     builder
@@ -12,22 +12,23 @@ Examples:
     ...     .field("status").equals("active")
     ...     .build()
     ... )
-    >>> converter = MongoConverter()
-    >>> mongo_query = converter.convert(domain)
-    >>> {"$and": [{"age": {"$gt": 18}}, {"status": "active"}]}
 """
 
 from earnorm.base.domain.builder import DomainBuilder, DomainFieldBuilder
-from earnorm.base.domain.converter import (
-    DomainConverter,
-    MongoConverter,
-    PostgresConverter,
-)
 from earnorm.base.domain.expression import (
     DomainExpression,
     DomainLeaf,
     DomainNode,
-    LogicalOperator,
+    DomainVisitor,
+    LogicalOp,
+    Operator,
+)
+from earnorm.base.domain.operators import (
+    ContainsOperator,
+    CustomOperator,
+    EndsWithOperator,
+    RangeOperator,
+    StartsWithOperator,
 )
 
 __all__ = [
@@ -38,9 +39,13 @@ __all__ = [
     "DomainExpression",
     "DomainLeaf",
     "DomainNode",
-    "LogicalOperator",
-    # Converter
-    "DomainConverter",
-    "MongoConverter",
-    "PostgresConverter",
+    "DomainVisitor",
+    "LogicalOp",
+    "Operator",
+    # Operators
+    "CustomOperator",
+    "ContainsOperator",
+    "EndsWithOperator",
+    "RangeOperator",
+    "StartsWithOperator",
 ]

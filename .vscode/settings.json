@@ -1,0 +1,54 @@
+{
+    "python.defaultInterpreterPath": "/Users/tuan/miniconda3/envs/earnbase/bin/python",
+    "python.analysis.typeCheckingMode": "strict",
+    "python.analysis.diagnosticMode": "workspace",
+    "python.analysis.autoImportCompletions": true,
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+        "source.organizeImports": "explicit"
+    },
+    "editor.defaultFormatter": "ms-python.black-formatter",
+    "python.linting.enabled": true,
+    "python.linting.pylintEnabled": true,
+    "python.languageServer": "Pylance",
+    "python.formatting.provider": "black",
+    "python.formatting.blackArgs": ["--skip-string-normalization"],
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.black-formatter",
+        "editor.formatOnSave": true,
+        "editor.rulers": [
+            88
+        ],
+        "editor.tabSize": 4
+    },
+    "black-formatter.args": [
+        "--line-length",
+        "88"
+    ],
+    "isort.args": [
+        "--profile",
+        "black"
+    ],
+    "flake8.args": [
+        "--max-line-length=150",
+        "--extend-ignore=E203,W503,E501,W2301,W0107"
+    ],
+    "python.linting.pylintArgs": [
+        "--max-line-length=120",
+        "--disable=C0111",
+        "--disable=C0103",
+        "--disable=W0107",
+    ],
+    "python.testing.pytestEnabled": true,
+    "python.testing.unittestEnabled": false,
+    "python.testing.nosetestsEnabled": false,
+    "python.testing.pytestArgs": [
+        "tests"
+    ],
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/.pytest_cache": true,
+        "**/*.pyc": true,
+        "**/.mypy_cache": true
+    }
+}

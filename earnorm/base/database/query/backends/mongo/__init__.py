@@ -1,9 +1,12 @@
-from earnorm.base.database.query.backends.mongo.builder import MongoQueryBuilder
-from earnorm.base.database.query.backends.mongo.executor import MongoQueryExecutor
-from earnorm.base.database.query.backends.mongo.query import MongoQuery
+"""MongoDB query implementation.
+
+This module provides MongoDB-specific query implementation.
+"""
+
+from .builder import MongoQueryBuilder
+from .query import MongoQuery
 
 __all__ = [
     "MongoQuery",
     "MongoQueryBuilder",
-    "MongoQueryExecutor",
 ]

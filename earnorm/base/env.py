@@ -1,7 +1,7 @@
 """Environment module for managing database connections and caching.
 
 This module provides the Environment class which manages:
-1. Database connections and transactions
+1. Database connections and transactions through Database Adapters
 2. Model registration and lifecycle
 3. Record caching and prefetching
 4. Configuration management
@@ -9,25 +9,33 @@ This module provides the Environment class which manages:
 Examples:
     >>> env = Environment(config)
     >>> await env.init()
-    >>> cached_data = await env.get_cached("user", 123)
-    >>> await env.set_cached("user", 123, {"name": "John"})
+    >>> adapter = await env.get_adapter()
     >>> await env.destroy()
 """
 
 from typing import Any, Dict, Optional, Set, Type, TypeVar, Union, cast
 
+from earnorm.base.database.adapter import DatabaseAdapter
+from earnorm.base.database.backends.mongo.adapter import MongoDBAdapter
+from earnorm.base.database.backends.mysql.adapter import MySQLAdapter
+from earnorm.base.database.backends.postgres.adapter import PostgreSQLAdapter
 from earnorm.base.model import BaseModel
+from earnorm.base.registry import DatabaseRegistry, ModelLifecycle, Registry
 from earnorm.cache.core.manager import CacheManager
 from earnorm.config.model import SystemConfig
 from earnorm.di import container
-from earnorm.registry import Registry
-from earnorm.registry.database import DatabaseRegistry
-from earnorm.registry.model import ModelLifecycle
 
 # Type aliases
 CacheKey = str
 CacheValue = Union[str, int, float, bool, Dict[str, Any], None]
-ModelType = TypeVar("ModelType", bound=BaseModel)
+T = TypeVar("T", bound=BaseModel)
+
+# Available database adapters
+ADAPTERS = {
+    "mongodb": MongoDBAdapter,
+    "mysql": MySQLAdapter,
+    "postgres": PostgreSQLAdapter,
+}
 
 
 class EnvironmentManager:
@@ -113,6 +121,8 @@ class Environment:
         _models: Dictionary mapping model names to model classes
         _cache_manager: Cache manager for caching records
         _prefetch: Dictionary mapping model names to prefetch record IDs
+        _adapter: Database adapter instance
+        _backend_type: Database backend type
     """
 
     def __init__(self, config: SystemConfig) -> None:
@@ -126,6 +136,8 @@ class Environment:
         self._models: Dict[str, Type[BaseModel]] = {}
         self._cache_manager: Optional[CacheManager] = None
         self._prefetch: Dict[str, Set[int]] = {}
+        self._backend_type: str = config.database.backend_type
+        self._adapter: Optional[DatabaseAdapter] = None
 
     async def init(self) -> None:
         """Initialize environment.
@@ -134,6 +146,7 @@ class Environment:
         1. Gets registry from container
         2. Initializes registry with configuration
         3. Gets cache manager from container
+        4. Initializes database adapter
         """
         # Init registry
         self._registry = await container.get("registry")
@@ -143,20 +156,67 @@ class Environment:
         # Get cache manager
         self._cache_manager = await container.get("cache_manager")
 
+        # Initialize database adapter
+        adapter_class = ADAPTERS.get(self._backend_type)
+        if not adapter_class:
+            raise ValueError(f"Unsupported database backend: {self._backend_type}")
+
+        self._adapter = adapter_class()
+        await self._adapter.init(self.config.database)
+
     async def destroy(self) -> None:
         """Destroy environment.
 
         This method:
         1. Destroys registry if exists
-        2. Cleans up resources
+        2. Closes database adapter if exists
+        3. Cleans up resources
         """
         if self._registry:
             await self._registry.destroy()
             self._registry = None
 
+        if self._adapter:
+            await self._adapter.close()
+            self._adapter = None
+
         self._cache_manager = None
         self._models.clear()
         self._prefetch.clear()
+
+    async def get_adapter(self) -> DatabaseAdapter:
+        """Get database adapter instance.
+
+        Returns:
+            Database adapter instance
+
+        Raises:
+            RuntimeError: If adapter not initialized
+        """
+        if not self._adapter:
+            raise RuntimeError("Database adapter not initialized")
+        return self._adapter
+
+    async def get_connection(self) -> Any:
+        """Get database connection.
+
+        Returns:
+            Database connection from adapter
+
+        Raises:
+            RuntimeError: If adapter not initialized
+        """
+        adapter = await self.get_adapter()
+        return await adapter.get_connection()
+
+    @property
+    def backend_type(self) -> str:
+        """Get database backend type.
+
+        Returns:
+            Database backend type (e.g. "mongodb", "mysql", "postgres")
+        """
+        return self._backend_type
 
     async def get_cached(self, model: str, record_id: int) -> Optional[Dict[str, Any]]:
         """Get cached record.
@@ -321,20 +381,6 @@ class Environment:
             ...     # Do something with connection
         """
         return EnvironmentManager(self)
-
-    async def get_connection(self) -> Any:
-        """Get database connection.
-
-        Returns:
-            Database connection from registry
-
-        Raises:
-            RuntimeError: If registry not initialized
-        """
-        db_registry = await container.get("database_registry")
-        if not db_registry:
-            raise RuntimeError("Database registry not initialized")
-        return await db_registry.get_connection()
 
     def add_model(self, name: str, model: Type[BaseModel]) -> None:
         """Add model to environment.

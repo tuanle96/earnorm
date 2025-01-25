@@ -79,7 +79,7 @@ from earnorm.events.backends.base import EventBackend
 from earnorm.events.backends.redis import RedisBackend
 from earnorm.events.core.event import Event
 from earnorm.events.core.exceptions import (
-    ConnectionError,
+    RedisConnectionError,
     EventError,
     HandlerError,
     PublishError,
@@ -94,7 +94,7 @@ __all__ = [
     # Core
     "Event",
     "EventError",
-    "ConnectionError",
+    "RedisConnectionError",
     "PublishError",
     "HandlerError",
     "ValidationError",

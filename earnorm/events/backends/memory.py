@@ -36,7 +36,7 @@ from typing import Any, Dict, Optional, Set
 
 from earnorm.events.backends.base import EventBackend
 from earnorm.events.core.event import Event
-from earnorm.events.core.exceptions import ConnectionError, PublishError
+from earnorm.events.core.exceptions import EventConnectionError, PublishError
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,7 @@ class MemoryBackend(EventBackend):
 
     def __init__(self) -> None:
         """Initialize memory backend."""
+        super().__init__()
         self._queue: asyncio.Queue[Event] = asyncio.Queue()
         self._subscriptions: Set[str] = set()
         self._connected = False
@@ -144,7 +145,7 @@ class MemoryBackend(EventBackend):
             ```
         """
         if not self.is_connected:
-            raise ConnectionError("Not connected to backend")
+            raise EventConnectionError("Not connected to backend")
 
         try:
             # Check subscriptions
@@ -156,9 +157,9 @@ class MemoryBackend(EventBackend):
             # Add to queue
             await self._queue.put(event)
             logger.debug("Published event %s", event.name)
-        except Exception as e:
+        except (asyncio.QueueFull, ValueError) as e:
             logger.error("Failed to publish event %s: %s", event.name, str(e))
-            raise PublishError(f"Failed to publish event: {str(e)}")
+            raise PublishError(f"Failed to publish event: {str(e)}") from e
 
     async def subscribe(self, pattern: str) -> None:
         """Subscribe to events matching pattern.
@@ -181,7 +182,7 @@ class MemoryBackend(EventBackend):
             ```
         """
         if not self.is_connected:
-            raise ConnectionError("Not connected to backend")
+            raise EventConnectionError("Not connected to backend")
 
         self._subscriptions.add(pattern)
         logger.info("Subscribed to pattern %s", pattern)
@@ -205,10 +206,10 @@ class MemoryBackend(EventBackend):
             ```
         """
         if not self.is_connected:
-            raise ConnectionError("Not connected to backend")
+            raise EventConnectionError("Not connected to backend")
 
         try:
             return await self._queue.get()
-        except Exception as e:
+        except (asyncio.QueueEmpty, asyncio.CancelledError, asyncio.TimeoutError) as e:
             logger.error("Failed to get event: %s", str(e))
             return None

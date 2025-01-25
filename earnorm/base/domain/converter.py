@@ -1,298 +1,133 @@
 """Domain expression converters.
 
-This module provides interfaces and implementations for converting domain expressions
-to different database query formats.
+This module provides base classes for converting domain expressions to
+database-specific formats.
 
 Examples:
-    >>> expr = DomainExpression([["age", ">", 18]])
-    >>> mongo_converter = MongoConverter()
-    >>> mongo_query = mongo_converter.convert(expr)
-    >>> {"age": {"$gt": 18}}
-
-    >>> postgres_converter = PostgresConverter()
-    >>> postgres_query = postgres_converter.convert(expr)
-    >>> "age > 18"
+    >>> expr = DomainExpression([
+    ...     ("age", ">", 18),
+    ...     "&",
+    ...     ("status", "=", "active")
+    ... ])
+    >>> converter = MongoConverter()
+    >>> mongo_query = converter.convert(expr)
+    >>> {"$and": [{"age": {"$gt": 18}}, {"status": "active"}]}
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Generic, TypeVar
+from typing import Dict, Generic, TypeVar, Union
 
-from earnorm.base.domain.expression import (
-    DomainExpression,
-    DomainLeaf,
-    DomainNode,
-    LogicalOperator,
-)
-from earnorm.types import DomainOperator, JsonDict
+from earnorm.base.domain.expression import DomainLeaf, DomainNode
+from earnorm.types import JsonDict, ValueType
 
 T = TypeVar("T")
 
 
-class DomainConverter(ABC, Generic[T]):
-    """Base class for domain expression converters."""
+class DomainConverter(Generic[T], ABC):
+    """Base class for domain expression converters.
+
+    This class defines the interface that all database-specific converters must implement.
+    It provides methods for converting domain expressions to database-specific formats.
+
+    Args:
+        T: Type of converted expression
+    """
 
     @abstractmethod
-    def convert(self, expr: DomainExpression) -> T:
-        """Convert domain expression to database query.
-
-        Args:
-            expr: Domain expression to convert
-
-        Returns:
-            Database-specific query format
-        """
-        pass
-
-    @abstractmethod
-    def convert_leaf(self, leaf: DomainLeaf) -> T:
-        """Convert leaf node to database query.
+    def convert_leaf(self, leaf: DomainLeaf[ValueType]) -> T:
+        """Convert leaf node.
 
         Args:
             leaf: Leaf node to convert
 
         Returns:
-            Database-specific query format
+            Database-specific format
         """
         pass
 
     @abstractmethod
-    def convert_node(self, node: DomainNode) -> T:
-        """Convert node to database query.
+    def convert_node(self, node: DomainNode[ValueType]) -> T:
+        """Convert logical node.
 
         Args:
-            node: Node to convert
+            node: Logical node to convert
 
         Returns:
-            Database-specific query format
+            Database-specific format
         """
         pass
 
-
-class MongoConverter(DomainConverter[JsonDict]):
-    """Converter for MongoDB queries."""
-
-    def convert(self, expr: DomainExpression) -> JsonDict:
-        """Convert domain expression to MongoDB query.
+    def convert(self, expr: Union[DomainLeaf[ValueType], DomainNode[ValueType]]) -> T:
+        """Convert domain expression.
 
         Args:
             expr: Domain expression to convert
 
         Returns:
-            MongoDB query dict
-        """
-        if not expr.root:
-            return {}
-        return (
-            self.convert_node(expr.root)
-            if isinstance(expr.root, DomainNode)
-            else self.convert_leaf(expr.root)
-        )
+            Database-specific format
 
-    def convert_leaf(self, leaf: DomainLeaf) -> JsonDict:
-        """Convert leaf node to MongoDB query.
+        Raises:
+            ValueError: If expression is invalid
+        """
+        expr.validate()
+        if isinstance(expr, DomainLeaf):
+            return self.convert_leaf(expr)
+        return self.convert_node(expr)
+
+
+class JsonConverter(DomainConverter[JsonDict]):
+    """Base class for JSON-based converters.
+
+    This class provides common functionality for converters that produce
+    JSON-compatible dictionaries.
+    """
+
+    _OPERATOR_MAP: Dict[str, str | None] = {}
+    _LOGICAL_MAP: Dict[str, str] = {}
+
+    def convert_leaf(self, leaf: DomainLeaf[ValueType]) -> JsonDict:
+        """Convert leaf node to JSON dict.
 
         Args:
             leaf: Leaf node to convert
 
         Returns:
-            MongoDB query dict
-        """
-        operator: DomainOperator = leaf.operator  # Type annotation for clarity
+            JSON-compatible dict
 
-        if operator == "=":
+        Raises:
+            ValueError: If operator is not supported
+        """
+        if leaf.operator not in self._OPERATOR_MAP:
+            raise ValueError(f"Operator {leaf.operator} not supported")
+
+        op = self._OPERATOR_MAP[leaf.operator]
+        if op is None:
+            # Direct value comparison
             return {leaf.field: leaf.value}
-        elif operator == "!=":
-            return {leaf.field: {"$ne": leaf.value}}
-        elif operator == ">":
-            return {leaf.field: {"$gt": leaf.value}}
-        elif operator == ">=":
-            return {leaf.field: {"$gte": leaf.value}}
-        elif operator == "<":
-            return {leaf.field: {"$lt": leaf.value}}
-        elif operator == "<=":
-            return {leaf.field: {"$lte": leaf.value}}
-        elif operator == "in":
-            return {leaf.field: {"$in": leaf.value}}
-        elif operator == "not in":
-            return {leaf.field: {"$nin": leaf.value}}
-        elif operator in ("like", "ilike", "=like", "=ilike"):
-            return {leaf.field: {"$regex": leaf.value, "$options": "i"}}
-        elif operator in ("not like", "not ilike"):
-            return {leaf.field: {"$not": {"$regex": leaf.value, "$options": "i"}}}
-        elif operator == "contains":
-            return {leaf.field: {"$regex": f".*{leaf.value}.*", "$options": "i"}}
-        elif operator == "not contains":
-            return {
-                leaf.field: {"$not": {"$regex": f".*{leaf.value}.*", "$options": "i"}}
-            }
-        else:
-            raise ValueError(f"Unsupported operator: {operator}")
 
-    def convert_node(self, node: DomainNode) -> JsonDict:
-        """Convert node to MongoDB query.
+        return {leaf.field: {op: leaf.value}}
+
+    def convert_node(self, node: DomainNode[ValueType]) -> JsonDict:
+        """Convert logical node to JSON dict.
 
         Args:
-            node: Node to convert
+            node: Logical node to convert
 
         Returns:
-            MongoDB query dict
+            JSON-compatible dict
+
+        Raises:
+            ValueError: If operator is not supported
         """
-        if node.operator == LogicalOperator.AND:
-            return {
-                "$and": [
-                    (
-                        self.convert_node(child)
-                        if isinstance(child, DomainNode)
-                        else self.convert_leaf(child)
-                    )
-                    for child in node.children
-                ]
-            }
-        elif node.operator == LogicalOperator.OR:
-            return {
-                "$or": [
-                    (
-                        self.convert_node(child)
-                        if isinstance(child, DomainNode)
-                        else self.convert_leaf(child)
-                    )
-                    for child in node.children
-                ]
-            }
-        elif node.operator == LogicalOperator.NOT:
-            child = node.children[0]
-            return {
-                "$not": (
-                    self.convert_node(child)
-                    if isinstance(child, DomainNode)
-                    else self.convert_leaf(child)
-                )
-            }
-        else:
-            raise ValueError(f"Unsupported operator: {node.operator}")
+        if node.operator not in self._LOGICAL_MAP:
+            raise ValueError(f"Operator {node.operator} not supported")
 
+        op = self._LOGICAL_MAP[node.operator]
+        if op == "$not":
+            # NOT only takes one operand
+            if len(node.children) != 1:
+                raise ValueError("NOT operator requires exactly one operand")
+            return {op: self.convert(node.children[0])}
 
-class PostgresConverter(DomainConverter[str]):
-    """Converter for PostgreSQL queries."""
-
-    def convert(self, expr: DomainExpression) -> str:
-        """Convert domain expression to PostgreSQL query.
-
-        Args:
-            expr: Domain expression to convert
-
-        Returns:
-            PostgreSQL WHERE clause
-        """
-        if not expr.root:
-            return ""
-        return (
-            self.convert_node(expr.root)
-            if isinstance(expr.root, DomainNode)
-            else self.convert_leaf(expr.root)
-        )
-
-    def convert_leaf(self, leaf: DomainLeaf) -> str:
-        """Convert leaf node to PostgreSQL query.
-
-        Args:
-            leaf: Leaf node to convert
-
-        Returns:
-            PostgreSQL WHERE clause
-        """
-        operator: DomainOperator = leaf.operator  # Type annotation for clarity
-        value = self._format_value(leaf.value)
-
-        if operator == "=":
-            return f"{leaf.field} = {value}"
-        elif operator == "!=":
-            return f"{leaf.field} != {value}"
-        elif operator == ">":
-            return f"{leaf.field} > {value}"
-        elif operator == ">=":
-            return f"{leaf.field} >= {value}"
-        elif operator == "<":
-            return f"{leaf.field} < {value}"
-        elif operator == "<=":
-            return f"{leaf.field} <= {value}"
-        elif operator == "in":
-            values = ", ".join(map(self._format_value, leaf.value))
-            return f"{leaf.field} IN ({values})"
-        elif operator == "not in":
-            values = ", ".join(map(self._format_value, leaf.value))
-            return f"{leaf.field} NOT IN ({values})"
-        elif operator in ("like", "=like"):
-            return f"{leaf.field} LIKE {value}"
-        elif operator in ("ilike", "=ilike"):
-            return f"{leaf.field} ILIKE {value}"
-        elif operator == "not like":
-            return f"{leaf.field} NOT LIKE {value}"
-        elif operator == "not ilike":
-            return f"{leaf.field} NOT ILIKE {value}"
-        elif operator == "contains":
-            return f"{leaf.field} ILIKE '%' || {value} || '%'"
-        elif operator == "not contains":
-            return f"{leaf.field} NOT ILIKE '%' || {value} || '%'"
-        else:
-            raise ValueError(f"Unsupported operator: {operator}")
-
-    def convert_node(self, node: DomainNode) -> str:
-        """Convert node to PostgreSQL query.
-
-        Args:
-            node: Node to convert
-
-        Returns:
-            PostgreSQL WHERE clause
-        """
-        if node.operator == LogicalOperator.AND:
-            clauses = [
-                (
-                    self.convert_node(child)
-                    if isinstance(child, DomainNode)
-                    else self.convert_leaf(child)
-                )
-                for child in node.children
-            ]
-            return f"({' AND '.join(clauses)})"
-        elif node.operator == LogicalOperator.OR:
-            clauses = [
-                (
-                    self.convert_node(child)
-                    if isinstance(child, DomainNode)
-                    else self.convert_leaf(child)
-                )
-                for child in node.children
-            ]
-            return f"({' OR '.join(clauses)})"
-        elif node.operator == LogicalOperator.NOT:
-            child = node.children[0]
-            clause = (
-                self.convert_node(child)
-                if isinstance(child, DomainNode)
-                else self.convert_leaf(child)
-            )
-            return f"NOT ({clause})"
-        else:
-            raise ValueError(f"Unsupported operator: {node.operator}")
-
-    def _format_value(self, value: Any) -> str:
-        """Format value for PostgreSQL query.
-
-        Args:
-            value: Value to format
-
-        Returns:
-            Formatted value string
-        """
-        if value is None:
-            return "NULL"
-        elif isinstance(value, bool):
-            return str(value).lower()
-        elif isinstance(value, (int, float)):
-            return str(value)
-        elif isinstance(value, str):
-            return f"'{value}'"  # Basic escaping, should use parameterized queries in production
-        else:
-            return f"'{str(value)}'"
+        # AND/OR take a list of operands
+        return {op: [self.convert(child) for child in node.children]}

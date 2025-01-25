@@ -11,16 +11,19 @@ Examples:
 """
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Generic, Tuple, TypeVar
 
-from earnorm.types import JsonDict
+from earnorm.types import JsonDict, ValueType
+
+T = TypeVar("T", bound=ValueType)
+RangeType = Tuple[ValueType, ValueType]
 
 
-class CustomOperator(ABC):
+class CustomOperator(Generic[T], ABC):
     """Base class for custom operators.
 
     Examples:
-        >>> class ContainsOperator(CustomOperator):
+        >>> class ContainsOperator(CustomOperator[str]):
         ...     name = "contains"
         ...
         ...     def to_mongo(self, field, value):
@@ -30,7 +33,7 @@ class CustomOperator(ABC):
     name: str
 
     @abstractmethod
-    def to_mongo(self, field: str, value: Any) -> JsonDict:
+    def to_mongo(self, field: str, value: T) -> JsonDict:
         """Convert to MongoDB query.
 
         Args:
@@ -43,7 +46,7 @@ class CustomOperator(ABC):
         pass
 
     @abstractmethod
-    def to_postgres(self, field: str, value: Any) -> str:
+    def to_postgres(self, field: str, value: T) -> str:
         """Convert to PostgreSQL query.
 
         Args:
@@ -56,20 +59,12 @@ class CustomOperator(ABC):
         pass
 
 
-class ContainsOperator(CustomOperator):
-    """Operator for substring matching.
-
-    Examples:
-        >>> op = ContainsOperator()
-        >>> op.to_mongo("name", "John")
-        {"name": {"$regex": ".*John.*"}}
-        >>> op.to_postgres("name", "John")
-        "name LIKE '%John%'"
-    """
+class ContainsOperator(CustomOperator[str]):
+    """Contains operator for string fields."""
 
     name = "contains"
 
-    def to_mongo(self, field: str, value: Any) -> JsonDict:
+    def to_mongo(self, field: str, value: str) -> JsonDict:
         """Convert to MongoDB query.
 
         Args:
@@ -81,7 +76,7 @@ class ContainsOperator(CustomOperator):
         """
         return {field: {"$regex": f".*{value}.*", "$options": "i"}}
 
-    def to_postgres(self, field: str, value: Any) -> str:
+    def to_postgres(self, field: str, value: str) -> str:
         """Convert to PostgreSQL query.
 
         Args:
@@ -94,20 +89,12 @@ class ContainsOperator(CustomOperator):
         return f"{field} ILIKE '%{value}%'"
 
 
-class StartsWithOperator(CustomOperator):
-    """Operator for prefix matching.
-
-    Examples:
-        >>> op = StartsWithOperator()
-        >>> op.to_mongo("name", "John")
-        {"name": {"$regex": "^John.*"}}
-        >>> op.to_postgres("name", "John")
-        "name LIKE 'John%'"
-    """
+class StartsWithOperator(CustomOperator[str]):
+    """Starts with operator for string fields."""
 
     name = "starts_with"
 
-    def to_mongo(self, field: str, value: Any) -> JsonDict:
+    def to_mongo(self, field: str, value: str) -> JsonDict:
         """Convert to MongoDB query.
 
         Args:
@@ -117,9 +104,9 @@ class StartsWithOperator(CustomOperator):
         Returns:
             MongoDB query dict
         """
-        return {field: {"$regex": f"^{value}.*", "$options": "i"}}
+        return {field: {"$regex": f"^{value}", "$options": "i"}}
 
-    def to_postgres(self, field: str, value: Any) -> str:
+    def to_postgres(self, field: str, value: str) -> str:
         """Convert to PostgreSQL query.
 
         Args:
@@ -132,20 +119,12 @@ class StartsWithOperator(CustomOperator):
         return f"{field} ILIKE '{value}%'"
 
 
-class EndsWithOperator(CustomOperator):
-    """Operator for suffix matching.
-
-    Examples:
-        >>> op = EndsWithOperator()
-        >>> op.to_mongo("name", "son")
-        {"name": {"$regex": ".*son$"}}
-        >>> op.to_postgres("name", "son")
-        "name LIKE '%son'"
-    """
+class EndsWithOperator(CustomOperator[str]):
+    """Ends with operator for string fields."""
 
     name = "ends_with"
 
-    def to_mongo(self, field: str, value: Any) -> JsonDict:
+    def to_mongo(self, field: str, value: str) -> JsonDict:
         """Convert to MongoDB query.
 
         Args:
@@ -155,9 +134,9 @@ class EndsWithOperator(CustomOperator):
         Returns:
             MongoDB query dict
         """
-        return {field: {"$regex": f".*{value}$", "$options": "i"}}
+        return {field: {"$regex": f"{value}$", "$options": "i"}}
 
-    def to_postgres(self, field: str, value: Any) -> str:
+    def to_postgres(self, field: str, value: str) -> str:
         """Convert to PostgreSQL query.
 
         Args:
@@ -170,20 +149,44 @@ class EndsWithOperator(CustomOperator):
         return f"{field} ILIKE '%{value}'"
 
 
-class RangeOperator(CustomOperator):
-    """Operator for range queries.
+class BaseRangeOperator(ABC):
+    """Base class for range operators."""
 
-    Examples:
-        >>> op = RangeOperator()
-        >>> op.to_mongo("age", (18, 30))
-        {"age": {"$gte": 18, "$lte": 30}}
-        >>> op.to_postgres("age", (18, 30))
-        "age BETWEEN 18 AND 30"
-    """
+    name: str
+
+    @abstractmethod
+    def to_mongo(self, field: str, value: RangeType) -> JsonDict:
+        """Convert to MongoDB query.
+
+        Args:
+            field: Field name
+            value: (min, max) tuple
+
+        Returns:
+            MongoDB query dict
+        """
+        pass
+
+    @abstractmethod
+    def to_postgres(self, field: str, value: RangeType) -> str:
+        """Convert to PostgreSQL query.
+
+        Args:
+            field: Field name
+            value: (min, max) tuple
+
+        Returns:
+            PostgreSQL condition
+        """
+        pass
+
+
+class RangeOperator(BaseRangeOperator):
+    """Range operator for numeric fields."""
 
     name = "range"
 
-    def to_mongo(self, field: str, value: tuple[Any, Any]) -> JsonDict:
+    def to_mongo(self, field: str, value: RangeType) -> JsonDict:
         """Convert to MongoDB query.
 
         Args:
@@ -194,9 +197,14 @@ class RangeOperator(CustomOperator):
             MongoDB query dict
         """
         min_val, max_val = value
-        return {field: {"$gte": min_val, "$lte": max_val}}
+        return {
+            field: {
+                "$gte": min_val,
+                "$lte": max_val,
+            }
+        }
 
-    def to_postgres(self, field: str, value: tuple[Any, Any]) -> str:
+    def to_postgres(self, field: str, value: RangeType) -> str:
         """Convert to PostgreSQL query.
 
         Args:

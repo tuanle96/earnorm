@@ -1,8 +1,8 @@
 """Core event system components."""
 
-from earnorm.events.core.event import Event
-from earnorm.events.core.registry import EventRegistry
-
+from .event import Event
+from .registry import EventRegistry
 from .bus import EventBus, EventHandler
+from .exceptions import EventConnectionError, EventError, PublishError
 
-__all__ = ["Event", "EventHandler", "EventBus", "EventRegistry"]
+__all__ = ["Event", "EventHandler", "EventBus", "EventRegistry", "EventConnectionError", "EventError", "PublishError"]
