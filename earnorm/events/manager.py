@@ -48,6 +48,10 @@ logger = logging.getLogger(__name__)
 class EventHandlerCallable(Protocol):
     """Protocol for event handler callable."""
 
+    __name__: str
+    __qualname__: str
+    __module__: str
+
     async def __call__(self, event: Event) -> Any:
         """Handle event."""
         ...

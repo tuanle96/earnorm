@@ -31,22 +31,26 @@ Examples:
     ```
 """
 
-from typing import Any, TypeVar, cast
+import asyncio
+import logging
+from typing import Any, AsyncContextManager, Optional, Set, TypeVar, cast
 
 from redis.asyncio import Redis
 
 from earnorm.exceptions import ConnectionError as DatabaseConnectionError
-from earnorm.pool.backends.base.pool import BasePool
+from earnorm.pool.backends.redis.connection import RedisConnection
 from earnorm.pool.core.circuit import CircuitBreaker
 from earnorm.pool.core.retry import RetryPolicy
 from earnorm.pool.protocols.connection import AsyncConnectionProtocol
-
-from .connection import RedisConnection
+from earnorm.pool.protocols.pool import AsyncPoolProtocol
 
 DB = TypeVar("DB", bound=Redis)
+COLL = TypeVar("COLL", bound=None)
+
+logger = logging.getLogger(__name__)
 
 
-class RedisPool(BasePool[DB, None]):
+class RedisPool(AsyncPoolProtocol[DB, COLL]):
     """Redis connection pool implementation."""
 
     def __init__(
@@ -56,13 +60,11 @@ class RedisPool(BasePool[DB, None]):
         db: int = 0,
         username: str | None = None,
         password: str | None = None,
-        pool_size: int = 10,
         min_size: int = 2,
         max_size: int = 20,
-        max_idle_time: int = 300,
-        max_lifetime: int = 3600,
         retry_policy: RetryPolicy | None = None,
         circuit_breaker: CircuitBreaker | None = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize Redis pool.
 
@@ -72,32 +74,29 @@ class RedisPool(BasePool[DB, None]):
             db: Redis database number
             username: Username for authentication
             password: Password for authentication
-            pool_size: Initial pool size
             min_size: Minimum pool size
             max_size: Maximum pool size
-            max_idle_time: Maximum idle time in seconds
-            max_lifetime: Maximum lifetime in seconds
             retry_policy: Retry policy
             circuit_breaker: Circuit breaker
+            **kwargs: Additional client options
         """
-        super().__init__(
-            pool_size=pool_size,
-            min_size=min_size,
-            max_size=max_size,
-            max_idle_time=max_idle_time,
-            max_lifetime=max_lifetime,
-            retry_policy=retry_policy,
-            circuit_breaker=circuit_breaker,
-        )
-
         self._host = host
         self._port = port
         self._db = db
         self._username = username
         self._password = password
-        self._client: Redis | None = None
+        self._min_size = min_size
+        self._max_size = max_size
+        self._retry_policy = retry_policy
+        self._circuit_breaker = circuit_breaker
+        self._kwargs = kwargs
 
-    def _create_connection(self) -> AsyncConnectionProtocol[DB, None]:
+        self._client: Redis | None = None
+        self._available: Set[AsyncConnectionProtocol[DB, COLL]] = set()
+        self._in_use: Set[AsyncConnectionProtocol[DB, COLL]] = set()
+        self._lock = asyncio.Lock()
+
+    def _create_connection(self) -> AsyncConnectionProtocol[DB, COLL]:
         """Create a new connection.
 
         Returns:
@@ -110,91 +109,184 @@ class RedisPool(BasePool[DB, None]):
             raise DatabaseConnectionError("Pool is not connected")
 
         return cast(
-            AsyncConnectionProtocol[DB, None],
+            AsyncConnectionProtocol[DB, COLL],
             RedisConnection(
                 client=self._client,
-                max_idle_time=self._max_idle_time,
-                max_lifetime=self._max_lifetime,
                 retry_policy=self._retry_policy,
                 circuit_breaker=self._circuit_breaker,
             ),
         )
 
-    async def connect(self) -> None:
-        """Connect to Redis."""
-        if not self._client:
-            self._client = Redis(
-                host=self._host,
-                port=self._port,
-                db=self._db,
-                username=self._username,
-                password=self._password,
+    async def connection(
+        self,
+    ) -> AsyncContextManager[AsyncConnectionProtocol[DB, COLL]]:
+        """Get connection from pool.
+
+        Returns:
+            Connection instance
+        """
+        return _ConnectionManager(self)
+
+    async def init(self) -> None:
+        """Initialize pool.
+
+        This method creates the initial connections.
+        """
+        async with self._lock:
+            # Create client if not exists
+            if not self._client:
+                self._client = Redis(
+                    host=self._host,
+                    port=self._port,
+                    db=self._db,
+                    username=self._username,
+                    password=self._password,
+                    **self._kwargs,
+                )
+
+            # Create initial connections
+            for _ in range(self._min_size):
+                conn = self._create_connection()
+                self._available.add(conn)
+
+            logger.info(
+                "Initialized Redis pool with %d connections",
+                self.size,
             )
 
-    async def disconnect(self) -> None:
-        """Disconnect from Redis."""
+    async def clear(self) -> None:
+        """Clear all connections."""
+        async with self._lock:
+            # Close all connections
+            for conn in self._available | self._in_use:
+                await conn.close()
+
+            # Clear sets
+            self._available.clear()
+            self._in_use.clear()
+
+            logger.info("Cleared all connections from pool")
+
+    async def destroy(self) -> None:
+        """Destroy pool and all connections."""
+        await self.clear()
         if self._client:
             await self._client.close()
             self._client = None
+        logger.info("Destroyed Redis pool")
 
-    async def ping(self) -> bool:
+    async def close(self) -> None:
+        """Close pool and cleanup resources."""
+        await self.destroy()
+
+    async def acquire(self) -> AsyncConnectionProtocol[DB, COLL]:
+        """Acquire connection from pool."""
+        async with self._lock:
+            # Get available connection or create new one
+            if not self._available and self.size < self.max_size:
+                conn = self._create_connection()
+                self._available.add(conn)
+
+            # Get connection from available set
+            conn = self._available.pop()
+            self._in_use.add(conn)
+
+            return conn
+
+    async def release(self, conn: AsyncConnectionProtocol[DB, COLL]) -> None:
+        """Release connection back to pool."""
+        async with self._lock:
+            # Move connection back to available set
+            self._in_use.remove(conn)
+            self._available.add(conn)
+
+    @property
+    def size(self) -> int:
+        """Get current pool size."""
+        return len(self._available) + len(self._in_use)
+
+    @property
+    def max_size(self) -> int:
+        """Get maximum pool size."""
+        return self._max_size
+
+    @property
+    def min_size(self) -> int:
+        """Get minimum pool size."""
+        return self._min_size
+
+    @property
+    def available(self) -> int:
+        """Get number of available connections."""
+        return len(self._available)
+
+    @property
+    def in_use(self) -> int:
+        """Get number of connections in use."""
+        return len(self._in_use)
+
+    async def health_check(self) -> bool:
         """Check pool health.
 
         Returns:
-            bool: True if pool is healthy
+            True if pool is healthy
         """
+        if not self._client:
+            return False
+
         try:
-            if not self._client:
-                return False
-            await self._client.ping()  # type: ignore
-            return True
+            result = await self._client.ping()  # type: ignore
+            return bool(result)
         except Exception:
             return False
 
     def get_stats(self) -> dict[str, Any]:
         """Get pool statistics."""
-        stats = super().get_stats()
-        stats.update(
-            {
-                "host": self._host,
-                "port": self._port,
-                "db": self._db,
-            }
-        )
-        return stats
+        return {
+            "host": self._host,
+            "port": self._port,
+            "db": self._db,
+            "size": self.size,
+            "max_size": self.max_size,
+            "min_size": self.min_size,
+            "available": self.available,
+            "in_use": self.in_use,
+        }
 
     @property
     def database_name(self) -> str:
         """Get database name."""
         return str(self._db)
 
-    async def init(self) -> None:
-        """Initialize pool."""
-        async with self._lock:
-            for _ in range(self._min_size):
-                conn = self._create_connection()
-                self._available.append(conn)
 
-    async def _create_initial_connections(self) -> None:
-        """Create initial connections."""
-        for _ in range(self._min_size):
-            conn = self._create_connection()
-            self._available.append(conn)
+class _ConnectionManager(AsyncContextManager[AsyncConnectionProtocol[DB, COLL]]):
+    """Connection manager for Redis pool."""
 
-    async def _close_connection(self, conn: AsyncConnectionProtocol[DB, None]) -> None:
-        """Close Redis connection.
+    def __init__(self, pool: RedisPool[DB, COLL]) -> None:
+        """Initialize connection manager.
 
         Args:
-            conn: Redis connection
+            pool: Redis pool
         """
-        await conn.close()
+        self.pool = pool
+        self.conn: Optional[AsyncConnectionProtocol[DB, COLL]] = None
 
-    async def _validate_connection(
-        self, conn: AsyncConnectionProtocol[DB, None]
-    ) -> bool:
-        """Validate connection."""
-        try:
-            result = await conn.ping()
-            return bool(result)
-        except Exception:
-            return False
+    async def __aenter__(self) -> AsyncConnectionProtocol[DB, COLL]:
+        """Enter async context.
+
+        Returns:
+            Connection instance
+        """
+        self.conn = await self.pool.acquire()
+        return self.conn
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Exit async context.
+
+        Args:
+            exc_type: Exception type
+            exc_val: Exception value
+            exc_tb: Exception traceback
+        """
+        if self.conn:
+            await self.pool.release(self.conn)

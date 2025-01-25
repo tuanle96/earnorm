@@ -74,26 +74,24 @@ class AsyncPoolProtocol(Protocol[DBPool, CollPool]):
         """
         ...
 
-    async def acquire(self) -> AsyncConnectionProtocol[DBPool, CollPool]:
-        """Acquire connection from pool.
-
-        Returns:
-            Connection instance
-        """
-        ...
-
-    async def release(
-        self, connection: AsyncConnectionProtocol[DBPool, CollPool]
-    ) -> None:
-        """Release connection back to pool.
-
-        Args:
-            connection: Connection to release
-        """
+    async def init(self) -> None:
+        """Initialize pool."""
         ...
 
     async def clear(self) -> None:
-        """Clear all connections from pool."""
+        """Clear all connections."""
+        ...
+
+    async def acquire(self) -> AsyncConnectionProtocol[DBPool, CollPool]:
+        """Acquire connection from pool."""
+        ...
+
+    async def release(self, conn: AsyncConnectionProtocol[DBPool, CollPool]) -> None:
+        """Release connection back to pool."""
+        ...
+
+    async def destroy(self) -> None:
+        """Destroy pool and all connections."""
         ...
 
     async def close(self) -> None:

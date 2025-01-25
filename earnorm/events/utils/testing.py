@@ -39,8 +39,9 @@ Examples:
 """
 
 import logging
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
+from earnorm.di.lifecycle import LifecycleAware
 from earnorm.events.backends.base import EventBackend
 from earnorm.events.core.bus import EventBus
 from earnorm.events.core.event import Event
@@ -408,3 +409,45 @@ class EventRecorder(EventHandler):
             ```
         """
         self._events.clear()
+
+
+class MockEventHandler(LifecycleAware):
+    """Mock event handler for testing."""
+
+    def __init__(self, pattern: str) -> None:
+        """Initialize handler."""
+        self._pattern = pattern
+        self._events: list[Any] = []
+
+    @property
+    def id(self) -> str:
+        """Get handler ID."""
+        return f"mock_handler_{self._pattern}"
+
+    @property
+    def data(self) -> Dict[str, Any]:
+        """Get handler data."""
+        return {"pattern": self._pattern, "events": len(self._events)}
+
+    async def handle(self, event: Any) -> None:
+        """Handle event."""
+        self._events.append(event)
+
+
+class MockEventBus(LifecycleAware):
+    """Mock event bus for testing."""
+
+    def __init__(self) -> None:
+        """Initialize bus."""
+        self._handlers: Dict[str, list[Any]] = {}
+        self._events: list[Any] = []
+
+    @property
+    def id(self) -> str:
+        """Get bus ID."""
+        return "mock_event_bus"
+
+    @property
+    def data(self) -> Dict[str, Any]:
+        """Get bus data."""
+        return {"handlers": len(self._handlers), "events": len(self._events)}

@@ -27,25 +27,15 @@ Examples:
     ```
 """
 
-import functools
 import logging
-from typing import (
-    Any,
-    Awaitable,
-    Callable,
-    Optional,
-    Protocol,
-    TypeVar,
-    Union,
-    runtime_checkable,
-)
+from functools import wraps
+from typing import Any, Callable, Optional, Protocol, TypeVar, runtime_checkable
 
-from earnorm.events.core.exceptions import HandlerError
+from earnorm.events.core.event import Event
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T")
-F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
+T = TypeVar("T", bound=Callable[..., Any])
 
 
 @runtime_checkable
@@ -73,69 +63,45 @@ def create_transaction() -> Transaction:
     ...
 
 
-def transactional(
-    func: Optional[F] = None,
-    *,
-    propagation: str = "required",
-    isolation: str = "default",
-    timeout: Optional[float] = None,
-) -> Union[F, Callable[[F], F]]:
-    """Transaction decorator.
+def transactional(func: T) -> T:
+    """Decorator to make event handler transactional.
 
-    This decorator adds transaction support to a function.
-    It will manage transaction lifecycle and handle commit/rollback.
+    This decorator ensures that event handling is atomic - either all
+    operations succeed or none do.
 
     Args:
-        func: Function to decorate
-        propagation: Transaction propagation mode
-        isolation: Transaction isolation level
-        timeout: Transaction timeout in seconds
+        func: Event handler function to decorate
 
     Returns:
-        Decorated function
+        Decorated function that runs in a transaction
 
     Examples:
         ```python
         @transactional
-        async def handle_event(event: Event) -> None:
-            # Will run in a transaction
-            await process_event(event)
-
-        @transactional(propagation="requires_new")
-        async def handle_in_new_tx(event: Event) -> None:
-            # Will run in a new transaction
-            await process_event(event)
+        async def handle_user_created(event):
+            # All operations here will be in a transaction
+            await create_profile(event.data)
+            await send_welcome_email(event.data)
         ```
     """
 
-    def decorator(handler_func: F) -> F:
-        @functools.wraps(handler_func)
-        async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            # Get or create transaction
-            tx = get_current_transaction()
-            if tx is None:
-                tx = create_transaction()
+    @wraps(func)
+    async def wrapper(event: Event, *args: Any, **kwargs: Any) -> Any:
+        """Wrap handler in transaction."""
+        try:
+            # Start transaction
+            await event.env.db.begin()
 
-            try:
-                # Execute handler
-                result = await handler_func(*args, **kwargs)
+            # Run handler
+            result = await func(event, *args, **kwargs)
 
-                # Commit if we created the transaction
-                if hasattr(tx, "commit"):  # type: ignore
-                    await tx.commit()  # type: ignore
+            # Commit transaction
+            await event.env.db.commit()
 
-                return result
+            return result
+        except Exception as e:
+            # Rollback on error
+            await event.env.db.rollback()
+            raise e
 
-            except Exception as e:
-                # Rollback on error if we created the transaction
-                if hasattr(tx, "rollback"):  # type: ignore
-                    await tx.rollback()  # type: ignore
-
-                logger.error("Transaction failed: %s", str(e))
-                raise HandlerError("Transaction failed: " + str(e))
-
-        return wrapper  # type: ignore
-
-    if func is None:
-        return decorator
-    return decorator(func)
+    return wrapper  # type: ignore

@@ -1,4 +1,5 @@
 """Event system utilities."""
 
-# Import utility functions here when implemented
-__all__ = []
+from earnorm.events.utils.filter import EventFilter
+
+__all__: list[str] = ["EventFilter"]

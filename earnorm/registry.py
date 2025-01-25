@@ -13,18 +13,24 @@ Examples:
     ```
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, TypeVar, cast
 
 from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
+from redis.asyncio import Redis
 
 from earnorm.base.database.adapters.mongo import MongoAdapter
 from earnorm.config import SystemConfig
 from earnorm.di import container
 from earnorm.pool import PoolRegistry, create_mongo_pool, create_redis_pool
+from earnorm.pool.protocols.pool import AsyncPoolProtocol
 
 # Type hints for MongoDB
 DB = AsyncIOMotorDatabase[Dict[str, Any]]
 COLL = AsyncIOMotorCollection[Dict[str, Any]]
+
+# Type vars for pools
+DBType = TypeVar("DBType")
+CollType = TypeVar("CollType")
 
 
 async def register_core_services() -> None:
@@ -59,13 +65,16 @@ async def register_database_services(config: SystemConfig) -> None:
     container.register("mongodb", MongoAdapter)
 
     # Create and register MongoDB pool
-    mongo_pool = await create_mongo_pool(
-        uri=str(config.mongodb_uri),
-        database=str(config.mongodb_database),
-        min_size=int(await config.mongodb_min_pool_size),
-        max_size=int(await config.mongodb_max_pool_size),
-        validate_on_borrow=bool(await config.mongodb_validate_on_borrow),
-        test_on_return=bool(await config.mongodb_test_on_return),
+    mongo_pool = cast(
+        AsyncPoolProtocol[DB, COLL],
+        await create_mongo_pool(
+            uri=str(config.mongodb_uri),
+            database=str(config.mongodb_database),
+            min_size=int(await config.mongodb_min_pool_size),
+            max_size=int(await config.mongodb_max_pool_size),
+            validate_on_borrow=bool(await config.mongodb_validate_on_borrow),
+            test_on_return=bool(await config.mongodb_test_on_return),
+        ),
     )
     await mongo_pool.init()
     PoolRegistry.register("mongodb", mongo_pool)
@@ -79,13 +88,16 @@ async def register_pool_services(config: SystemConfig) -> None:
     - Redis pool for event system
     """
     # Create Redis pool for event and cache system
-    redis_pool = await create_redis_pool(
-        host=str(config.redis_host),
-        port=int(config.redis_port),
-        db=int(config.redis_db),
-        min_size=int(config.redis_min_pool_size),
-        max_size=int(config.redis_max_pool_size),
-        timeout=int(config.redis_pool_timeout),
+    redis_pool = cast(
+        AsyncPoolProtocol[Redis, None],
+        await create_redis_pool(
+            host=str(config.redis_host),
+            port=int(config.redis_port),
+            db=int(config.redis_db),
+            min_size=int(config.redis_min_pool_size),
+            max_size=int(config.redis_max_pool_size),
+            timeout=int(config.redis_pool_timeout),
+        ),
     )
 
     # Register pools

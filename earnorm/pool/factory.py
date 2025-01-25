@@ -8,8 +8,7 @@ Examples:
     # Create MongoDB pool
     mongo_pool = PoolFactory.create(
         "mongodb",
-        host="localhost",
-        port=27017,
+        uri="mongodb://localhost:27017",
         database="test",
     )
 
@@ -76,8 +75,7 @@ class PoolFactory:
             # Create MongoDB pool
             pool = PoolFactory.create(
                 "mongodb",
-                host="localhost",
-                port=27017,
+                uri="mongodb://localhost:27017",
                 database="test",
             )
             ```
@@ -91,33 +89,23 @@ class PoolFactory:
 
 async def create_mongo_pool(
     *,
-    host: str = "localhost",
-    port: int = 27017,
-    database: str = "test",
-    collection: str = "test",
-    username: str | None = None,
-    password: str | None = None,
-    auth_source: str | None = None,
-    auth_mechanism: str | None = None,
+    uri: str,
+    database: str,
     min_size: int = 1,
     max_size: int = 10,
-    max_lifetime: int = 3600,
+    retry_policy: Any | None = None,
+    circuit_breaker: Any | None = None,
     **kwargs: Any,
 ) -> MongoPool[Any, Any]:
     """Create MongoDB connection pool.
 
     Args:
-        host: MongoDB host
-        port: MongoDB port
+        uri: MongoDB URI
         database: Database name
-        collection: Collection name
-        username: MongoDB username
-        password: MongoDB password
-        auth_source: Authentication database
-        auth_mechanism: Authentication mechanism
         min_size: Minimum pool size
         max_size: Maximum pool size
-        max_lifetime: Maximum connection lifetime
+        retry_policy: Optional retry policy
+        circuit_breaker: Optional circuit breaker
         **kwargs: Additional pool options
 
     Returns:
@@ -126,8 +114,7 @@ async def create_mongo_pool(
     Examples:
         ```python
         pool = await create_mongo_pool(
-            host="localhost",
-            port=27017,
+            uri="mongodb://localhost:27017",
             database="test",
             min_size=1,
             max_size=5
@@ -135,21 +122,16 @@ async def create_mongo_pool(
         ```
     """
     pool = MongoPool[Any, Any](
-        host=host,
-        port=port,
+        uri=uri,
         database=database,
-        collection=collection,
-        username=username,
-        password=password,
-        auth_source=auth_source,
-        auth_mechanism=auth_mechanism,
         min_size=min_size,
         max_size=max_size,
-        max_lifetime=max_lifetime,
+        retry_policy=retry_policy,
+        circuit_breaker=circuit_breaker,
         **kwargs,
     )
 
-    await pool.connect()
+    await pool.init()
     return pool
 
 
@@ -162,9 +144,10 @@ async def create_redis_pool(
     password: str | None = None,
     min_size: int = 1,
     max_size: int = 10,
-    max_lifetime: int = 3600,
+    retry_policy: Any | None = None,
+    circuit_breaker: Any | None = None,
     **kwargs: Any,
-) -> RedisPool[Any]:
+) -> RedisPool[Any, None]:
     """Create Redis connection pool.
 
     Args:
@@ -175,7 +158,8 @@ async def create_redis_pool(
         password: Redis password
         min_size: Minimum pool size
         max_size: Maximum pool size
-        max_lifetime: Maximum connection lifetime
+        retry_policy: Optional retry policy
+        circuit_breaker: Optional circuit breaker
         **kwargs: Additional pool options
 
     Returns:
@@ -192,7 +176,7 @@ async def create_redis_pool(
         )
         ```
     """
-    pool = RedisPool[Any](
+    pool = RedisPool[Any, None](
         host=host,
         port=port,
         db=db,
@@ -200,9 +184,10 @@ async def create_redis_pool(
         password=password,
         min_size=min_size,
         max_size=max_size,
-        max_lifetime=max_lifetime,
+        retry_policy=retry_policy,
+        circuit_breaker=circuit_breaker,
         **kwargs,
     )
 
-    await pool.connect()
+    await pool.init()
     return pool
