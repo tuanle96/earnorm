@@ -16,7 +16,8 @@ Examples:
 
 from typing import Any, Dict, TypeVar
 
-from earnorm.pool.protocols.pool import ConnectionProtocol, PoolProtocol
+from earnorm.pool.protocols.connection import AsyncConnectionProtocol
+from earnorm.pool.protocols.pool import AsyncPoolProtocol
 
 # Define type variables for database and collection types
 DB = TypeVar("DB")
@@ -26,10 +27,10 @@ COLL = TypeVar("COLL")
 class PoolRegistry:
     """Pool registry for managing pool instances."""
 
-    _pools: Dict[str, PoolProtocol[Any, Any]] = {}
+    _pools: Dict[str, AsyncPoolProtocol[Any, Any]] = {}
 
     @classmethod
-    def register(cls, name: str, pool: PoolProtocol[Any, Any]) -> None:
+    def register(cls, name: str, pool: AsyncPoolProtocol[Any, Any]) -> None:
         """Register pool instance.
 
         Args:
@@ -46,7 +47,7 @@ class PoolRegistry:
         cls._pools[name] = pool
 
     @classmethod
-    def get(cls, name: str) -> PoolProtocol[Any, Any]:
+    def get(cls, name: str) -> AsyncPoolProtocol[Any, Any]:
         """Get pool instance by name.
 
         Args:
@@ -70,7 +71,7 @@ class PoolRegistry:
         return cls._pools[name]
 
     @classmethod
-    def list(cls) -> Dict[str, PoolProtocol[Any, Any]]:
+    def list(cls) -> Dict[str, AsyncPoolProtocol[Any, Any]]:
         """Get all registered pools.
 
         Returns:
@@ -87,9 +88,9 @@ class PoolRegistry:
         return cls._pools.copy()
 
     @classmethod
-    def validate_connection(cls, conn: ConnectionProtocol[Any, Any]) -> bool:
+    async def validate_connection(cls, conn: AsyncConnectionProtocol[Any, Any]) -> bool:
         """Check connection validity"""
         try:
-            return bool(conn.ping())
+            return bool(await conn.ping())
         except Exception:
             return False

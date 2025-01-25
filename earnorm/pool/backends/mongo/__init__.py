@@ -23,6 +23,6 @@ from earnorm.pool.backends.mongo.connection import MongoConnection
 from earnorm.pool.backends.mongo.pool import MongoPool
 
 __all__ = [
-    "MongoPool",
     "MongoConnection",
+    "MongoPool",
 ]

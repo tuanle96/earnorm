@@ -1,18 +1,25 @@
 """Redis connection implementation."""
 
 import time
-from typing import Any, Coroutine
+from collections.abc import Awaitable
+from typing import Any, TypeVar
 
 from redis.asyncio import Redis
-from redis.exceptions import ConnectionError as RedisConnectionError
-from redis.exceptions import TimeoutError
+from redis.exceptions import (
+    ConnectionError as RedisConnectionError,
+    TimeoutError as RedisTimeoutError,
+)
 
-from earnorm.pool.decorators import with_resilience
-from earnorm.pool.protocols.connection import ConnectionProtocol
-from earnorm.pool.protocols.errors import ConnectionError, OperationError
+from earnorm.exceptions import DatabaseConnectionError, OperationError
+from earnorm.pool.core.circuit import CircuitBreaker
+from earnorm.pool.core.decorators import with_resilience
+from earnorm.pool.core.retry import RetryPolicy
+from earnorm.pool.protocols.connection import AsyncConnectionProtocol
+
+DB = TypeVar("DB", bound=Redis)
 
 
-class RedisConnection(ConnectionProtocol[Redis, Redis]):
+class RedisConnection(AsyncConnectionProtocol[DB, None]):
     """Redis connection implementation.
 
     Examples:
@@ -27,18 +34,31 @@ class RedisConnection(ConnectionProtocol[Redis, Redis]):
         "value"
     """
 
-    def __init__(self, client: Redis, **config: Any) -> None:
+    def __init__(
+        self,
+        client: Redis,
+        max_idle_time: int = 300,
+        max_lifetime: int = 3600,
+        retry_policy: RetryPolicy | None = None,
+        circuit_breaker: CircuitBreaker | None = None,
+    ) -> None:
         """Initialize Redis connection.
 
         Args:
-            client: Redis client instance
-            **config: Additional configuration
+            client: Redis client
+            max_idle_time: Maximum idle time in seconds
+            max_lifetime: Maximum lifetime in seconds
+            retry_policy: Retry policy
+            circuit_breaker: Circuit breaker
         """
         self._client = client
+        self._max_idle_time = max_idle_time
+        self._max_lifetime = max_lifetime
+        self._retry_policy = retry_policy
+        self._circuit_breaker = circuit_breaker
+
         self._created_at = time.time()
         self._last_used_at = time.time()
-        self._max_idle_time = config.get("max_idle_time", 300)
-        self._max_lifetime = config.get("max_lifetime", 3600)
 
     @property
     def created_at(self) -> float:
@@ -71,75 +91,73 @@ class RedisConnection(ConnectionProtocol[Redis, Redis]):
         """Update last used timestamp."""
         self._last_used_at = time.time()
 
-    def get_database(self) -> Redis:
-        """Get Redis database instance.
-
-        Returns:
-            Redis instance
-        """
-        return self._client
-
-    def get_collection(self, name: str) -> Redis:
-        """Get Redis instance.
-
-        Args:
-            name: Collection name (ignored for Redis)
-
-        Returns:
-            Redis instance
-        """
-        return self._client
-
-    @property
-    def db(self) -> Redis:
-        """Get Redis instance."""
-        return self._client
-
-    @property
-    def collection(self) -> Redis:
-        """Get Redis instance."""
-        return self._client
-
     @with_resilience()
     async def _ping_impl(self) -> bool:
         """Internal ping implementation."""
         try:
-            pong = await self._client.ping()  # type: ignore
+            await self._client.ping()  # type: ignore
             self.touch()
-            return bool(pong)
-        except (RedisConnectionError, TimeoutError) as e:
-            raise ConnectionError(f"Failed to ping Redis: {str(e)}") from e
+            return True
+        except (RedisConnectionError, RedisTimeoutError) as e:
+            raise DatabaseConnectionError(f"Failed to ping Redis: {e!s}") from e
 
-    async def ping(self) -> Coroutine[Any, Any, bool]:
-        """Check connection health.
+    async def ping(self) -> bool:
+        """Check connection health."""
+        return await self._ping_impl()
 
-        Returns:
-            True if connection is healthy
-
-        Raises:
-            ConnectionError: If connection is unhealthy
-        """
-
-        async def _ping() -> bool:
-            return await self._ping_impl()
-
-        return _ping()
+    async def close(self) -> None:
+        """Close connection."""
+        await self._client.close()
 
     @with_resilience()
-    async def _execute_impl(self, operation: str, *args: Any, **kwargs: Any) -> Any:
+    async def _execute_impl(self, operation: str, **kwargs: Any) -> Any:
         """Internal execute implementation."""
         try:
             self.touch()
             method = getattr(self._client, operation)
-            return await method(*args, **kwargs)
+            result = await method(**kwargs)
+            return result
         except Exception as e:
             raise OperationError(
-                f"Failed to execute operation {operation}: {str(e)}"
+                f"Failed to execute operation {operation}: {e!s}"
             ) from e
+
+    async def execute(self, operation: str, **kwargs: Any) -> Any:
+        """Execute Redis operation.
+
+        Args:
+            operation: Operation name
+            **kwargs: Operation arguments
+
+        Returns:
+            Operation result
+
+        Raises:
+            OperationError: If operation fails
+        """
+        return await self._execute_impl(operation, **kwargs)
+
+    def get_database(self) -> DB:
+        """Get database instance."""
+        return self._client  # type: ignore
+
+    def get_collection(self, name: str) -> None:
+        """Get collection instance."""
+        raise NotImplementedError("Redis does not support collections")
+
+    @property
+    def db(self) -> DB:
+        """Get database instance."""
+        return self.get_database()
+
+    @property
+    def collection(self) -> None:
+        """Get collection instance."""
+        return self.get_collection("")
 
     async def execute_typed(
         self, operation: str, *args: Any, **kwargs: Any
-    ) -> Coroutine[Any, Any, Any]:
+    ) -> Awaitable[Any]:
         """Execute Redis operation.
 
         Args:
@@ -192,22 +210,3 @@ class RedisConnection(ConnectionProtocol[Redis, Redis]):
             return await self._execute_impl(operation, *args, **kwargs)
 
         return _execute()
-
-    async def _close_impl(self) -> None:
-        """Internal close implementation."""
-        try:
-            await self._client.close()
-        except Exception as e:
-            raise ConnectionError(f"Failed to close Redis connection: {str(e)}") from e
-
-    async def close(self) -> Coroutine[Any, Any, None]:
-        """Close connection.
-
-        Raises:
-            ConnectionError: If connection cannot be closed
-        """
-
-        async def _close() -> None:
-            await self._close_impl()
-
-        return _close()

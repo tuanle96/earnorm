@@ -31,7 +31,6 @@ from earnorm.types import FieldProtocol
 
 from .base import BaseModel
 
-
 T = TypeVar("T", bound="BaseModel")
 
 
@@ -139,7 +138,7 @@ class MetaModel(type):
         """
         # Skip registration for BaseModel
         if attrs.get("__module__") == "earnorm.base.model.base":
-            return super().__new__(mcs, name, bases, attrs)
+            return cast(Type[BaseModel], super().__new__(mcs, name, bases, attrs))
 
         # Get model name
         model_name = attrs.get("_name")
@@ -221,7 +220,7 @@ class MetaModel(type):
         for key, value in attrs.items():
             if isinstance(value, FieldProtocol):
                 fields[key] = value
-                value.setup(key, attrs["_name"])
+                value.setup(cls)
 
         return fields
 

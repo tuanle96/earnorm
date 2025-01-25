@@ -1,34 +1,30 @@
 """Pool protocol definitions.
 
-This module defines protocols for connection pools, including connection
-lifecycle management and pool statistics.
+This module defines protocols for connection pools with async-first approach.
+All operations are async by default.
 
 Examples:
     ```python
-    class MyPool(PoolProtocol[MyDB, MyColl]):
-        def _create_connection(self) -> ConnectionProtocol[MyDB, MyColl]:
+    class MyPool(AsyncPoolProtocol[MyDB, MyColl]):
+        def _create_connection(self) -> AsyncConnectionProtocol[MyDB, MyColl]:
             return MyConnection(self._client)
 
-        async def acquire(self) -> ConnectionProtocol[MyDB, MyColl]:
+        async def acquire(self) -> AsyncConnectionProtocol[MyDB, MyColl]:
             return await self._acquire_connection()
-
-        async def release(self, connection: ConnectionProtocol[MyDB, MyColl]) -> None:
-            await self._release_connection(connection)
     ```
 """
 
-from typing import Any, AsyncContextManager, Coroutine, Dict, Protocol, TypeVar
+from typing import Any, AsyncContextManager, Dict, Protocol, TypeVar
 
-from earnorm.pool.protocols.connection import ConnectionProtocol
+from earnorm.pool.protocols.connection import AsyncConnectionProtocol
 
 # Type variables for database and collection types
-# These must be invariant since they are used in both parameter and return positions
 DBPool = TypeVar("DBPool")
 CollPool = TypeVar("CollPool")
 
 
-class PoolProtocol(Protocol[DBPool, CollPool]):
-    """Protocol for connection pools.
+class AsyncPoolProtocol(Protocol[DBPool, CollPool]):
+    """Protocol for async connection pools.
 
     Type Parameters:
         DBPool: The database type (e.g. AsyncIOMotorDatabase)
@@ -60,82 +56,55 @@ class PoolProtocol(Protocol[DBPool, CollPool]):
         """Get number of connections in use."""
         ...
 
-    def _create_connection(self) -> ConnectionProtocol[DBPool, CollPool]:
+    def _create_connection(self) -> AsyncConnectionProtocol[DBPool, CollPool]:
         """Create new connection.
 
         Returns:
             New connection instance
-
-        Raises:
-            ConnectionError: If connection cannot be created
         """
         ...
 
     async def connection(
         self,
-    ) -> AsyncContextManager[ConnectionProtocol[DBPool, CollPool]]:
+    ) -> AsyncContextManager[AsyncConnectionProtocol[DBPool, CollPool]]:
         """Get connection from pool.
 
         Returns:
             Connection instance
-
-        Raises:
-            PoolError: If no connections are available
-            ConnectionError: If connection is invalid
         """
         ...
 
-    async def acquire(
-        self,
-    ) -> Coroutine[Any, Any, ConnectionProtocol[DBPool, CollPool]]:
+    async def acquire(self) -> AsyncConnectionProtocol[DBPool, CollPool]:
         """Acquire connection from pool.
 
         Returns:
             Connection instance
-
-        Raises:
-            PoolError: If no connections are available
-            ConnectionError: If connection is invalid
         """
         ...
 
     async def release(
-        self, connection: ConnectionProtocol[DBPool, CollPool]
-    ) -> Coroutine[Any, Any, None]:
+        self, connection: AsyncConnectionProtocol[DBPool, CollPool]
+    ) -> None:
         """Release connection back to pool.
 
         Args:
             connection: Connection to release
-
-        Raises:
-            PoolError: If connection cannot be released
         """
         ...
 
-    async def clear(self) -> Coroutine[Any, Any, None]:
-        """Clear all connections from pool.
-
-        Raises:
-            PoolError: If pool cannot be cleared
-        """
+    async def clear(self) -> None:
+        """Clear all connections from pool."""
         ...
 
-    async def close(self) -> Coroutine[Any, Any, None]:
-        """Close pool and cleanup resources.
-
-        Raises:
-            PoolError: If pool cannot be closed
-        """
+    async def close(self) -> None:
+        """Close pool and cleanup resources."""
         ...
 
-    async def health_check(self) -> Coroutine[Any, Any, bool]:
+    async def health_check(self) -> bool:
         """Check pool health.
 
         Returns:
             True if pool is healthy
-
-        Raises:
-            PoolError: If health check fails
         """
         ...
 
@@ -147,7 +116,6 @@ class PoolProtocol(Protocol[DBPool, CollPool]):
         """
         ...
 
-    # get database name by property
     @property
     def database_name(self) -> str:
         """Get database name."""

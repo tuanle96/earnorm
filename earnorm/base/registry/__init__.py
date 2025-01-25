@@ -1,25 +1,17 @@
-"""Registry module for EarnORM.
+"""Registry module for managing model registries.
 
-This module provides registry management for:
-- Models: Model class registration and retrieval
-- Databases: Database backend management
-- Base: Abstract registry interface
+This module provides base classes and implementations for model registries.
 
 Examples:
-    >>> from earnorm.registry import ModelRegistry, DatabaseRegistry
+    >>> from earnorm.registry import ModelRegistry
     >>> from earnorm.di import container
     >>>
     >>> # Get model registry
     >>> model_registry = await container.get("model_registry")
     >>> await model_registry.register("User", User)
-    >>>
-    >>> # Get database registry
-    >>> db_registry = await container.get("database_registry")
-    >>> await db_registry.register("mongodb", MongoBackend)
 """
 
 from .base import Registry
-from .database import DatabaseRegistry
-from .model import ModelRegistry, ModelLifecycle
+from .model import ModelLifecycle, ModelRegistry
 
-__all__ = ["Registry", "DatabaseRegistry", "ModelRegistry", "ModelLifecycle"]
+__all__ = ["Registry", "ModelRegistry", "ModelLifecycle"]

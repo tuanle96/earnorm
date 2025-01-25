@@ -16,26 +16,21 @@ Examples:
 from typing import Any, Dict, Optional, Set, Type, TypeVar, Union, cast
 
 from earnorm.base.database.adapter import DatabaseAdapter
-from earnorm.base.database.backends.mongo.adapter import MongoDBAdapter
-from earnorm.base.database.backends.mysql.adapter import MySQLAdapter
-from earnorm.base.database.backends.postgres.adapter import PostgreSQLAdapter
-from earnorm.base.model import BaseModel
-from earnorm.base.registry import DatabaseRegistry, ModelLifecycle, Registry
+from earnorm.base.registry import ModelLifecycle, Registry
 from earnorm.cache.core.manager import CacheManager
 from earnorm.config.model import SystemConfig
 from earnorm.di import container
+from earnorm.types import DatabaseModel
 
 # Type aliases
 CacheKey = str
 CacheValue = Union[str, int, float, bool, Dict[str, Any], None]
-T = TypeVar("T", bound=BaseModel)
+T = TypeVar("T")
 
-# Available database adapters
-ADAPTERS = {
-    "mongodb": MongoDBAdapter,
-    "mysql": MySQLAdapter,
-    "postgres": PostgreSQLAdapter,
-}
+ModelT = TypeVar("ModelT", bound=DatabaseModel)
+
+# Available database adapters - will be populated by specific backends
+ADAPTERS: Dict[str, Type[DatabaseAdapter[DatabaseModel]]] = {}
 
 
 class EnvironmentManager:
@@ -59,22 +54,17 @@ class EnvironmentManager:
             env: Environment instance
         """
         self.env = env
-        self._db_registry: Optional[DatabaseRegistry] = None
         self._cache_enabled: bool = True
 
     async def __aenter__(self) -> "Environment":
         """Enter environment context.
 
         This method:
-        1. Gets database registry
-        2. Returns environment instance
+        1. Returns environment instance
 
         Returns:
             Environment instance
         """
-        self._db_registry = await container.get("database_registry")
-        if not self._db_registry:
-            raise RuntimeError("Database registry not initialized")
         return self.env
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -92,7 +82,6 @@ class EnvironmentManager:
             # Clear cache on error to avoid stale data
             await self.env.clear_caches()
         self.env.clear_prefetch()
-        self._db_registry = None
 
     def disable_cache(self) -> None:
         """Disable caching for this context."""
@@ -126,18 +115,14 @@ class Environment:
     """
 
     def __init__(self, config: SystemConfig) -> None:
-        """Initialize environment.
-
-        Args:
-            config: System configuration
-        """
+        """Initialize environment."""
         self.config = config
         self._registry: Optional[Registry[ModelLifecycle]] = None
-        self._models: Dict[str, Type[BaseModel]] = {}
+        self._models: Dict[str, Type[DatabaseModel]] = {}
         self._cache_manager: Optional[CacheManager] = None
         self._prefetch: Dict[str, Set[int]] = {}
-        self._backend_type: str = config.database.backend_type
-        self._adapter: Optional[DatabaseAdapter] = None
+        self._backend_type: str = config.database.get("backend_type", "")  # type: ignore
+        self._adapter: Optional[DatabaseAdapter[DatabaseModel]] = None
 
     async def init(self) -> None:
         """Initialize environment.
@@ -162,7 +147,7 @@ class Environment:
             raise ValueError(f"Unsupported database backend: {self._backend_type}")
 
         self._adapter = adapter_class()
-        await self._adapter.init(self.config.database)
+        await self._adapter.init()
 
     async def destroy(self) -> None:
         """Destroy environment.
@@ -184,15 +169,8 @@ class Environment:
         self._models.clear()
         self._prefetch.clear()
 
-    async def get_adapter(self) -> DatabaseAdapter:
-        """Get database adapter instance.
-
-        Returns:
-            Database adapter instance
-
-        Raises:
-            RuntimeError: If adapter not initialized
-        """
+    async def get_adapter(self) -> DatabaseAdapter[DatabaseModel]:
+        """Get database adapter instance."""
         if not self._adapter:
             raise RuntimeError("Database adapter not initialized")
         return self._adapter
@@ -337,21 +315,20 @@ class Environment:
         # Convert set to list for browse
         id_list = list(ids)
 
-        # Create model instance
-        records = model_cls(self, id_list)
+        # Browse records
+        records = await model_cls.browse(id_list)
         if not records:
             return {}
 
         # Convert records to dicts
         result: Dict[int, Dict[str, Any]] = {}
-        for record_id in id_list:
-            record = model_cls(self, record_id)
-            try:
-                to_dict = getattr(record, "to_dict", None)
-                if callable(to_dict):
-                    result[record_id] = to_dict()
-            except (AttributeError, TypeError):
-                continue
+        if isinstance(records, list):
+            for record in records:
+                if hasattr(record, "to_dict") and callable(record.to_dict):
+                    result[record.id] = record.to_dict()
+        else:
+            if hasattr(records, "to_dict") and callable(records.to_dict):
+                result[records.id] = records.to_dict()
 
         return result
 
@@ -382,7 +359,7 @@ class Environment:
         """
         return EnvironmentManager(self)
 
-    def add_model(self, name: str, model: Type[BaseModel]) -> None:
+    def add_model(self, name: str, model: Type[DatabaseModel]) -> None:
         """Add model to environment.
 
         Args:
@@ -406,7 +383,7 @@ class Environment:
             raise ValueError(f"Model {name} already registered")
         self._models[name] = model
 
-    def get_model(self, name: str) -> Type[BaseModel]:
+    def get_model(self, name: str) -> Type[DatabaseModel]:
         """Get model by name.
 
         Args:
@@ -445,7 +422,7 @@ class Environment:
         """
         return name in self._models
 
-    def __getitem__(self, name: str) -> Type[BaseModel]:
+    def __getitem__(self, name: str) -> Type[DatabaseModel]:
         """Get model by name using dictionary syntax.
 
         Args:
@@ -485,16 +462,14 @@ class Environment:
         """
         return self._prefetch
 
-    def add_to_prefetch(self, model: str, ids: Set[int]) -> None:
-        """Add record IDs to prefetch registry.
+    def add_to_prefetch(self, model: str, record_ids: Set[int]) -> None:
+        """Add records to prefetch registry.
 
         Args:
             model: Model name
-            ids: Set of record IDs to prefetch
+            record_ids: Set of record IDs to prefetch
         """
-        if model not in self._prefetch:
-            self._prefetch[model] = set()
-        self._prefetch[model].update(ids)
+        self._prefetch.setdefault(model, set()).update(record_ids)
 
     def clear_prefetch(self) -> None:
         """Clear prefetch registry."""

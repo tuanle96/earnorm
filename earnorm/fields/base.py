@@ -49,6 +49,9 @@ class Field(Generic[T]):
         default: Default value
         validators: List of validator functions
         backend_options: Backend-specific options
+        prefetch: Whether to prefetch field values
+        relational: Whether field is a relational field
+        comodel_name: Name of related model for relational fields
     """
 
     def __init__(
@@ -60,6 +63,9 @@ class Field(Generic[T]):
         default: Optional[T] = None,
         validators: Optional[List[ValidatorFunc]] = None,
         backend_options: Optional[Dict[str, Dict[str, Any]]] = None,
+        prefetch: bool = False,
+        relational: bool = False,
+        comodel_name: Optional[str] = None,
         **options: Any,
     ) -> None:
         """Initialize field.
@@ -71,6 +77,9 @@ class Field(Generic[T]):
             default: Default value
             validators: List of validator functions
             backend_options: Backend-specific options
+            prefetch: Whether to prefetch field values
+            relational: Whether field is a relational field
+            comodel_name: Name of related model for relational fields
             **options: Additional options
         """
         self.name = name or ""
@@ -79,6 +88,9 @@ class Field(Generic[T]):
         self.default = default
         self.validators = validators or []
         self.backend_options = backend_options or {}
+        self.prefetch = prefetch
+        self.relational = relational
+        self.comodel_name = comodel_name
         self.options = options
         self._value: Optional[T] = None
 

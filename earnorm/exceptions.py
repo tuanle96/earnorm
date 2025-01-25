@@ -1,12 +1,12 @@
-"""Error definitions for database operations.
+"""Exception definitions for EarnORM.
 
-This module defines custom exceptions for database operations.
+This module defines all custom exceptions used throughout EarnORM.
 These exceptions provide detailed error information and help with error handling.
 
 Examples:
     ```python
     try:
-        await connection.execute_typed(MongoOperation.FIND_ONE, {"_id": "invalid"})
+        await db.users.find_one({"_id": "invalid"})
     except ConnectionError as e:
         print(f"Connection failed: {e}")
     except OperationError as e:
@@ -17,11 +17,11 @@ Examples:
 from typing import Any, Optional
 
 
-class DatabaseError(Exception):
-    """Base class for database-related errors."""
+class EarnBaseError(Exception):
+    """Base class for all EarnORM-related errors."""
 
     def __init__(self, message: str, context: Optional[Any] = None) -> None:
-        """Initialize database error.
+        """Initialize base error.
 
         Args:
             message: Error message
@@ -29,6 +29,13 @@ class DatabaseError(Exception):
         """
         super().__init__(message)
         self.context = context
+
+
+# Database-related errors
+class DatabaseError(EarnBaseError):
+    """Base class for database-related errors."""
+
+    pass
 
 
 class PoolError(DatabaseError):
@@ -43,26 +50,32 @@ class ConnectionError(DatabaseError):
     pass
 
 
-class OperationError(DatabaseError):
-    """Raised when database operation fails."""
+class DatabaseConnectionError(ConnectionError):
+    """Error raised when database connection fails."""
 
     pass
 
 
-class ValidationError(DatabaseError):
-    """Raised when validation fails."""
+class OperationError(DatabaseError):
+    """Error raised when database operation fails."""
+
+    pass
+
+
+class DatabaseValidationError(DatabaseError):
+    """Error raised when database validation fails."""
 
     pass
 
 
 class ConfigurationError(DatabaseError):
-    """Raised when configuration is invalid."""
+    """Error raised when configuration is invalid."""
 
     pass
 
 
 class TimeoutError(DatabaseError):
-    """Raised when operation times out."""
+    """Error raised when operation times out."""
 
     pass
 
@@ -80,13 +93,13 @@ class CircuitBreakerError(DatabaseError):
 
 
 class PoolExhaustedError(DatabaseError):
-    """Raised when connection pool is exhausted."""
+    """Error raised when connection pool is exhausted."""
 
     pass
 
 
 class StaleConnectionError(DatabaseError):
-    """Raised when connection is stale."""
+    """Error raised when connection is stale."""
 
     pass
 
@@ -105,5 +118,42 @@ class SessionError(DatabaseError):
 
 class BulkOperationError(DatabaseError):
     """Error raised when bulk operation fails."""
+
+    pass
+
+
+# Model-related errors
+class ModelError(EarnBaseError):
+    """Base class for model-related errors."""
+
+    pass
+
+
+class ModelValidationError(ModelError):
+    """Error raised when model validation fails."""
+
+    pass
+
+
+class SerializationError(ModelError):
+    """Error raised when model serialization fails."""
+
+    pass
+
+
+class DeserializationError(ModelError):
+    """Error raised when model deserialization fails."""
+
+    pass
+
+
+class RelationshipError(ModelError):
+    """Error raised when model relationship operation fails."""
+
+    pass
+
+
+class QueryError(ModelError):
+    """Error raised when model query operation fails."""
 
     pass

@@ -1,31 +1,27 @@
 """Database protocol definitions.
 
-This module defines protocols for database operations, including type-safe
-database and collection access.
+This module defines protocols for database operations with async-first approach.
+All database operations are async by default.
 
 Examples:
     ```python
-    class MyDatabase(DatabaseProtocol[MyDB, MyColl]):
+    class MyDatabase(AsyncDatabaseProtocol[MyDB, MyColl]):
         def get_database(self) -> MyDB:
-            return self._db
+            return self._client[self._database]
 
         def get_collection(self, name: str) -> MyColl:
-            return self._db[name]
+            return self._client[self._database][name]
     ```
 """
 
-from typing import Any, Dict, Protocol, TypeVar
+from typing import Protocol, TypeVar
 
-from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
-from redis.asyncio import Redis
-
-# Type variables for database and collection types
-# These are covariant because they only appear in return position
+# Type variables for database and collection
 DBType = TypeVar("DBType", covariant=True)
 CollType = TypeVar("CollType", covariant=True)
 
 
-class DatabaseProtocol(Protocol[DBType, CollType]):
+class AsyncDatabaseProtocol(Protocol[DBType, CollType]):
     """Protocol for database operations.
 
     Type Parameters:
@@ -37,19 +33,29 @@ class DatabaseProtocol(Protocol[DBType, CollType]):
         """Get database instance.
 
         Returns:
-            Database instance of type DBType
+            Database instance
         """
         ...
 
     def get_collection(self, name: str) -> CollType:
-        """Get collection by name.
+        """Get collection instance.
 
         Args:
             name: Collection name
 
         Returns:
-            Collection instance of type CollType
+            Collection instance
         """
+        ...
+
+    @property
+    def db(self) -> DBType:
+        """Get database instance."""
+        ...
+
+    @property
+    def collection(self) -> CollType:
+        """Get collection instance."""
         ...
 
 
@@ -73,24 +79,3 @@ class DatabaseAware(Protocol):
             Collection name
         """
         ...
-
-
-# Concrete protocols for specific databases
-class MongoDBProtocol(
-    DatabaseProtocol[
-        AsyncIOMotorDatabase[Dict[str, Any]], AsyncIOMotorCollection[Dict[str, Any]]
-    ]
-):
-    """Protocol for MongoDB operations."""
-
-    pass
-
-
-class RedisDBProtocol(DatabaseProtocol[Redis, Redis]):
-    """Protocol for Redis operations.
-
-    Note: Redis doesn't have separate database/collection concepts,
-    so we use Redis client for both.
-    """
-
-    pass

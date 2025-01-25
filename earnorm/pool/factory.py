@@ -8,25 +8,25 @@ Examples:
     # Create MongoDB pool
     mongo_pool = PoolFactory.create(
         "mongodb",
-        uri="mongodb://localhost:27017",
+        host="localhost",
+        port=27017,
         database="test",
     )
 
     # Create Redis pool
     redis_pool = PoolFactory.create(
         "redis",
-        uri="redis://localhost:6379",
+        host="localhost",
+        port=6379,
     )
     ```
 """
 
-from typing import Any, Dict, Type, TypeVar
+from typing import Any, Dict, Type, TypeVar, cast
 
 from earnorm.pool.backends.mongo.pool import MongoPool
-from earnorm.pool.backends.mysql.pool import MySQLPool
-from earnorm.pool.backends.postgres.pool import PostgresPool
 from earnorm.pool.backends.redis.pool import RedisPool
-from earnorm.pool.protocols.pool import PoolProtocol
+from earnorm.pool.protocols.pool import AsyncPoolProtocol
 
 # Define type variables for database and collection types
 DB = TypeVar("DB")
@@ -36,15 +36,13 @@ COLL = TypeVar("COLL")
 class PoolFactory:
     """Pool factory for creating database connection pools."""
 
-    _pools: Dict[str, Type[PoolProtocol[Any, Any]]] = {
-        "mongodb": MongoPool,
-        "redis": RedisPool,
-        "mysql": MySQLPool,
-        "postgres": PostgresPool,
+    _pools: Dict[str, Type[AsyncPoolProtocol[Any, Any]]] = {
+        "mongodb": cast(Type[AsyncPoolProtocol[Any, Any]], MongoPool),
+        "redis": cast(Type[AsyncPoolProtocol[Any, Any]], RedisPool),
     }
 
     @classmethod
-    def register(cls, name: str, pool_class: Type[PoolProtocol[DB, COLL]]) -> None:
+    def register(cls, name: str, pool_class: Type[AsyncPoolProtocol[DB, COLL]]) -> None:
         """Register pool implementation.
 
         Args:
@@ -60,7 +58,7 @@ class PoolFactory:
         cls._pools[name] = pool_class  # type: ignore
 
     @classmethod
-    def create(cls, backend: str, **config: Any) -> PoolProtocol[Any, Any]:
+    def create(cls, backend: str, **config: Any) -> AsyncPoolProtocol[Any, Any]:
         """Create pool instance.
 
         Args:
@@ -78,7 +76,8 @@ class PoolFactory:
             # Create MongoDB pool
             pool = PoolFactory.create(
                 "mongodb",
-                uri="mongodb://localhost:27017",
+                host="localhost",
+                port=27017,
                 database="test",
             )
             ```
@@ -92,8 +91,14 @@ class PoolFactory:
 
 async def create_mongo_pool(
     *,
-    uri: str,
-    database: str,
+    host: str = "localhost",
+    port: int = 27017,
+    database: str = "test",
+    collection: str = "test",
+    username: str | None = None,
+    password: str | None = None,
+    auth_source: str | None = None,
+    auth_mechanism: str | None = None,
     min_size: int = 1,
     max_size: int = 10,
     max_lifetime: int = 3600,
@@ -102,23 +107,18 @@ async def create_mongo_pool(
     """Create MongoDB connection pool.
 
     Args:
-        uri: MongoDB connection URI
+        host: MongoDB host
+        port: MongoDB port
         database: Database name
+        collection: Collection name
+        username: MongoDB username
+        password: MongoDB password
+        auth_source: Authentication database
+        auth_mechanism: Authentication mechanism
         min_size: Minimum pool size
         max_size: Maximum pool size
-        connection_timeout: Connection timeout
         max_lifetime: Maximum connection lifetime
-        idle_timeout: Connection idle timeout
-        validate_on_borrow: Whether to validate connections on borrow
-        test_on_return: Whether to test connections on return
         **kwargs: Additional pool options
-            - username: MongoDB username
-            - password: MongoDB password
-            - auth_source: Authentication database
-            - auth_mechanism: Authentication mechanism
-            - replica_set: Replica set name
-            - read_preference: Read preference
-            - write_concern: Write concern
 
     Returns:
         MongoDB connection pool
@@ -126,7 +126,8 @@ async def create_mongo_pool(
     Examples:
         ```python
         pool = await create_mongo_pool(
-            uri="mongodb://localhost:27017",
+            host="localhost",
+            port=27017,
             database="test",
             min_size=1,
             max_size=5
@@ -134,45 +135,48 @@ async def create_mongo_pool(
         ```
     """
     pool = MongoPool[Any, Any](
-        uri=uri,
+        host=host,
+        port=port,
         database=database,
+        collection=collection,
+        username=username,
+        password=password,
+        auth_source=auth_source,
+        auth_mechanism=auth_mechanism,
         min_size=min_size,
         max_size=max_size,
         max_lifetime=max_lifetime,
         **kwargs,
     )
 
-    await pool.init()
+    await pool.connect()
     return pool
 
 
 async def create_redis_pool(
     *,
-    host: str,
-    port: int,
+    host: str = "localhost",
+    port: int = 6379,
     db: int = 0,
+    username: str | None = None,
+    password: str | None = None,
     min_size: int = 1,
     max_size: int = 10,
-    timeout: float = 30.0,
+    max_lifetime: int = 3600,
     **kwargs: Any,
-) -> RedisPool[Any, Any]:
+) -> RedisPool[Any]:
     """Create Redis connection pool.
 
     Args:
         host: Redis host
         port: Redis port
         db: Redis database number
+        username: Redis username
+        password: Redis password
         min_size: Minimum pool size
         max_size: Maximum pool size
-        timeout: Connection timeout
+        max_lifetime: Maximum connection lifetime
         **kwargs: Additional pool options
-            - username: Redis username
-            - password: Redis password
-            - ssl: Whether to use SSL
-            - ssl_ca_certs: Path to CA certificates file
-            - ssl_certfile: Path to client certificate file
-            - ssl_keyfile: Path to client key file
-            - ssl_cert_reqs: SSL certificate requirements
 
     Returns:
         Redis connection pool
@@ -188,15 +192,17 @@ async def create_redis_pool(
         )
         ```
     """
-    pool = RedisPool[Any, Any](
+    pool = RedisPool[Any](
         host=host,
         port=port,
         db=db,
+        username=username,
+        password=password,
         min_size=min_size,
         max_size=max_size,
-        timeout=timeout,
+        max_lifetime=max_lifetime,
         **kwargs,
     )
 
-    await pool.init()
+    await pool.connect()
     return pool

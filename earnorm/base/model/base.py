@@ -1,58 +1,61 @@
 """Base model for EarnORM.
 
-This module provides the base model class that all ORM models inherit from.
-It handles record management, field access, and database operations.
+This module provides the internal base model class that all ORM models inherit from.
+It handles record management, field access, and common functionality.
+This is an internal implementation and should not be used directly.
 
 Examples:
-    >>> from earnorm.base.model import BaseModel
-    >>> from earnorm.fields import StringField, IntegerField
+    >>> from earnorm.base.model import StoredModel, AbstractModel
     >>>
-    >>> class Partner(BaseModel):
-    ...     _name = 'res.partner'
-    ...     _description = 'Partners'
+    >>> class User(StoredModel):
+    ...     _name = 'data.user'
+    ...     name = StringField()
     ...
-    ...     name = StringField(required=True)
-    ...     age = IntegerField()
-    ...
-    ...     async def send_email(self):
-    ...         # Send email to partner
+    >>> class UserService(AbstractModel):
+    ...     _name = 'service.user'
+    ...     async def authenticate(self, user_id: int):
     ...         pass
 """
 
 from typing import (
     Any,
-    AsyncIterator,
     ClassVar,
     Dict,
-    Iterator,
+    Generic,
     List,
+    Literal,
     Optional,
     Set,
+    Tuple,
     Type,
     TypeVar,
     Union,
     cast,
-    overload,
 )
 
-from earnorm.base.database.query.backends.mongo.builder import MongoQueryBuilder
-from earnorm.base.database.query.backends.mongo.executor import MongoQueryExecutor
-from earnorm.base.domain.converter import MongoConverter
+from earnorm.base.database.adapter import DatabaseAdapter
+from earnorm.base.database.query.backends.mongo.query import MongoQuery
 from earnorm.base.domain.expression import DomainExpression
 from earnorm.base.env import Environment
 from earnorm.base.model.meta import MetaModel, RecordSetType
 from earnorm.di import container
 from earnorm.fields.base import Field
-from earnorm.types import JsonDict
+from earnorm.types import JsonDict, ModelProtocol, ValueType
 from earnorm.validators.base import ValidationError
 
-# Type variable for self-referencing
+# Type variables for model types
+ModelT = TypeVar("ModelT", bound="BaseModel")
 Self = TypeVar("Self", bound="BaseModel")
 
-T = TypeVar("T", bound="BaseModel")
-
 # Domain expression types
-DomainItem = Union[List[Any], str]
+DomainOperator = Literal[
+    "=", "!=", "<", "<=", ">", ">=", "in", "not in", "like", "ilike"
+]
+DomainTerm = Tuple[str, DomainOperator, Any]
+Domain = List[Union[DomainTerm, List[DomainTerm]]]
+
+T = TypeVar("T", bound=ModelProtocol)
+V = TypeVar("V")
 
 
 class EnvironmentDescriptor:
@@ -76,38 +79,23 @@ class EnvironmentDescriptor:
         return owner._class_env
 
 
-class BaseModel(metaclass=MetaModel):
-    """Base class for all ORM models.
+class BaseModel(ModelProtocol, Generic[T], metaclass=MetaModel):
+    """Internal base class for all ORM models.
 
     This class provides core functionality for:
-    - Record management (create, read, write, delete)
-    - Field access and validation
-    - Database operations
-    - Record sets and iteration
-    - Prefetching and caching
+    - Field definitions and validation
+    - Model metadata management
+    - Basic record operations
+    - Common utilities and type definitions
 
-    A model instance can represent either a single record or multiple records.
-    When representing multiple records, it behaves like both a model instance
-    and a collection, supporting:
-    - Iteration over records
-    - Length and containment checks
-    - Indexing and slicing
-    - Lazy loading of fields
-    - Prefetching of related records
+    This is an internal implementation and should not be used directly.
+    Use StoredModel or AbstractModel instead.
 
     Attributes:
-        _name: Technical name of the model (e.g. 'res.partner')
+        _name: Technical name of the model
         _description: User-friendly description
-        _table: Database table name
-        _sequence: Sequence for ID generation
-        _inherit: Parent model(s) to inherit from
-        _inherits: Parent models to delegate to
-        _order: Default ordering
-        _rec_name: Field to use for record name
-        _auto: Whether to create database table
-        _register: Whether to register in registry
-        _abstract: Whether model is abstract
-        _transient: Whether records are temporary
+        _internal: Marker for internal implementation
+        _store: Whether model supports storage (must be defined by subclasses)
     """
 
     __slots__ = ["_instance_env", "_ids", "_prefetch"]
@@ -115,6 +103,7 @@ class BaseModel(metaclass=MetaModel):
     # Model metadata
     _name: ClassVar[str]
     _description: ClassVar[Optional[str]] = None
+    _internal: ClassVar[bool] = True  # Mark as internal
     _table: ClassVar[Optional[str]] = None
     _sequence: ClassVar[Optional[str]] = None
     _inherit: ClassVar[Optional[Union[str, List[str]]]] = None
@@ -138,6 +127,31 @@ class BaseModel(metaclass=MetaModel):
     # Environment descriptor
     env = EnvironmentDescriptor()
 
+    # Database adapter
+    _adapter: DatabaseAdapter[T]
+
+    @classmethod
+    def _validate_model_type(cls: Type[ModelT]) -> None:
+        """Validate model type configuration.
+
+        Raises:
+            TypeError: If _store attribute is not defined
+        """
+        if not hasattr(cls, "_store"):
+            raise TypeError(f"Model {cls.__name__} must declare _store attribute")
+
+    def __init_subclass__(cls: Type[ModelT]) -> None:
+        """Initialize model subclass.
+
+        This method is called when a class inherits from BaseModel.
+        It validates the model configuration.
+
+        Raises:
+            TypeError: If model configuration is invalid
+        """
+        super().__init_subclass__()
+        cls._validate_model_type()
+
     def __init__(
         self,
         env: Optional[Environment] = None,
@@ -159,7 +173,7 @@ class BaseModel(metaclass=MetaModel):
             self._instance_env = self.__class__._class_env
 
         if self._instance_env is None:
-            raise ValidationError("No environment provided")
+            raise ValidationError("No environment available")
 
         self._ids: List[int] = []
         self._prefetch: Dict[str, Set[int]] = {}
@@ -167,6 +181,133 @@ class BaseModel(metaclass=MetaModel):
         if ids is not None:
             self._ids = self._normalize_ids(ids)
 
+    async def __getattr__(self, name: str) -> Any:
+        """Lazy load field values.
+
+        This method implements lazy loading by only loading field values
+        when they are accessed. It checks the cache first and only loads
+        from database if needed.
+
+        Args:
+            name: Name of the field to access
+
+        Returns:
+            Field value
+
+        Raises:
+            AttributeError: If field does not exist
+        """
+        # Check if field exists
+        field = self.__fields__.get(name)
+        if field is None:
+            raise AttributeError(f"Field {name} does not exist on {self._name}")
+
+        # Check cache first
+        env = await self.env
+        cached = await env.get_cached(self._name, self._ids[0])
+        if cached and name in cached:
+            return cached[name]
+
+        # Load from database if not in cache
+        await self._read([field.name])
+        cached = await env.get_cached(self._name, self._ids[0])
+        if cached and name in cached:
+            return cached[name]
+
+        raise AttributeError(f"Field {name} not found in cache or database")
+
+    async def _read(self, fields: List[str]) -> None:
+        """Read field values from database.
+
+        Args:
+            fields: List of field names to read
+        """
+        # Get adapter
+        adapter = await self._get_adapter()
+
+        # Build query to get records
+        query = await adapter.query(cast(Type[T], self.__class__))
+        filter_dict: JsonDict = {"_id": {"$in": self._ids}}
+        records = await cast(MongoQuery[T], query).filter(filter_dict).execute_async()
+
+        # Update cache
+        env = await self.env
+        for record in records:
+            record_values = {field: getattr(record, field) for field in fields}
+            await env.set_cached(self._name, record.id, record_values)
+
+    async def _prefetch_field(self, field: Field[Any]) -> None:
+        """Setup prefetching for field.
+
+        This method sets up prefetching for a field and its related fields.
+        It adds records to the prefetch queue and handles related records.
+
+        Args:
+            field: Field to prefetch
+        """
+        if not field.prefetch or not self._ids:
+            return
+
+        # Add to prefetch queue
+        env = await self.env
+        env.add_to_prefetch(self._name, set(self._ids))
+
+        # Setup related fields prefetch
+        if field.relational:
+            await self._prefetch_related(field)
+
+    async def _prefetch_related(self, field: Field[Any]) -> None:
+        """Setup prefetching for related fields.
+
+        This method handles prefetching of related records by:
+        1. Getting the related model
+        2. Collecting related record IDs
+        3. Adding them to prefetch queue
+
+        Args:
+            field: Related field to prefetch
+        """
+        if not field.comodel_name:
+            return
+
+        env = await self.env
+        comodel = cast(Type[BaseModel[T]], env[field.comodel_name])
+
+        # Get related record IDs
+        related_ids: Set[int] = set()
+        for record_id in self._ids:
+            cached = await env.get_cached(self._name, record_id)
+            if cached and field.name in cached:
+                value = cached[field.name]
+                if value:
+                    if isinstance(value, (list, tuple)):
+                        related_ids.update(cast(List[int], value))
+                    else:
+                        related_ids.add(cast(int, value))
+
+        # Add to prefetch queue
+        if related_ids:
+            browsed = await comodel.browse(list(related_ids))
+            await browsed.prefetch_field(field)
+
+    async def _prefetch_setup(self) -> None:
+        """Setup prefetch registry.
+
+        This method initializes the prefetch registry for the model.
+        It tracks which records should be prefetched.
+        """
+        env = await self.env
+        env.add_to_prefetch(self._name, set(self._ids))
+
+    async def clear_prefetch(self) -> None:
+        """Clear prefetch registry.
+
+        This method clears the prefetch registry for the model.
+        """
+        env = await self.env
+        env.clear_prefetch()
+
+    # Public CRUD Methods
     @classmethod
     async def browse(
         cls: Type[Self], ids: Optional[Union[int, List[int]]] = None
@@ -186,8 +327,7 @@ class BaseModel(metaclass=MetaModel):
         """
         env = await cls.env
         instance = cls(env=env)
-        recordset = await instance._browse(ids)
-        return cast(Self, recordset)
+        return await instance._browse(ids)
 
     @classmethod
     async def create(cls: Type[Self], values: Dict[str, Any]) -> Self:
@@ -203,14 +343,16 @@ class BaseModel(metaclass=MetaModel):
             >>> user = await User.create({"name": "John", "age": 30})  # Returns User instance
             >>> print(user.name)
         """
+        # Validate values
+        cls._validate_values(values)
+
         env = await cls.env
         instance = cls(env=env)
-        recordset = await instance._create(values)
-        return cast(Self, recordset)
+        return await instance._create(values)
 
     @classmethod
-    async def search(cls: Type[T], domain: List[Any] | None = None) -> T:
-        """Search for records matching domain.
+    async def search(cls: Type[Self], domain: Optional[List[Any]] = None) -> Self:
+        """Search records matching domain.
 
         Args:
             domain: Search domain
@@ -225,273 +367,167 @@ class BaseModel(metaclass=MetaModel):
         """
         env = await cls.env
         instance = cls(env=env)
-        query = instance._domain_to_query(domain or [])
-        ids = await instance._search(query)
-        recordset = await instance._browse(ids)
-        return cast(T, recordset)
 
-    def _normalize_ids(self, ids: Optional[Union[int, List[int]]]) -> List[int]:
-        """Normalize record IDs to a list of integers.
+        # Transform domain to query if needed
+        query = instance._domain_to_query(domain) if domain else None
 
-        Args:
-            ids: Single ID or list of IDs to normalize
+        return await instance._search(query)
 
-        Returns:
-            List of normalized integer IDs
-
-        Examples:
-            >>> model._normalize_ids(1)
-            [1]
-            >>> model._normalize_ids([1, 2, 3])
-            [1, 2, 3]
-        """
-        if ids is None:
-            return []
-        if isinstance(ids, int):
-            return [ids]
-        return [int(x) for x in ids]
-
-    async def _browse(
-        self, ids: Optional[Union[int, List[int]]] = None
-    ) -> "RecordSetType":
-        """Internal method to create recordset.
-
-        This is an internal method that returns RecordSetType.
-        Public methods should use browse() instead which returns the model type.
-        """
-        recordset = self._RecordSet(env=await self.env)
-        if ids is not None:
-            recordset._ids = self._normalize_ids(ids)
-            self._add_to_prefetch(self._name, set(recordset._ids))
-        return recordset
-
-    def _add_to_prefetch(self, model: str, ids: Set[int]) -> None:
-        """Add IDs to prefetch cache.
-
-        Args:
-            model: Model name
-            ids: Record IDs to prefetch
-
-        Raises:
-            ValidationError: If model name is empty or ids is empty
-
-        Examples:
-            >>> model._add_to_prefetch("res.partner", {1, 2, 3})
-        """
-        if not model:
-            raise ValidationError("Model name cannot be empty")
-        if not ids:
-            raise ValidationError("IDs cannot be empty")
-
-        if model not in self._prefetch:
-            self._prefetch[model] = set()
-        self._prefetch[model].update(ids)
-
-    def __len__(self) -> int:
-        """Get number of records in this instance."""
-        return len(self._ids)
-
-    def __bool__(self) -> bool:
-        """Return True if this instance contains any records."""
-        return bool(self._ids)
-
-    @overload
-    def __getitem__(self: Self, index: int) -> Self: ...
-
-    @overload
-    def __getitem__(self: Self, index: slice) -> Self: ...
-
-    def __getitem__(self: Self, index: Union[int, slice]) -> Self:
-        """Get record(s) at index.
-
-        Args:
-            index: Integer index or slice
-
-        Returns:
-            Single record instance for integer index
-            Multiple record instance for slice
-
-        Examples:
-            >>> users = await User.search([])
-            >>> first_user = users[0]  # Returns User
-            >>> some_users = users[1:3]  # Returns User
-        """
-        if isinstance(index, slice):
-            instance = self.__class__(env=self._instance_env)
-            instance._ids = self._ids[index]
-            return instance
-        else:
-            instance = self.__class__(env=self._instance_env)
-            instance._ids = [self._ids[index]]
-            return instance
-
-    def __iter__(self: Self) -> Iterator[Self]:
-        """Iterate over records in this instance.
-
-        Each iteration returns a new instance containing a single record.
-
-        Examples:
-            >>> users = await User.search([])  # Multiple records
-            >>> for user in users:  # Each user is User instance
-            ...     print(user.name)  # Lazy loads name for each record
-        """
-        for record_id in self._ids:
-            # Create new instance with single ID
-            instance = self.__class__(env=self._instance_env)
-            instance._ids = [record_id]
-            yield instance
-
-    async def ensure_one(self: Self) -> Self:
-        """Ensure this instance contains exactly one record.
-
-        Returns:
-            Self if instance contains one record
-
-        Raises:
-            ValidationError: If instance is empty or contains multiple records
-
-        Examples:
-            >>> user = await users.ensure_one()  # Raises if not exactly one record
-            >>> print(user.name)  # Safe to use as single record
-        """
-        if not self._ids:
-            raise ValidationError(f"No {self._name} record found")
-        if len(self._ids) > 1:
-            raise ValidationError(
-                f"Expected single {self._name} record, got {len(self._ids)}"
-            )
-        return self
-
-    @property
-    def ids(self) -> List[int]:
-        """Get IDs of records in this instance.
-
-        Returns:
-            List of record IDs
-
-        Examples:
-            >>> users = await User.search([])
-            >>> print(users.ids)  # [1, 2, 3]
-        """
-        return self._ids.copy()
-
-    async def __aiter__(self) -> AsyncIterator["BaseModel"]:
-        """Async iterator over records in this recordset.
-
-        Yields:
-            Individual record instances
-
-        Examples:
-            >>> async for user in users:
-            ...     print(user.name)
-        """
-        for record_id in self._ids:
-            yield await self._browse(record_id)
-
-    async def _validate_values(self, values: Dict[str, Any]) -> None:
-        """Validate field values before create/write.
-
-        Args:
-            values: Field values to validate
-
-        Raises:
-            ValidationError: If validation fails
-
-        Examples:
-            >>> await model._validate_values({
-            ...     'name': 'John',
-            ...     'age': 30
-            ... })
-        """
-        # Get field definitions
-        fields = self.__class__.__fields__
-
-        # Check required fields
-        for field_name, field in fields.items():
-            if field.required and field_name not in values:
-                raise ValidationError(f"Field {field_name} is required")
-
-        # Validate field values
-        for field_name, value in values.items():
-            if field_name not in fields:
-                raise ValidationError(f"Unknown field {field_name}")
-
-            field = fields[field_name]
-            try:
-                await field.validate(value)
-            except ValidationError as e:
-                raise ValidationError(
-                    f"Invalid value for {field_name}: {str(e)}"
-                ) from e
-
-    async def write(self: Self, values: Dict[str, Any]) -> Self:
-        """Update record values.
+    async def write(self, values: Dict[str, Any]) -> Self:
+        """Update record with values.
 
         Args:
             values: Field values to update
 
         Returns:
-            Model instance containing the updated record
+            Updated record instance
 
         Examples:
-            >>> user = await user.write({"name": "Jane"})  # Returns User instance
-            >>> print(user.name)
+            >>> user = await User.browse(1)
+            >>> await user.write({"name": "Jane"})
         """
-        recordset = await self._write(values)
-        return cast(Self, recordset)
+        # Validate values
+        self._validate_values(values)
+        return await self._write(values)
 
     async def unlink(self) -> bool:
-        """Delete records.
+        """Delete record from database.
 
         Returns:
-            True if successful
-
-        Raises:
-            ValidationError: If validation fails
+            True if records were deleted
 
         Examples:
-            >>> success = await user.unlink()
+            >>> user = await User.browse(1)
+            >>> await user.unlink()
         """
-        # get valid ids
-        ids = self._ids
-        if not ids:
-            raise ValidationError("No records to unlink")
+        if not self._ids:
+            return False
+        return await self._unlink()
 
-        return await self._unlink(ids)
+    # Private CRUD Methods
+    async def _browse(self, ids: Optional[Union[int, List[int]]] = None) -> Self:
+        """Internal browse implementation."""
+        if ids is not None:
+            self._ids = self._normalize_ids(ids)
+        return cast(Self, self)
 
-    async def _search(self, query: JsonDict) -> List[int]:
-        """Search for records matching query.
+    async def _create(self, values: Dict[str, Any]) -> Self:
+        """Internal create implementation."""
+        adapter = await self._get_adapter()
 
-        Args:
-            query: Database query dict
+        # Create model instance with values
+        instance = self.__class__(env=self._instance_env)
+        for name, value in values.items():
+            setattr(instance, name, value)
+
+        async with await adapter.transaction(self.__class__) as txn:
+            await self._before_create(values)
+            created = await adapter.insert(instance)
+            await self._after_create(values)
+
+        return cast(Self, created)
+
+    async def _write(self, values: Dict[str, Any]) -> Self:
+        """Internal write implementation."""
+        if not self._ids:
+            return cast(Self, self)
+
+        adapter = await self._get_adapter()
+
+        # Update values on instance
+        for name, value in values.items():
+            setattr(self, name, value)
+
+        async with await adapter.transaction(self.__class__) as txn:
+            await self._before_write(values)
+            updated = await adapter.update(self)
+            await self._after_write(values)
+
+        return cast(Self, updated)
+
+    async def _search(self, query: Any = None) -> Self:
+        """Internal search implementation."""
+        adapter = await self._get_adapter()
+        result = await adapter.query(self.__class__).filter(query).all()
+        return cast(Self, result)
+
+    async def _unlink(self) -> bool:
+        """Internal unlink implementation."""
+        if not self._ids:
+            return False
+
+        adapter = await self._get_adapter()
+
+        async with await adapter.transaction(cast(Type[T], self.__class__)) as txn:
+            await self._before_unlink()
+            await adapter.delete(self)
+            await self._after_unlink()
+
+        return True
+
+    # Helper Methods
+    def _domain_to_query(self, domain: List[Any]) -> DomainExpression[ValueType]:
+        """Convert domain to database query."""
+        return DomainExpression(domain)
+
+    @classmethod
+    async def _validate_values(cls, values: Dict[str, Any]) -> None:
+        """Validate field values."""
+        for field_name, value in values.items():
+            field = cls.__fields__.get(field_name)
+            if field is None:
+                raise ValidationError(f"Unknown field {field_name}")
+            await field.validate(value)
+
+    @classmethod
+    def _to_db_values(cls, values: JsonDict) -> JsonDict:
+        db_values = {}
+        for name, value in values.items():
+            field = cls.__fields__.get(name)
+            if field is not None:
+                db_values[name] = field.to_db(value, "mongo")
+        return db_values
+
+    async def _get_adapter(self) -> DatabaseAdapter[T]:
+        """Get database adapter for model.
 
         Returns:
-            List of matching record IDs
-
-        Examples:
-            >>> ids = await model._search({"age": {"$gt": 18}})
-            >>> print(ids)  # [1, 2, 3]
+            Database adapter instance
         """
-        # Get database connection from environment
-        if not self._instance_env:
-            raise ValidationError("No environment available")
+        env = await self.env
+        adapter = await env.get_adapter()
+        return cast(DatabaseAdapter[T], adapter)
 
-        # Build and execute query
-        backend_type = self._instance_env.backend_type
-        if backend_type == "mongodb":
-            # Build MongoDB query
-            builder = MongoQueryBuilder(self._name)
-            builder.filter(query).project({"_id": 1})
-            query = await builder.build()
+    def _normalize_ids(self, ids: Union[int, List[int]]) -> List[int]:
+        """Convert ID or list of IDs to list."""
+        if isinstance(ids, int):
+            return [ids]
+        return list(ids)
 
-            # Execute query
-            executor = MongoQueryExecutor(self._instance_env)
-            result = await executor.execute(query)
+    # Lifecycle hooks
+    async def _before_create(self, values: Dict[str, Any]) -> None:
+        """Hook called before record creation."""
+        pass
 
-            # Extract IDs from result
-            return [doc["_id"] for doc in result.get("documents", [])]
-        else:
-            raise NotImplementedError(f"Backend {backend_type} not supported yet")
+    async def _after_create(self, values: Dict[str, Any]) -> None:
+        """Hook called after record creation."""
+        pass
+
+    async def _before_write(self, values: Dict[str, Any]) -> None:
+        """Hook called before record update."""
+        pass
+
+    async def _after_write(self, values: Dict[str, Any]) -> None:
+        """Hook called after record update."""
+        pass
+
+    async def _before_unlink(self) -> None:
+        """Hook called before record deletion."""
+        pass
+
+    async def _after_unlink(self) -> None:
+        """Hook called after record deletion."""
+        pass
 
     def __str__(self) -> str:
         """String representation showing model name and record IDs.
@@ -504,229 +540,43 @@ class BaseModel(metaclass=MetaModel):
         ids = ",".join(str(id) for id in self._ids)
         return f"{model_name}({ids})"
 
-    # Private methods for record operations
-    async def _create(self, values: Dict[str, Any]) -> "RecordSetType":
-        """Create record in database.
+    @classmethod
+    async def _internal_create(cls: Type[T], values: JsonDict) -> T:
+        adapter = cls._adapter
+        async with await adapter.transaction(cls) as transaction:
+            db_values = cls._to_db_values(values)
+            created = await transaction.insert(db_values)
+            return cast(T, created)
+
+    @classmethod
+    async def _internal_read(cls: Type[T], ids: List[int]) -> List[T]:
+        adapter = cls._adapter
+        query = await adapter.query(cls)
+        domain = DomainExpression[ValueType]("id", "in", ids)
+        query = cast(MongoQuery[T], query).filter(domain)
+        return await query.execute_async()
+
+    @classmethod
+    async def _internal_update(
+        cls: Type[T], ids: List[int], values: JsonDict
+    ) -> List[T]:
+        adapter = cls._adapter
+        async with await adapter.transaction(cls) as transaction:
+            db_values = cls._to_db_values(values)
+            updated = await transaction.update(ids, db_values)
+            return cast(List[T], updated)
+
+    @classmethod
+    async def _internal_delete(cls: Type[T], ids: List[int]) -> bool:
+        adapter = cls._adapter
+        async with await adapter.transaction(cls) as transaction:
+            await transaction.delete(ids)
+            return True
+
+    async def prefetch_field(self, field: Field[Any]) -> None:
+        """Setup prefetching for field.
 
         Args:
-            values: Field values for new record
-
-        Returns:
-            RecordSet containing the new record
-
-        Raises:
-            ValidationError: If validation fails
+            field: Field to prefetch
         """
-        # 1. Validate values
-        await self._validate_values(values)
-
-        # 2. Get database connection from environment
-        if not self._instance_env:
-            raise ValidationError("No environment available")
-
-        # 3. Build and execute query
-        backend_type = self._instance_env.backend_type
-        if backend_type == "mongodb":
-            # Build MongoDB query
-            builder = MongoQueryBuilder(self._name)
-            builder.insert_one(values)
-            query = await builder.build()
-
-            # Execute query in transaction
-            async with self._instance_env.transaction() as tx:
-                # Pre-create hooks
-                await self._before_create(values)
-
-                # Execute create
-                executor = MongoQueryExecutor(tx)
-                result = await executor.execute(query)
-
-                # Get created record ID
-                record_id = result.get("inserted_id")
-                if not record_id:
-                    raise ValidationError("Failed to create record: No ID returned")
-
-                # Post-create hooks
-                record = await self._browse([record_id])
-                await self._after_create(record)
-
-                return record
-        else:
-            raise NotImplementedError(f"Backend {backend_type} not supported yet")
-
-    async def _write(self, values: Dict[str, Any]) -> "RecordSetType":
-        """Update record in database.
-
-        Args:
-            values: Field values to update
-
-        Returns:
-            RecordSet containing the updated record
-
-        Raises:
-            ValidationError: If validation fails or no records to update
-        """
-        # 1. Check records exist
-        if not self._ids:
-            raise ValidationError("No records to update")
-
-        # 2. Validate values
-        await self._validate_values(values)
-
-        # 3. Get database connection from environment
-        if not self._instance_env:
-            raise ValidationError("No environment available")
-
-        # 4. Build and execute query
-        backend_type = self._instance_env.backend_type
-        if backend_type == "mongodb":
-            # Build MongoDB query
-            builder = MongoQueryBuilder(self._name)
-            builder.filter({"_id": {"$in": self._ids}}).update({"$set": values})
-            query = await builder.build()
-
-            # Execute query in transaction
-            async with self._instance_env.transaction() as tx:
-                # Pre-write hooks
-                await self._before_write(values)
-
-                # Execute update
-                executor = MongoQueryExecutor(tx)
-                result = await executor.execute(query)
-
-                # Check update success
-                if not result.get("modified_count"):
-                    raise ValidationError("Failed to update records")
-
-                # Post-write hooks
-                record = await self._browse(self._ids)
-                await self._after_write(record)
-
-                return record
-        else:
-            raise NotImplementedError(f"Backend {backend_type} not supported yet")
-
-    async def _unlink(self, ids: List[int]) -> bool:
-        """Delete records from database.
-
-        Args:
-            ids: List of record IDs to delete
-
-        Returns:
-            True if successful
-
-        Raises:
-            ValidationError: If validation fails or no records to delete
-
-        Examples:
-            >>> success = await model._unlink([1, 2, 3])
-            >>> print(success)  # True
-        """
-        # 1. Check records exist
-        if not ids:
-            raise ValidationError("No records to delete")
-
-        # 2. Get database connection from environment
-        if not self._instance_env:
-            raise ValidationError("No environment available")
-
-        # 3. Build and execute query
-        backend_type = self._instance_env.backend_type
-        if backend_type == "mongodb":
-            # Build MongoDB query
-            builder = MongoQueryBuilder(self._name)
-            builder.filter({"_id": {"$in": ids}}).delete()
-            query = await builder.build()
-
-            # Execute query in transaction
-            async with self._instance_env.transaction() as tx:
-                # Pre-unlink hooks
-                await self._before_unlink(ids)
-
-                # Execute delete
-                executor = MongoQueryExecutor(tx)
-                result = await executor.execute(query)
-
-                # Check delete success
-                if not result.get("deleted_count"):
-                    raise ValidationError("Failed to delete records")
-
-                # Post-unlink hooks
-                await self._after_unlink(ids)
-
-                return True
-        else:
-            raise NotImplementedError(f"Backend {backend_type} not supported yet")
-
-    def _domain_to_query(self, domain: List[Any]) -> JsonDict:
-        """Convert domain expression to database query.
-
-        Args:
-            domain: Domain expression list
-
-        Returns:
-            Database query dict
-
-        Examples:
-            >>> model._domain_to_query([["age", ">", 18], "AND", ["status", "=", "active"]])
-            {"$and": [{"age": {"$gt": 18}}, {"status": "active"}]}
-        """
-        # Create domain expression
-        expr = DomainExpression(domain)
-
-        # Convert to database query based on backend type
-        backend_type = self._instance_env.backend_type
-        if backend_type == "mongodb":
-            converter = MongoConverter()
-        else:
-            raise NotImplementedError(f"Backend {backend_type} not supported yet")
-
-        return converter.convert(expr)
-
-    async def _before_create(self, values: Dict[str, Any]) -> None:
-        """Hook called before creating record.
-
-        Args:
-            values: Field values for new record
-        """
-        pass
-
-    async def _after_create(self, record: "RecordSetType") -> None:
-        """Hook called after creating record.
-
-        Args:
-            record: Created record
-        """
-        pass
-
-    async def _before_write(self, values: Dict[str, Any]) -> None:
-        """Hook called before writing record.
-
-        Args:
-            values: Field values to update
-        """
-        pass
-
-    async def _after_write(self, record: "RecordSetType") -> None:
-        """Hook called after writing record.
-
-        Args:
-            record: Updated record
-        """
-        pass
-
-    async def _before_unlink(self, ids: List[int]) -> None:
-        """Hook called before deleting records.
-
-        Args:
-            ids: List of record IDs to delete
-        """
-        pass
-
-    async def _after_unlink(self, ids: List[int]) -> None:
-        """Hook called after deleting records.
-
-        Args:
-            ids: List of record IDs deleted
-        """
-        pass
+        await self._prefetch_field(field)

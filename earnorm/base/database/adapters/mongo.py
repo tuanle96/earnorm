@@ -5,7 +5,7 @@ This module provides MongoDB adapter implementation.
 Examples:
     >>> # Create adapter
     >>> adapter = MongoAdapter(uri="mongodb://localhost:27017", database="test")
-    >>> 
+    >>>
     >>> # Query using domain expressions
     >>> users = adapter.query(User).filter(
     ...     DomainBuilder()
@@ -14,7 +14,7 @@ Examples:
     ...     .field("status").equals("active")
     ...     .build()
     ... ).all()
-    >>> 
+    >>>
     >>> # Using transactions
     >>> with adapter.transaction(User) as tx:
     ...     user = User(name="John", age=25)
@@ -36,8 +36,9 @@ from earnorm.base.database.adapter import DatabaseAdapter
 from earnorm.base.database.query.backends.mongo.builder import MongoQueryBuilder
 from earnorm.base.database.query.backends.mongo.query import MongoQuery
 from earnorm.base.database.transaction.backends.mongo import MongoTransactionManager
+from earnorm.di import container
 from earnorm.pool.backends.mongo import MongoPool
-from earnorm.pool.registry import PoolRegistry
+from earnorm.pool.protocols.connection import ConnectionProtocol
 from earnorm.types import DatabaseModel, JsonDict
 
 ModelT = TypeVar("ModelT", bound=DatabaseModel)
@@ -50,62 +51,57 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
     It handles all database operations including querying, transactions, and CRUD operations.
 
     Attributes:
-        uri: MongoDB connection URI
-        database: Database name
-        options: Additional connection options
         pool_name: Name of the pool in registry
-        min_pool_size: Minimum pool size
-        max_pool_size: Maximum pool size
-        max_idle_time: Maximum connection idle time in seconds
-        max_lifetime: Maximum connection lifetime in seconds
     """
 
-    def __init__(
-        self,
-        uri: str,
-        database: str,
-        options: Optional[Dict[str, Any]] = None,
-        pool_name: str = "default",
-        min_pool_size: int = 1,
-        max_pool_size: int = 10,
-        max_idle_time: int = 300,
-        max_lifetime: int = 3600,
-    ) -> None:
+    def __init__(self, pool_name: str = "default") -> None:
         """Initialize MongoDB adapter.
 
         Args:
-            uri: MongoDB connection URI
-            database: Database name
-            options: Additional connection options
             pool_name: Name of the pool in registry
-            min_pool_size: Minimum pool size
-            max_pool_size: Maximum pool size
-            max_idle_time: Maximum connection idle time in seconds
-            max_lifetime: Maximum connection lifetime in seconds
-
-        Raises:
-            ValueError: If URI or database name is empty
         """
-        if not uri:
-            raise ValueError("MongoDB URI cannot be empty")
-        if not database:
-            raise ValueError("Database name cannot be empty")
-
         super().__init__()
-        self._uri = uri
-        self._database = database
-        self._options = options or {}
         self._pool_name = pool_name
-        self._min_pool_size = min_pool_size
-        self._max_pool_size = max_pool_size
-        self._max_idle_time = max_idle_time
-        self._max_lifetime = max_lifetime
         self._pool: Optional[
             MongoPool[
                 AsyncIOMotorDatabase[Dict[str, Any]], AsyncIOMotorCollection[JsonDict]
             ]
         ] = None
         self._sync_db: Optional[Database[Dict[str, Any]]] = None
+
+    async def init(self) -> None:
+        """Initialize the adapter.
+
+        This method should be called before using the adapter.
+        It initializes the pool and sync database connection.
+        """
+        await self.connect()
+
+    async def close(self) -> None:
+        """Close the adapter.
+
+        This method should be called when the adapter is no longer needed.
+        It cleans up the pool and sync database connection.
+        """
+        await self.disconnect()
+
+    async def get_connection(
+        self,
+    ) -> ConnectionProtocol[
+        AsyncIOMotorDatabase[Dict[str, Any]], AsyncIOMotorCollection[JsonDict]
+    ]:
+        """Get a connection from the adapter.
+
+        Returns:
+            ConnectionProtocol: A MongoDB database connection.
+
+        Raises:
+            RuntimeError: If not connected to MongoDB.
+        """
+        if self._pool is None:
+            raise RuntimeError("Not connected to MongoDB")
+        conn = await (await self._pool.acquire())
+        return conn
 
     async def connect(self) -> None:
         """Connect to MongoDB.
@@ -114,38 +110,28 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             ConnectionError: If connection fails
         """
         try:
-            # Create and initialize pool
-            self._pool = MongoPool[
-                AsyncIOMotorDatabase[Dict[str, Any]], AsyncIOMotorCollection[JsonDict]
-            ](
-                uri=self._uri,
-                database=self._database,
-                min_size=self._min_pool_size,
-                max_size=self._max_pool_size,
-                max_idle_time=self._max_idle_time,
-                max_lifetime=self._max_lifetime,
-                **self._options,
-            )
-            await self._pool.init()
+            # Get pool from registry
+            pool_registry = await container.get("pool_registry")
+            if not pool_registry:
+                raise RuntimeError("Pool registry not initialized")
 
-            # Register pool in registry
-            PoolRegistry().register(self._pool_name, self._pool)
+            self._pool = await pool_registry.get(self._pool_name)
+            if not self._pool:
+                raise RuntimeError(f"Pool {self._pool_name} not found")
 
             # Get sync database for transactions
-            client = AsyncIOMotorClient[Dict[str, Any]](self._uri, **self._options)
-            self._sync_db = Database(client.delegate, self._database)
+            client = AsyncIOMotorClient[Dict[str, Any]](getattr(self._pool, "_uri"))
+            self._sync_db = Database(client.delegate, getattr(self._pool, "_database"))
 
         except Exception as e:
             raise ConnectionError(f"Failed to connect to MongoDB: {e}") from e
 
     async def disconnect(self) -> None:
         """Disconnect from MongoDB."""
-        if self._pool is not None:
-            await self._pool.close()
-            self._pool = None
         if self._sync_db is not None:
             self._sync_db.client.close()
             self._sync_db = None
+        self._pool = None
 
     async def get_collection(self, name: str) -> AsyncIOMotorCollection[JsonDict]:
         """Get MongoDB collection.
@@ -175,6 +161,25 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             # Release connection back to pool
             await self._pool.release(conn)
 
+    def _get_collection_name(self, model_type: Type[ModelT]) -> str:
+        """Get collection name for model type.
+
+        Args:
+            model_type: Type of model
+
+        Returns:
+            Collection name
+
+        Raises:
+            ValueError: If model has no table or name
+        """
+        # Use getattr to access protected attributes
+        table = getattr(model_type, "_table", None)
+        name = getattr(model_type, "_name", None)
+        if not (table or name):
+            raise ValueError(f"Model {model_type} has no table or name")
+        return str(table) if table else str(name)
+
     def _get_collection(self, model_type: Type[ModelT]) -> Collection[Dict[str, Any]]:
         """Get MongoDB collection for model type.
 
@@ -189,7 +194,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         """
         if self._sync_db is None:
             raise RuntimeError("Not connected to MongoDB")
-        return self._sync_db[model_type.__collection__]
+        return self._sync_db[self._get_collection_name(model_type)]
 
     async def query_builder(
         self, model_type: Type[ModelT], collection: Optional[str] = None
@@ -208,7 +213,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             RuntimeError: If not connected
         """
         if not collection:
-            collection = model_type.__collection__
+            collection = self._get_collection_name(model_type)
         return MongoQueryBuilder(
             collection=await self.get_collection(collection),
             model_type=model_type,
@@ -224,7 +229,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             Query builder
         """
         return MongoQuery[ModelT](
-            collection=await self.get_collection(model_type.__collection__),
+            collection=await self.get_collection(self._get_collection_name(model_type)),
             model_cls=model_type,
         )
 

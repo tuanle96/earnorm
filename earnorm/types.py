@@ -49,7 +49,9 @@ Examples:
 from typing import (
     TYPE_CHECKING,
     Any,
+    AsyncContextManager,
     Callable,
+    ClassVar,
     Dict,
     List,
     Literal,
@@ -62,10 +64,9 @@ from typing import (
     runtime_checkable,
 )
 
-from bson import ObjectId
-
 # Type variables
-V = TypeVar("V", covariant=True)  # Field value type
+T = TypeVar("T")  # Generic type
+V = TypeVar("V")  # Field value type
 
 # Domain operator type
 DomainOperator: TypeAlias = Literal[
@@ -115,14 +116,11 @@ FieldDependencies = Set[str]
 # Type for validator functions
 ValidatorFunc = Callable[[Any], None]
 
-# Generic type variables
-T = TypeVar("T")  # Generic type
-
 if TYPE_CHECKING:
     from earnorm.base.model.base import BaseModel as BaseModelType
     from earnorm.fields.base import Field
 
-    M = TypeVar("M", bound="BaseModelType")  # Model type
+    M = TypeVar("M", bound="BaseModelType[Any]")  # Model type
     F = TypeVar("F", bound="Field[Any]")  # Field type with Any type parameter
 else:
     M = TypeVar("M")  # Model type at runtime
@@ -130,40 +128,42 @@ else:
 
 
 @runtime_checkable
-class DatabaseModel(Protocol):
-    """Protocol for database models.
+class ModelProtocol(Protocol):
+    """Protocol for stored models.
 
-    This protocol defines the interface that all database models must implement.
-    It provides methods for converting between Python objects and database formats.
+    This protocol defines the interface that all stored models must implement.
+    It provides methods for CRUD operations and database interaction.
 
     Examples:
-        >>> class User(DatabaseModel):
-        ...     def __init__(self, name: str, age: int) -> None:
-        ...         self.id: Optional[ObjectId] = None
-        ...         self.name = name
-        ...         self.age = age
+        >>> class User(StoredModel):
+        ...     _name = 'data.user'
+        ...     _description = 'User Data'
         ...
-        ...     def to_dict(self) -> Dict[str, Any]:
-        ...         return {
-        ...             "_id": self.id,
-        ...             "name": self.name,
-        ...             "age": self.age,
-        ...         }
+        ...     name = StringField(required=True)
+        ...     age = IntegerField()
         ...
-        ...     @classmethod
-        ...     def from_dict(cls, data: Dict[str, Any]) -> "User":
-        ...         user = cls(name=data["name"], age=data["age"])
-        ...         user.id = data.get("_id")
-        ...         return user
+        ...     async def update_age(self, new_age: int) -> 'User':
+        ...         return await self.write({'age': new_age})
     """
 
-    id: Optional[ObjectId]
-    """Document ID in database."""
+    _store: ClassVar[bool]
+    """Whether model supports storage."""
 
-    __collection__: str
-    """Collection name in database."""
+    _name: ClassVar[str]
+    """Technical name of the model."""
 
-    def to_dict(self) -> Dict[str, Any]:
+    _description: ClassVar[Optional[str]]
+    """User-friendly description."""
+
+    _table: ClassVar[Optional[str]]
+    """Database table name."""
+
+    _sequence: ClassVar[Optional[str]]
+    """ID sequence name."""
+
+    id: int
+
+    def to_dict(self) -> JsonDict:
         """Convert model to dictionary.
 
         Returns:
@@ -172,13 +172,139 @@ class DatabaseModel(Protocol):
         ...
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "DatabaseModel":
-        """Create model from dictionary.
+    async def browse(
+        cls, ids: Union[int, List[int]]
+    ) -> Union["ModelProtocol", List["ModelProtocol"]]:
+        """Browse records by IDs.
 
         Args:
-            data: Dictionary representation of model
+            ids: Record ID or list of record IDs
 
         Returns:
-            Model instance
+            Single record or list of records
+        """
+        ...
+
+    @classmethod
+    async def create(cls, values: Dict[str, Any]) -> "ModelProtocol":
+        """Create a new record."""
+        ...
+
+    async def write(self, values: Dict[str, Any]) -> "ModelProtocol":
+        """Update record with values."""
+        ...
+
+    async def unlink(self) -> bool:
+        """Delete record from database."""
+        ...
+
+    async def with_transaction(self) -> AsyncContextManager["ModelProtocol"]:
+        """Get transaction context manager."""
+        ...
+
+    async def _prefetch_field(self, field: "Field[Any]") -> None:
+        """Setup prefetching for field."""
+        ...
+
+
+# Type alias for database model
+DatabaseModel = ModelProtocol
+
+
+@runtime_checkable
+class FieldProtocol(Protocol[V]):
+    """Protocol for field classes.
+
+    This protocol defines the interface that all field classes must implement.
+    It provides methods for validation, conversion, and database interaction.
+
+    Type Parameters:
+        V: Field value type
+
+    Examples:
+        >>> class StringField(Field[str]):
+        ...     def validate(self, value: Any) -> None:
+        ...         if not isinstance(value, str):
+        ...             raise ValidationError("Value must be string")
+    """
+
+    name: str
+    """Field name."""
+
+    required: bool
+    """Whether field is required."""
+
+    readonly: bool
+    """Whether field is readonly."""
+
+    default: Optional[V]
+    """Default value for field."""
+
+    compute: Optional[ComputeMethod]
+    """Compute method for field."""
+
+    compute_depends: FieldDependencies
+    """Dependencies for compute method."""
+
+    def __init__(self, **options: Any) -> None:
+        """Initialize field with options."""
+        ...
+
+    def setup(self, model: Any) -> None:
+        """Set up field for model.
+
+        Args:
+            model: Model class to set up field for
+        """
+        ...
+
+    def setup_triggers(self) -> None:
+        """Set up field triggers for computed fields."""
+        ...
+
+    def validate(self, value: Any) -> None:
+        """Validate field value.
+
+        Args:
+            value: Value to validate
+
+        Raises:
+            ValidationError: If validation fails
+        """
+        ...
+
+    def convert(self, value: Any) -> V:
+        """Convert value to field type.
+
+        Args:
+            value: Value to convert
+
+        Returns:
+            Converted value
+
+        Raises:
+            ValidationError: If conversion fails
+        """
+        ...
+
+    def to_db(self, value: V) -> DatabaseValue:
+        """Convert value to database format.
+
+        Args:
+            value: Value to convert
+
+        Returns:
+            Value in database format
+        """
+        ...
+
+    def from_db(self, value: DatabaseValue) -> V:
+        """Convert value from database format.
+
+        Args:
+            value: Value to convert
+
+        Returns:
+            Value in field format
         """
         ...

@@ -18,11 +18,9 @@ from earnorm.base.database import (
 )
 
 from .model import BaseModel
-from .registry import DatabaseRegistry
 
 __all__ = [
     "BaseModel",
-    "DatabaseRegistry",
     "Transaction",
     "TransactionError",
     "TransactionManager",

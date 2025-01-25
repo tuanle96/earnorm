@@ -24,8 +24,6 @@ import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, List, Optional, Type, TypeVar
 
-from earnorm.pool.protocols.errors import RetryError
-
 T = TypeVar("T")
 
 
@@ -100,6 +98,20 @@ class RetryPolicy:
         return any(isinstance(exc, exc_type) for exc_type in self.retry_exceptions)
 
 
+class RetryError(Exception):
+    """Error raised when all retry attempts fail."""
+
+    def __init__(self, message: str, context: Any = None) -> None:
+        """Initialize retry error.
+
+        Args:
+            message: Error message
+            context: Additional context
+        """
+        super().__init__(message)
+        self.context = context
+
+
 class RetryContext:
     """Context manager for retrying operations."""
 
@@ -147,7 +159,14 @@ class RetryContext:
                         "last_error": str(self._last_error),
                     },
                 ) from self._last_error
-            raise
+            raise RetryError(
+                f"Failed after {self._attempt} retries",
+                {
+                    "attempts": self._attempt,
+                    "elapsed": time.time() - self._start_time,
+                    "last_error": str(self._last_error),
+                },
+            ) from self._last_error
 
         self._last_error = exc
         delay = self._policy.calculate_delay(self._attempt)

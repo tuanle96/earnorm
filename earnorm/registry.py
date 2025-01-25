@@ -17,8 +17,7 @@ from typing import Any, Dict
 
 from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
 
-from earnorm.base.database.adapter import DatabaseAdapter
-from earnorm.base.database.backends import MongoBackend
+from earnorm.base.database.adapters.mongo import MongoAdapter
 from earnorm.config import SystemConfig
 from earnorm.di import container
 from earnorm.pool import PoolRegistry, create_mongo_pool, create_redis_pool
@@ -54,26 +53,22 @@ async def register_database_services(config: SystemConfig) -> None:
     """Register database services.
 
     This includes:
-    - MongoDB backend
-    - Database registry
+    - MongoDB adapter and pool
     """
-    from earnorm.base.registry import DatabaseRegistry
+    # Register MongoDB adapter
+    container.register("mongodb", MongoAdapter)
 
-    # Register backend
-    container.register("mongodb", MongoBackend)
-
-    # Register database registry
-    registry = DatabaseRegistry()
-    container.register("database_registry", registry)
-
-    # Initialize with MongoDB
-    await registry.switch(
-        "mongodb",
+    # Create and register MongoDB pool
+    mongo_pool = await create_mongo_pool(
         uri=str(config.mongodb_uri),
         database=str(config.mongodb_database),
-        min_pool_size=int(config.mongodb_min_pool_size),
-        max_pool_size=int(config.mongodb_max_pool_size),
+        min_size=int(await config.mongodb_min_pool_size),
+        max_size=int(await config.mongodb_max_pool_size),
+        validate_on_borrow=bool(await config.mongodb_validate_on_borrow),
+        test_on_return=bool(await config.mongodb_test_on_return),
     )
+    await mongo_pool.init()
+    PoolRegistry.register("mongodb", mongo_pool)
 
 
 async def register_pool_services(config: SystemConfig) -> None:
@@ -83,19 +78,6 @@ async def register_pool_services(config: SystemConfig) -> None:
     - MongoDB connection pool
     - Redis pool for event system
     """
-    # Create MongoDB pool
-    mongo_pool = await create_mongo_pool(
-        uri=str(config.mongodb_uri),
-        database=str(config.mongodb_database),
-        min_size=int(config.mongodb_min_pool_size),
-        max_size=int(config.mongodb_max_pool_size),
-        timeout=int(config.mongodb_pool_timeout),
-        max_lifetime=int(config.mongodb_max_lifetime),
-        idle_timeout=int(config.mongodb_idle_timeout),
-        validate_on_borrow=bool(config.mongodb_validate_on_borrow),
-        test_on_return=bool(config.mongodb_test_on_return),
-    )
-
     # Create Redis pool for event and cache system
     redis_pool = await create_redis_pool(
         host=str(config.redis_host),
@@ -107,11 +89,9 @@ async def register_pool_services(config: SystemConfig) -> None:
     )
 
     # Register pools
-    PoolRegistry.register("mongodb", mongo_pool)
     PoolRegistry.register("redis", redis_pool)
 
     # Initialize pools
-    await mongo_pool.init()
     await redis_pool.init()
 
 

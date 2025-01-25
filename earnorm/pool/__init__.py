@@ -26,18 +26,22 @@ Example:
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Type
-
-from earnorm.pool.factory import create_mongo_pool, create_redis_pool
+from typing import Any, Dict, Optional
 
 from .backends.base import BasePool
 from .backends.mongo import MongoPool
 from .backends.redis import RedisPool
-from .circuit import CircuitBreaker, CircuitState
-from .factory import PoolFactory
-from .protocols.pool import PoolProtocol
+from .constants import (
+    DEFAULT_CONNECTION_TIMEOUT,
+    DEFAULT_MAX_IDLE_TIME,
+    DEFAULT_MAX_LIFETIME,
+    DEFAULT_MAX_POOL_SIZE,
+    DEFAULT_MIN_POOL_SIZE,
+)
+from .core import CircuitBreaker, CircuitState, RetryPolicy, with_resilience
+from .factory import PoolFactory, create_mongo_pool, create_redis_pool
+from .protocols import AsyncPoolProtocol
 from .registry import PoolRegistry
-from .retry import RetryPolicy
 from .utils import (
     ConnectionMetrics,
     HealthCheck,
@@ -65,38 +69,20 @@ class PoolConfig:
         >>> pool = PoolFactory.create("mongodb", config=config)
     """
 
-    min_size: int = 5
-    max_size: int = 20
-    max_idle_time: int = 300
-    connection_timeout: float = 30.0
-    max_lifetime: int = 3600
+    min_size: int = DEFAULT_MIN_POOL_SIZE
+    max_size: int = DEFAULT_MAX_POOL_SIZE
+    max_idle_time: int = DEFAULT_MAX_IDLE_TIME
+    connection_timeout: float = DEFAULT_CONNECTION_TIMEOUT
+    max_lifetime: int = DEFAULT_MAX_LIFETIME
     validate_on_borrow: bool = True
     test_on_return: bool = True
     extra_config: Optional[Dict[str, Any]] = None
 
 
-def register_pool_class(
-    backend_type: str, pool_class: Type[PoolProtocol[Any, Any]]
-) -> None:
-    """Register pool class for backend type.
-
-    Args:
-        backend_type: Backend type identifier
-        pool_class: Pool class to register
-
-    Examples:
-        >>> from earnorm.pool.backends.mongo import MongoPool
-        >>> register_pool_class("mongodb", MongoPool)
-    """
-    # Create instance before registering
-    pool = pool_class()  # type: ignore
-    PoolRegistry.register(backend_type, pool)
-
-
 __all__ = [
     # Base
     "BasePool",
-    "PoolProtocol",
+    "AsyncPoolProtocol",
     "PoolConfig",
     # Backends
     "MongoPool",
@@ -104,12 +90,11 @@ __all__ = [
     # Factory & Registry
     "PoolFactory",
     "PoolRegistry",
-    "register_pool_class",
-    # Circuit Breaker
+    # Core
     "CircuitBreaker",
     "CircuitState",
-    # Retry
     "RetryPolicy",
+    "with_resilience",
     # Utils
     "ConnectionMetrics",
     "HealthCheck",
@@ -120,7 +105,7 @@ __all__ = [
     "calculate_pool_statistics",
     "check_pool_health",
     "cleanup_stale_connections",
+    # Factory functions
     "create_mongo_pool",
     "create_redis_pool",
-    "retry",
 ]

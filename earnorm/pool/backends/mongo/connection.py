@@ -1,42 +1,23 @@
-"""MongoDB connection implementation using motor driver.
+"""MongoDB connection implementation.
 
-This module provides a connection implementation for MongoDB using the motor driver.
-It includes connection lifecycle management and operation execution.
+This module provides MongoDB connection functionality.
+It handles connection lifecycle, operation execution, and error handling.
 
-Example:
-    Create a MongoDB connection:
-
+Examples:
     ```python
-    from motor.motor_asyncio import AsyncIOMotorClient
-    from earnorm.pool.backends.mongo import MongoConnection
-
-    # Create client
-    client = AsyncIOMotorClient("mongodb://localhost:27017")
-
-    # Create connection
-    conn = MongoConnection(
-        client=client,
+    connection = MongoConnection(
+        host="localhost",
+        port=27017,
         database="test",
-        collection="users",
-        max_idle_time=300,
-        max_lifetime=3600
     )
-
-    # Use connection
-    db = await conn.get_database()
-    users = await conn.get_collection("users")
-
-    # Execute operations
-    user = await conn.execute_typed(
-        "find_one",
-        collection=users,
-        filter={"username": "john"}
-    )
+    await connection.connect()
+    result = await conn.execute("find_one", {"_id": "123"})
+    await connection.disconnect()
     ```
 """
 
 import time
-from typing import Any, Coroutine, Dict, Optional, TypeVar, cast
+from typing import Any, TypeVar
 
 from motor.motor_asyncio import (
     AsyncIOMotorClient,
@@ -44,61 +25,51 @@ from motor.motor_asyncio import (
     AsyncIOMotorDatabase,
 )
 
-from earnorm.pool.decorators import with_resilience
-from earnorm.pool.protocols.connection import ConnectionProtocol
-from earnorm.pool.protocols.errors import ConnectionError, OperationError
+from earnorm.exceptions import ConnectionError, OperationError
+from earnorm.pool.constants import DEFAULT_MAX_IDLE_TIME, DEFAULT_MAX_LIFETIME
+from earnorm.pool.core.circuit import CircuitBreaker
+from earnorm.pool.core.decorators import with_resilience
+from earnorm.pool.core.retry import RetryPolicy
+from earnorm.pool.protocols.connection import AsyncConnectionProtocol
 
-DBType = TypeVar("DBType", bound=AsyncIOMotorDatabase[Dict[str, Any]])
-CollType = TypeVar("CollType", bound=AsyncIOMotorCollection[Dict[str, Any]])
-
-
-def wrap_coroutine(value: Any) -> Coroutine[Any, Any, Any]:
-    """Helper function to wrap a value in a coroutine."""
-
-    async def _wrapped() -> Any:
-        return value
-
-    return _wrapped()
+DBType = TypeVar("DBType", bound=AsyncIOMotorDatabase[dict[str, Any]])
+CollType = TypeVar("CollType", bound=AsyncIOMotorCollection[dict[str, Any]])
 
 
-class MongoConnection(ConnectionProtocol[DBType, CollType]):
-    """MongoDB connection implementation.
-
-    Examples:
-        >>> conn = MongoConnection(client, "test_db", "test_collection")
-        >>> await conn.ping()
-        True
-        >>> await conn.close()
-        >>> await conn.execute_typed("find_one", {"_id": "123"})
-        {"_id": "123", "name": "test"}
-    """
+class MongoConnection(AsyncConnectionProtocol[DBType, CollType]):
+    """MongoDB connection implementation."""
 
     def __init__(
         self,
-        client: AsyncIOMotorClient[Dict[str, Any]],
+        client: AsyncIOMotorClient[dict[str, Any]],
         database: str,
         collection: str,
-        max_idle_time: int = 300,
-        max_lifetime: int = 3600,
+        max_idle_time: int = DEFAULT_MAX_IDLE_TIME,
+        max_lifetime: int = DEFAULT_MAX_LIFETIME,
+        retry_policy: RetryPolicy | None = None,
+        circuit_breaker: CircuitBreaker | None = None,
     ) -> None:
         """Initialize MongoDB connection.
 
         Args:
-            client: Motor client instance
+            client: MongoDB client
             database: Database name
             collection: Collection name
             max_idle_time: Maximum idle time in seconds
             max_lifetime: Maximum lifetime in seconds
+            retry_policy: Retry policy
+            circuit_breaker: Circuit breaker
         """
         self._client = client
         self._database = database
         self._collection = collection
-        self._db: Optional[DBType] = None
-        self._coll: Optional[CollType] = None
-        self._created_at = time.time()
-        self._last_used_at = time.time()
         self._max_idle_time = max_idle_time
         self._max_lifetime = max_lifetime
+        self._retry_policy = retry_policy
+        self._circuit_breaker = circuit_breaker
+
+        self._created_at = time.time()
+        self._last_used_at = time.time()
 
     @property
     def created_at(self) -> float:
@@ -131,41 +102,60 @@ class MongoConnection(ConnectionProtocol[DBType, CollType]):
         """Update last used timestamp."""
         self._last_used_at = time.time()
 
-    def get_database(self) -> DBType:
-        """Get database instance.
+    @with_resilience()
+    async def _ping_impl(self) -> bool:
+        """Internal ping implementation."""
+        try:
+            await self._client.admin.command("ping")
+            self.touch()
+            return True
+        except Exception as e:
+            raise ConnectionError(f"Failed to ping MongoDB: {e!s}") from e
 
-        Returns:
-            DBType: MongoDB database instance
+    async def ping(self) -> bool:
+        """Check connection health."""
+        return await self._ping_impl()
 
-        Raises:
-            ConnectionError: If database access fails
-        """
-        if self._db is None:
-            try:
-                db = self._client[self._database]
-                self._db = cast(DBType, db)
-            except Exception as e:
-                raise ConnectionError(f"Failed to get database: {str(e)}") from e
-        return self._db
+    async def close(self) -> None:
+        """Close connection."""
+        self._client.close()
 
-    def get_collection(self, name: str) -> CollType:
-        """Get collection instance.
+    @with_resilience()
+    async def _execute_impl(self, operation: str, **kwargs: Any) -> Any:
+        """Internal execute implementation."""
+        try:
+            self.touch()
+            collection = self.collection
+            method = getattr(collection, operation)
+            result = await method(**kwargs)
+            return result
+        except Exception as e:
+            raise OperationError(
+                f"Failed to execute operation {operation}: {e!s}"
+            ) from e
+
+    async def execute(self, operation: str, **kwargs: Any) -> Any:
+        """Execute MongoDB operation.
 
         Args:
-            name: Collection name
+            operation: Operation name
+            **kwargs: Operation arguments
 
         Returns:
-            CollType: MongoDB collection instance
+            Operation result
 
         Raises:
-            ConnectionError: If collection access fails
+            OperationError: If operation fails
         """
-        try:
-            db = self.get_database()
-            coll = db[name]
-            return cast(CollType, coll)
-        except Exception as e:
-            raise ConnectionError(f"Failed to get collection: {str(e)}") from e
+        return await self._execute_impl(operation, **kwargs)
+
+    def get_database(self) -> DBType:
+        """Get database instance."""
+        return self._client[self._database]  # type: ignore
+
+    def get_collection(self, name: str) -> CollType:
+        """Get collection instance."""
+        return self.get_database()[name]  # type: ignore
 
     @property
     def db(self) -> DBType:
@@ -175,87 +165,4 @@ class MongoConnection(ConnectionProtocol[DBType, CollType]):
     @property
     def collection(self) -> CollType:
         """Get collection instance."""
-        if self._coll is None:
-            self._coll = self.get_collection(self._collection)
-        return self._coll
-
-    @with_resilience()
-    async def _ping_impl(self) -> bool:
-        """Internal ping implementation."""
-        try:
-            await self.db.command("ping")
-            self.touch()
-            return True
-        except Exception as e:
-            raise ConnectionError(f"Failed to ping database: {str(e)}") from e
-
-    async def ping(self) -> Coroutine[Any, Any, bool]:
-        """Ping database to check connection.
-
-        Returns:
-            True if ping successful
-
-        Raises:
-            ConnectionError: If ping fails
-        """
-
-        async def _ping() -> bool:
-            return await self._ping_impl()
-
-        return _ping()
-
-    @with_resilience()
-    async def _execute_impl(self, operation: str, *args: Any, **kwargs: Any) -> Any:
-        """Internal execute implementation."""
-        try:
-            result = await getattr(self.collection, operation)(*args, **kwargs)
-            self.touch()
-            return result
-        except Exception as e:
-            raise OperationError(
-                f"Failed to execute operation {operation}: {str(e)}"
-            ) from e
-
-    async def execute_typed(
-        self, operation: str, *args: Any, **kwargs: Any
-    ) -> Coroutine[Any, Any, Any]:
-        """Execute typed operation.
-
-        Args:
-            operation: Operation name
-            *args: Operation arguments
-            **kwargs: Operation keyword arguments
-
-        Returns:
-            Any: Operation result
-
-        Raises:
-            OperationError: If operation fails
-        """
-
-        async def _execute() -> Any:
-            return await self._execute_impl(operation, *args, **kwargs)
-
-        return _execute()
-
-    async def _close_impl(self) -> None:
-        """Internal close implementation."""
-        try:
-            if self._client:
-                self._client.close()
-                self._db = None
-                self._coll = None
-        except Exception as e:
-            raise ConnectionError(f"Failed to close connection: {str(e)}") from e
-
-    async def close(self) -> Coroutine[Any, Any, None]:
-        """Close connection.
-
-        Raises:
-            ConnectionError: If close fails
-        """
-
-        async def _close() -> None:
-            await self._close_impl()
-
-        return _close()
+        return self.get_collection(self._collection)

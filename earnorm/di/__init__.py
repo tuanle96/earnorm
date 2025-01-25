@@ -7,6 +7,7 @@ from earnorm.di.container.factory import FactoryManager
 from earnorm.di.container.service import ServiceManager
 from earnorm.di.lifecycle import LifecycleAware, LifecycleEvents, LifecycleManager
 from earnorm.di.resolver.dependency import CircularDependencyError, DependencyResolver
+from earnorm.pool.registry import PoolRegistry
 
 # Create global container instance
 container = Container()
@@ -16,6 +17,7 @@ container.register("service_manager", ServiceManager())
 container.register("factory_manager", FactoryManager())
 container.register("lifecycle_manager", LifecycleManager())
 container.register("dependency_resolver", DependencyResolver())
+container.register("pool_registry", PoolRegistry())
 
 # Export commonly used instances
 lifecycle: Optional[LifecycleManager] = None

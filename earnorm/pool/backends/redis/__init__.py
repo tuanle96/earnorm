@@ -26,6 +26,6 @@ from earnorm.pool.backends.redis.connection import RedisConnection
 from earnorm.pool.backends.redis.pool import RedisPool
 
 __all__ = [
-    "RedisPool",
     "RedisConnection",
+    "RedisPool",
 ]

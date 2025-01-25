@@ -1,29 +1,21 @@
-"""Connection pooling protocols.
+"""Protocol definitions for connection pooling.
 
-This module provides protocol definitions for connection pooling in EarnORM.
-It includes protocols for connections and pools that define the interface
-that must be implemented by specific database backend implementations.
-
-Example:
-    >>> from earnorm.pool.protocols import PoolProtocol, ConnectionProtocol
-    >>> from typing import Any, Protocol
-    >>>
-    >>> class MyConnection(ConnectionProtocol, Protocol):
-    ...     async def custom_method(self) -> None:
-    ...         \"\"\"Custom connection method.\"\"\"
-    ...         ...
-    >>>
-    >>> class MyPool(PoolProtocol[MyConnection], Protocol):
-    ...     async def custom_method(self) -> None:
-    ...         \"\"\"Custom pool method.\"\"\"
-    ...         ...
+This module provides protocol definitions for connection pooling,
+including connection, database, operations, and pool protocols.
 """
 
-from earnorm.pool.protocols.connection import ConnectionLifecycle, ConnectionProtocol
-from earnorm.pool.protocols.pool import PoolProtocol
+from .connection import AsyncConnectionProtocol, AsyncLifecycle, AsyncOperations
+from .database import AsyncDatabaseProtocol, DatabaseAware
+from .operations import MongoOperation, RedisOperation
+from .pool import AsyncPoolProtocol
 
 __all__ = [
-    "PoolProtocol",
-    "ConnectionProtocol",
-    "ConnectionLifecycle",
+    "AsyncConnectionProtocol",
+    "AsyncLifecycle",
+    "AsyncOperations",
+    "AsyncDatabaseProtocol",
+    "DatabaseAware",
+    "MongoOperation",
+    "RedisOperation",
+    "AsyncPoolProtocol",
 ]

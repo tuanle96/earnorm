@@ -37,7 +37,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, TypeVar
 
-from earnorm.pool.protocols.pool import PoolProtocol
+from earnorm.pool.protocols.pool import AsyncPoolProtocol
 
 # Type variables for database and collection
 DB = TypeVar("DB")
@@ -318,7 +318,7 @@ def calculate_pool_statistics(
     )
 
 
-async def check_pool_health(pool: PoolProtocol[DB, COLL]) -> HealthCheck:
+async def check_pool_health(pool: AsyncPoolProtocol[DB, COLL]) -> HealthCheck:
     """Check pool health.
 
     Args:
@@ -374,7 +374,7 @@ async def check_pool_health(pool: PoolProtocol[DB, COLL]) -> HealthCheck:
     )
 
 
-async def cleanup_stale_connections(pool: PoolProtocol[DB, COLL]) -> int:
+async def cleanup_stale_connections(pool: AsyncPoolProtocol[DB, COLL]) -> int:
     """Clean up stale connections in pool.
 
     Args:

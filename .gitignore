@@ -44,3 +44,5 @@ ENV/
 # Misc
 .DS_Store
 *.log
+
+.ruff_cache/

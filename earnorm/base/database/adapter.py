@@ -19,7 +19,7 @@ Examples:
 """
 
 from abc import ABC, abstractmethod
-from typing import Generic, List, Type, TypeVar
+from typing import Any, Generic, List, Type, TypeVar
 
 from earnorm.base.database.query.base.query import Query
 from earnorm.base.database.transaction.base import TransactionManager
@@ -37,6 +37,33 @@ class DatabaseAdapter(Generic[ModelT], ABC):
     Args:
         ModelT: Type of model being queried
     """
+
+    @abstractmethod
+    async def init(self) -> None:
+        """Initialize the adapter.
+
+        This method should be called before using the adapter.
+        It should initialize any resources needed by the adapter.
+        """
+        pass
+
+    @abstractmethod
+    async def close(self) -> None:
+        """Close the adapter.
+
+        This method should be called when the adapter is no longer needed.
+        It should clean up any resources used by the adapter.
+        """
+        pass
+
+    @abstractmethod
+    async def get_connection(self) -> Any:
+        """Get a connection from the adapter.
+
+        Returns:
+            Any: A connection object that can be used to interact with the database.
+        """
+        pass
 
     @abstractmethod
     async def connect(self) -> None:

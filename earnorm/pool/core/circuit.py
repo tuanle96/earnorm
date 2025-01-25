@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, List, Optional, Type, TypeVar
 
-from earnorm.pool.protocols.errors import CircuitBreakerError
+from earnorm.exceptions import CircuitBreakerError
 
 T = TypeVar("T")
 
@@ -205,9 +205,10 @@ class CircuitBreaker:
         """
         if exc is None:
             await self._on_success()
+            return False
         else:
             await self._on_failure(exc)
-        return False
+            return False
 
     async def execute(
         self, operation: Callable[..., Awaitable[T]], *args: Any, **kwargs: Any

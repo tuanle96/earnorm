@@ -1,33 +1,28 @@
 """Connection protocol definitions.
 
-This module defines protocols for database connections, including type-safe
-database operations and connection lifecycle management.
+This module defines protocols for database connections with async-first approach.
+All operations are async by default.
 
 Examples:
     ```python
-    class MyConnection(ConnectionProtocol[MyDB, MyColl]):
+    class MyConnection(AsyncConnectionProtocol[MyDB, MyColl]):
         async def ping(self) -> bool:
             return await self._client.ping()
 
-        async def close(self) -> None:
-            await self._client.close()
-
-        async def execute_typed(self, operation: str, **kwargs: Any) -> Any:
+        async def execute[T](self, operation: str, **kwargs: Any) -> T:
             return await getattr(self._client, operation)(**kwargs)
     ```
 """
 
-from typing import Any, Coroutine, Protocol, TypeVar
+from typing import Any, Protocol, TypeVar
 
-from earnorm.pool.protocols.database import DatabaseProtocol
-
-# Reuse type variables from database protocol
+# Type variables
 DBType = TypeVar("DBType", covariant=True)
 CollType = TypeVar("CollType", covariant=True)
 
 
-class ConnectionLifecycle(Protocol):
-    """Protocol for connection lifecycle management."""
+class AsyncLifecycle(Protocol):
+    """Protocol for async lifecycle management."""
 
     @property
     def created_at(self) -> float:
@@ -58,34 +53,23 @@ class ConnectionLifecycle(Protocol):
         """Update last used timestamp."""
         ...
 
-    async def ping(self) -> Coroutine[Any, Any, bool]:
+    async def ping(self) -> bool:
         """Check connection health.
 
         Returns:
             True if connection is healthy
-
-        Raises:
-            ConnectionError: If connection is unhealthy
         """
         ...
 
-    async def close(self) -> Coroutine[Any, Any, None]:
-        """Close connection.
-
-        Raises:
-            ConnectionError: If connection cannot be closed
-        """
+    async def close(self) -> None:
+        """Close connection."""
         ...
 
 
-class ConnectionOperations(Protocol[DBType, CollType]):
-    """Protocol for connection operations."""
+class AsyncOperations(Protocol[DBType, CollType]):
+    """Protocol for async operations."""
 
-    async def execute_typed(
-        self,
-        operation: str,
-        **kwargs: Any,
-    ) -> Coroutine[Any, Any, Any]:
+    async def execute(self, operation: str, **kwargs: Any) -> Any:
         """Execute typed operation.
 
         Args:
@@ -94,24 +78,73 @@ class ConnectionOperations(Protocol[DBType, CollType]):
 
         Returns:
             Operation result
-
-        Raises:
-            OperationError: If operation fails
-            ConnectionError: If connection is unhealthy
         """
         ...
 
 
-class ConnectionProtocol(
-    ConnectionLifecycle,
-    ConnectionOperations[DBType, CollType],
-    DatabaseProtocol[DBType, CollType],
-):
-    """Protocol for database connections.
+class AsyncConnectionProtocol(Protocol[DBType, CollType]):
+    """Protocol for async database connections.
 
     Type Parameters:
         DBType: The database type (e.g. AsyncIOMotorDatabase)
         CollType: The collection type (e.g. AsyncIOMotorCollection)
     """
 
-    pass
+    @property
+    def created_at(self) -> float:
+        """Get connection creation timestamp."""
+        ...
+
+    @property
+    def last_used_at(self) -> float:
+        """Get last usage timestamp."""
+        ...
+
+    @property
+    def idle_time(self) -> float:
+        """Get idle time in seconds."""
+        ...
+
+    @property
+    def lifetime(self) -> float:
+        """Get lifetime in seconds."""
+        ...
+
+    @property
+    def is_stale(self) -> bool:
+        """Check if connection is stale."""
+        ...
+
+    def touch(self) -> None:
+        """Update last used timestamp."""
+        ...
+
+    async def ping(self) -> bool:
+        """Check connection health."""
+        ...
+
+    async def close(self) -> None:
+        """Close connection."""
+        ...
+
+    async def execute(self, operation: str, **kwargs: Any) -> Any:
+        """Execute operation."""
+        ...
+
+    def get_database(self) -> DBType:
+        """Get database instance."""
+        ...
+
+    def get_collection(self, name: str) -> CollType:
+        """Get collection instance."""
+        ...
+
+    @property
+    def db(self) -> DBType:
+        """Get database instance."""
+        ...
+
+    @property
+    def collection(self) -> CollType:
+        """Get collection instance."""
+        ...
