@@ -17,7 +17,7 @@ Examples:
 """
 
 import time
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from motor.motor_asyncio import (
     AsyncIOMotorClient,
@@ -151,11 +151,11 @@ class MongoConnection(AsyncConnectionProtocol[DBType, CollType]):
 
     def get_database(self) -> DBType:
         """Get database instance."""
-        return self._client[self._database]  # type: ignore
+        return cast(DBType, self._client[self._database])
 
     def get_collection(self, name: str) -> CollType:
         """Get collection instance."""
-        return self.get_database()[name]  # type: ignore
+        return cast(CollType, self.get_database()[name])
 
     @property
     def db(self) -> DBType:
@@ -166,3 +166,18 @@ class MongoConnection(AsyncConnectionProtocol[DBType, CollType]):
     def collection(self) -> CollType:
         """Get collection instance."""
         return self.get_collection(self._collection)
+
+    async def connect(self) -> None:
+        """Connect to MongoDB.
+
+        Raises:
+            ConnectionError: If connection fails
+        """
+        try:
+            await self.ping()
+        except Exception as e:
+            raise ConnectionError(f"Failed to connect to MongoDB: {e!s}") from e
+
+    async def disconnect(self) -> None:
+        """Disconnect from MongoDB."""
+        await self.close()

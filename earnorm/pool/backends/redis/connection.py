@@ -2,13 +2,11 @@
 
 import time
 from collections.abc import Awaitable
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from redis.asyncio import Redis
-from redis.exceptions import (
-    ConnectionError as RedisConnectionError,
-    TimeoutError as RedisTimeoutError,
-)
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from earnorm.exceptions import DatabaseConnectionError, OperationError
 from earnorm.pool.core.circuit import CircuitBreaker
@@ -95,9 +93,9 @@ class RedisConnection(AsyncConnectionProtocol[DB, None]):
     async def _ping_impl(self) -> bool:
         """Internal ping implementation."""
         try:
-            await self._client.ping()  # type: ignore
+            result = await self.execute("ping")
             self.touch()
-            return True
+            return bool(result)
         except (RedisConnectionError, RedisTimeoutError) as e:
             raise DatabaseConnectionError(f"Failed to ping Redis: {e!s}") from e
 
@@ -139,7 +137,7 @@ class RedisConnection(AsyncConnectionProtocol[DB, None]):
 
     def get_database(self) -> DB:
         """Get database instance."""
-        return self._client  # type: ignore
+        return cast(DB, self._client)
 
     def get_collection(self, name: str) -> None:
         """Get collection instance."""
@@ -154,6 +152,21 @@ class RedisConnection(AsyncConnectionProtocol[DB, None]):
     def collection(self) -> None:
         """Get collection instance."""
         return self.get_collection("")
+
+    async def connect(self) -> None:
+        """Connect to Redis.
+
+        Raises:
+            ConnectionError: If connection fails
+        """
+        try:
+            await self.ping()
+        except Exception as e:
+            raise ConnectionError(f"Failed to connect to Redis: {e!s}") from e
+
+    async def disconnect(self) -> None:
+        """Disconnect from Redis."""
+        await self.close()
 
     async def execute_typed(
         self, operation: str, *args: Any, **kwargs: Any

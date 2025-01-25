@@ -12,7 +12,7 @@ Examples:
     >>> visitor = MongoDomainVisitor()
     >>> mongo_query = domain.accept(visitor)
     >>> {"$and": [{"age": {"$gt": 18}}, {"status": "active"}]}
-    
+
     >>> # Fluent interface
     >>> domain = (
     ...     DomainBuilder()

@@ -171,6 +171,14 @@ class ModelProtocol(Protocol):
         """
         ...
 
+    def from_dict(self, data: JsonDict) -> None:
+        """Update model from dictionary.
+
+        Args:
+            data: Dictionary data to update from
+        """
+        ...
+
     @classmethod
     async def browse(
         cls, ids: Union[int, List[int]]

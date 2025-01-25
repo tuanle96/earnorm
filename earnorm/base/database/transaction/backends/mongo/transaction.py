@@ -12,14 +12,13 @@ Examples:
 """
 
 from types import TracebackType
-from typing import Any, Dict, List, Optional, Type, TypeVar
+from typing import Any, Dict, List, Optional, Type, TypeVar, cast
 
 from bson import ObjectId
 from pymongo.client_session import ClientSession
 from pymongo.collection import Collection
 from pymongo.database import Database
 from pymongo.errors import PyMongoError
-from pymongo.mongo_client import MongoClient
 from pymongo.read_concern import ReadConcern
 from pymongo.read_preferences import ReadPreference
 from pymongo.write_concern import WriteConcern
@@ -29,7 +28,7 @@ from earnorm.base.database.transaction.base import (
     TransactionError,
     TransactionManager,
 )
-from earnorm.types import DatabaseModel
+from earnorm.types import DatabaseModel, JsonDict
 
 ModelT = TypeVar("ModelT", bound=DatabaseModel)
 
@@ -54,6 +53,7 @@ class MongoTransaction(Transaction[ModelT]):
         """
         self._collection = collection
         self._session = session
+        self._inserted_ids: List[ObjectId] = []
 
     def __enter__(self) -> "MongoTransaction[ModelT]":
         """Enter transaction context.
@@ -97,8 +97,10 @@ class MongoTransaction(Transaction[ModelT]):
             MongoTransactionError: If model cannot be inserted
         """
         try:
-            result = self._collection.insert_one(model.to_dict(), session=self._session)
+            values = cast(JsonDict, model.to_dict())
+            result = self._collection.insert_one(values, session=self._session)
             model.id = result.inserted_id
+            self._inserted_ids.append(cast(ObjectId, result.inserted_id))
             return model
         except PyMongoError as e:
             raise MongoTransactionError(f"Failed to insert model: {e}") from e
@@ -116,11 +118,11 @@ class MongoTransaction(Transaction[ModelT]):
             MongoTransactionError: If models cannot be inserted
         """
         try:
-            result = self._collection.insert_many(
-                [model.to_dict() for model in models], session=self._session
-            )
+            values = [cast(JsonDict, model.to_dict()) for model in models]
+            result = self._collection.insert_many(values, session=self._session)
             for model, id_ in zip(models, result.inserted_ids):
                 model.id = id_
+                self._inserted_ids.append(cast(ObjectId, id_))
             return models
         except PyMongoError as e:
             raise MongoTransactionError(f"Failed to insert models: {e}") from e
@@ -141,8 +143,9 @@ class MongoTransaction(Transaction[ModelT]):
         if not model.id:
             raise ValueError("Model has no ID")
         try:
+            values = cast(JsonDict, model.to_dict())
             self._collection.update_one(
-                {"_id": model.id}, {"$set": model.to_dict()}, session=self._session
+                {"_id": model.id}, {"$set": values}, session=self._session
             )
             return model
         except PyMongoError as e:
@@ -165,8 +168,9 @@ class MongoTransaction(Transaction[ModelT]):
             for model in models:
                 if not model.id:
                     raise ValueError("Model has no ID")
+                values = cast(JsonDict, model.to_dict())
                 self._collection.update_one(
-                    {"_id": model.id}, {"$set": model.to_dict()}, session=self._session
+                    {"_id": model.id}, {"$set": values}, session=self._session
                 )
             return models
         except PyMongoError as e:
@@ -204,7 +208,7 @@ class MongoTransaction(Transaction[ModelT]):
             for model in models:
                 if not model.id:
                     raise ValueError("Model has no ID")
-                ids.append(model.id)
+                ids.append(cast(ObjectId, model.id))
             self._collection.delete_many({"_id": {"$in": ids}}, session=self._session)
         except PyMongoError as e:
             raise MongoTransactionError(f"Failed to delete models: {e}") from e
@@ -248,11 +252,8 @@ class MongoTransactionManager(TransactionManager[ModelT]):
     def set_model_type(self, model_type: Type[ModelT]) -> None:
         """Set model type for transaction.
 
-        This method must be called before starting a transaction.
-        It sets the type of model that will be used in the transaction.
-
         Args:
-            model_type: Type of model to use in transaction
+            model_type: Model type to use
         """
         self._model_type = model_type
 
@@ -260,26 +261,30 @@ class MongoTransactionManager(TransactionManager[ModelT]):
         """Begin new transaction.
 
         Returns:
-            Transaction instance
+            New transaction instance
 
         Raises:
             MongoTransactionError: If transaction cannot be started
-            ValueError: If model type is not set
         """
-        if self._model_type is None:
-            raise ValueError("Model type not set")
+        if not self._model_type:
+            raise MongoTransactionError("Model type not set")
 
         try:
-            client: MongoClient[Dict[str, Any]] = self._db.client
-            session = client.start_session()
-            # Ignore type error from pymongo's incomplete type hints
+            # Ignore type error for __collection__ access
+            collection_name = getattr(self._model_type, "__collection__", None)
+            if not collection_name:
+                raise MongoTransactionError("Model has no collection name")
+
+            collection = self._db[collection_name]
+            session = self._db.client.start_session()
+
+            # Ignore type error for start_transaction
             session.start_transaction(  # type: ignore
-                read_concern=ReadConcern(),
-                write_concern=WriteConcern(),
+                read_concern=ReadConcern("majority"),
+                write_concern=WriteConcern("majority"),
                 read_preference=ReadPreference.PRIMARY,
-                max_commit_time_ms=None,
             )
-            collection = self._db[self._model_type.__collection__]
-            return MongoTransaction(collection, session)
+
+            return MongoTransaction[ModelT](collection, session)
         except PyMongoError as e:
             raise MongoTransactionError(f"Failed to start transaction: {e}") from e

@@ -24,72 +24,65 @@ Examples:
     ...         return await super().write(values)
 """
 
-from typing import Any, Dict, Iterator, List, Optional, Set, Type, TypeVar, Union, cast
+from __future__ import annotations
+
+from typing import (
+    Any,
+    ClassVar,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Protocol,
+    Set,
+    Type,
+    TypeVar,
+    Union,
+    cast,
+    runtime_checkable,
+)
 
 from earnorm.base.env import Environment
-from earnorm.types import FieldProtocol
-
-from .base import BaseModel
+from earnorm.types import FieldProtocol, ModelProtocol
 
 T = TypeVar("T", bound="BaseModel")
+Self = TypeVar("Self", bound="RecordSetType")
 
 
-class RecordSetType(BaseModel):
-    """Base type for RecordSet classes.
+@runtime_checkable
+class BaseModel(Protocol):
+    """Protocol for base model functionality."""
 
-    A RecordSet is a collection of model records that behaves like both
-    a list of records and a model instance. It inherits all model methods
-    and attributes while providing list operations.
-    """
+    _name: ClassVar[str]
+    _fields: ClassVar[Dict[str, FieldProtocol[Any]]]
+    _instance_env: Environment
 
-    __annotations__ = {"_ids": List[int], "_prefetch": Dict[str, Set[int]]}
-
-    def __init__(
-        self,
-        env: Environment,
-        ids: Optional[Union[int, List[int]]] = None,
-    ) -> None:
-        """Initialize RecordSet.
-
-        Args:
-            env: Environment instance
-            ids: Optional ID or list of IDs to initialize with
-        """
-        super().__init__(env=env)
-        self._ids = self._normalize_ids(ids) if ids else []
-
-    def __getitem__(self: T, index: Union[int, slice]) -> T:
-        """Get record(s) at index."""
-        if isinstance(index, slice):
-            # Create new instance with sliced IDs
-            instance = self.__class__(env=self._instance_env)
-            instance._ids = self._ids[index]
-            return instance
-        else:
-            # Create new instance with single ID
-            instance = self.__class__(env=self._instance_env)
-            instance._ids = [self._ids[index]]
-            return instance
-
-    def __len__(self) -> int:
-        """Get number of records in set."""
-        return len(self._ids)
-
-    def __iter__(self: T) -> Iterator[T]:
-        """Iterate over records."""
-        for record_id in self._ids:
-            instance = self.__class__(env=self._instance_env)
-            instance._ids = [record_id]
-            yield instance
-
-    def __repr__(self) -> str:
-        return f"{self._name}[{self._ids}]"
-
-    def __str__(self) -> str:
-        return f"{self._name}[{self._ids}]"
+    def _normalize_ids(self, ids: Union[int, List[int]]) -> List[int]:
+        """Normalize record IDs."""
+        ...
 
 
-class MetaModel(type):
+class BaseModelMetaclass(type):
+    """Base metaclass for all model types."""
+
+    def __new__(
+        mcs,
+        name: str,
+        bases: tuple[Type[Any], ...],
+        attrs: Dict[str, Any],
+        **kwargs: Any,
+    ) -> Type[Any]:
+        """Create new model class."""
+        return super().__new__(mcs, name, bases, attrs)
+
+
+class RecordSetMetaclass(BaseModelMetaclass):
+    """Metaclass for RecordSet types."""
+
+    pass
+
+
+class ModelMetaclass(BaseModelMetaclass):
     """Metaclass for EarnORM models.
 
     This class handles:
@@ -115,13 +108,13 @@ class MetaModel(type):
     _fields: Dict[str, FieldProtocol[Any]] = {}
     _constraints: set[Any] = set()
 
-    def __new__(
+    async def __new__(
         mcs,
         name: str,
         bases: tuple[Type[Any], ...],
         attrs: Dict[str, Any],
         **kwargs: Any,
-    ) -> Type[BaseModel]:
+    ) -> Type[ModelProtocol]:
         """Create new model class.
 
         Args:
@@ -138,7 +131,7 @@ class MetaModel(type):
         """
         # Skip registration for BaseModel
         if attrs.get("__module__") == "earnorm.base.model.base":
-            return cast(Type[BaseModel], super().__new__(mcs, name, bases, attrs))
+            return cast(Type[ModelProtocol], super().__new__(mcs, name, bases, attrs))
 
         # Get model name
         model_name = attrs.get("_name")
@@ -165,15 +158,16 @@ class MetaModel(type):
                 "_ids": [],
                 "__annotations__": {"_ids": List[int], "model_name": str},
             },
+            metaclass=RecordSetMetaclass,  # Use RecordSet metaclass
         )
 
         # Add RecordSet type to attributes
         setattr(model_class, "_RecordSet", recordset_cls)
 
         # Register model if it has environment
-        mcs._register_model(cast(Type[BaseModel], model_class))
+        await mcs._register_model(cast(Type[ModelProtocol], model_class))
 
-        return cast(Type[BaseModel], model_class)
+        return cast(Type[ModelProtocol], model_class)
 
     @classmethod
     def _setup_model_attributes(cls, attrs: Dict[str, Any], model_name: str) -> None:
@@ -225,106 +219,87 @@ class MetaModel(type):
         return fields
 
     @classmethod
-    def _register_model(cls, model_class: Type[BaseModel]) -> None:
+    async def _register_model(cls, model_class: Type[ModelProtocol]) -> None:
         """Register model in environment.
 
         Args:
             model_class: Model class to register
         """
-        if hasattr(model_class, "env"):
-            env: Environment = getattr(model_class, "env")
+        if hasattr(model_class, "_instance_env"):
+            env = cast(Environment, getattr(model_class, "_instance_env"))
             model_name = cast(str, getattr(model_class, "_name"))
-            env.add_model(model_name, model_class)
+            await env.register_model(model_name, model_class)
+
+
+class RecordSetType:
+    """Base type for RecordSet classes.
+
+    A RecordSet is a collection of model records that behaves like both
+    a list of records and a model instance. It inherits all model methods
+    and attributes while providing list operations.
+    """
+
+    _name: ClassVar[str]
+    _instance_env: Environment
+    _ids: List[int]
+    _prefetch: Dict[str, Set[int]]
 
     def __init__(
-        cls,
-        name: str,
-        bases: tuple[Type[Any], ...],
-        attrs: Dict[str, Any],
-        **kwargs: Any,
+        self,
+        env: Environment,
+        ids: Optional[Union[int, List[int]]] = None,
     ) -> None:
-        """Initialize model class.
+        """Initialize RecordSet.
 
         Args:
-            name: Class name
-            bases: Base classes
-            attrs: Class attributes
-            **kwargs: Additional arguments
+            env: Environment instance
+            ids: Optional ID or list of IDs to initialize with
         """
-        super().__init__(name, bases, attrs, **kwargs)
+        self._instance_env = env
+        self._ids = self._normalize_ids(ids) if ids else []
+        self._prefetch = {}
 
-        # Skip initialization for BaseModel
-        if attrs.get("__module__") == "earnorm.base.model.base":
-            return
+    def __getitem__(self: Self, index: Union[int, slice]) -> Self:
+        """Get record(s) at index."""
+        if isinstance(index, slice):
+            # Create new instance with sliced IDs
+            instance = self.__class__(env=self._instance_env)
+            instance._ids = self._ids[index]
+            return instance
+        else:
+            # Create new instance with single ID
+            instance = self.__class__(env=self._instance_env)
+            instance._ids = [self._ids[index]]
+            return instance
 
-        # Initialize fields
-        cls._setup_field_triggers()
+    def __len__(self) -> int:
+        """Get number of records in set."""
+        return len(self._ids)
 
-        # Initialize methods
-        cls._setup_methods()
+    def __iter__(self: Self) -> Iterator[Self]:
+        """Iterate over records."""
+        for record_id in self._ids:
+            instance = self.__class__(env=self._instance_env)
+            instance._ids = [record_id]
+            yield instance
 
-    @classmethod
-    def _setup_field_triggers(cls) -> None:
-        """Setup field triggers.
+    def __repr__(self) -> str:
+        return f"{self._name}[{self._ids}]"
 
-        This initializes field triggers for computed fields.
-        """
-        for field in cls._fields.values():
-            field.setup_triggers()
+    def __str__(self) -> str:
+        return f"{self._name}[{self._ids}]"
 
-    @classmethod
-    def _setup_methods(cls) -> None:
-        """Setup model methods.
+    def _normalize_ids(self, ids: Optional[Union[int, List[int]]]) -> List[int]:
+        """Normalize record IDs.
 
-        This:
-        - Registers computed methods
-        - Sets up method dependencies
-        - Marks async methods
-        """
-        # Get all methods
-        methods = cls._get_methods()
-
-        # Setup method attributes
-        for name, method in methods.items():
-            cls._setup_method(name=name, method=method)
-
-    @classmethod
-    def _get_methods(cls) -> Dict[str, Any]:
-        """Get all model methods.
+        Args:
+            ids: ID or list of IDs
 
         Returns:
-            Dictionary of methods
+            Normalized list of IDs
         """
-        methods: Dict[str, Any] = {}
-        for name in dir(cls):
-            if name.startswith("_"):
-                continue
-            value = getattr(cls, name)
-            if callable(value):
-                methods[name] = value
-        return methods
-
-    @classmethod
-    def _setup_method(cls, name: str, method: Any) -> None:
-        """Setup single method.
-
-        Args:
-            name: Method name
-            method: Method object
-        """
-        # Mark async methods
-        if hasattr(method, "_async"):
-            setattr(cls, name, method)
-
-        # Setup computed methods
-        if hasattr(method, "_compute"):
-            field = cls._fields.get(method._compute)  # pylint: disable=W0212
-            if field:
-                field.compute = method
-                field.compute_depends = getattr(method, "_depends", set())  # type: ignore
-
-    # getters fields
-    @property
-    def fields(cls) -> Dict[str, FieldProtocol[Any]]:
-        """Get model fields dictionary."""
-        return cls._fields
+        if ids is None:
+            return []
+        if isinstance(ids, int):
+            return [ids]
+        return list(ids)

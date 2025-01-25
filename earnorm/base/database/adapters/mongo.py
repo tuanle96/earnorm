@@ -5,9 +5,10 @@ This module provides MongoDB adapter implementation.
 Examples:
     >>> # Create adapter
     >>> adapter = MongoAdapter(uri="mongodb://localhost:27017", database="test")
+    >>> await adapter.init()
     >>>
     >>> # Query using domain expressions
-    >>> users = adapter.query(User).filter(
+    >>> users = await adapter.query(User).filter(
     ...     DomainBuilder()
     ...     .field("age").greater_than(18)
     ...     .and_()
@@ -16,10 +17,10 @@ Examples:
     ... ).all()
     >>>
     >>> # Using transactions
-    >>> with adapter.transaction(User) as tx:
+    >>> async with adapter.transaction(User) as tx:
     ...     user = User(name="John", age=25)
-    ...     tx.insert(user)
-    ...     tx.commit()
+    ...     await tx.insert(user)
+    ...     await tx.commit()
 """
 
 from typing import Any, Dict, List, Optional, Type, TypeVar
@@ -32,19 +33,19 @@ from motor.motor_asyncio import (
 from pymongo.collection import Collection
 from pymongo.database import Database
 
-from earnorm.base.database.adapter import DatabaseAdapter
+from earnorm.base.database.async_adapter import AsyncDatabaseAdapter
 from earnorm.base.database.query.backends.mongo.builder import MongoQueryBuilder
 from earnorm.base.database.query.backends.mongo.query import MongoQuery
 from earnorm.base.database.transaction.backends.mongo import MongoTransactionManager
 from earnorm.di import container
 from earnorm.pool.backends.mongo import MongoPool
-from earnorm.pool.protocols.connection import ConnectionProtocol
+from earnorm.pool.protocols import AsyncConnectionProtocol
 from earnorm.types import DatabaseModel, JsonDict
 
 ModelT = TypeVar("ModelT", bound=DatabaseModel)
 
 
-class MongoAdapter(DatabaseAdapter[ModelT]):
+class MongoAdapter(AsyncDatabaseAdapter[ModelT]):
     """MongoDB adapter implementation.
 
     This class provides MongoDB-specific implementation of the database adapter interface.
@@ -87,20 +88,20 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
 
     async def get_connection(
         self,
-    ) -> ConnectionProtocol[
+    ) -> AsyncConnectionProtocol[
         AsyncIOMotorDatabase[Dict[str, Any]], AsyncIOMotorCollection[JsonDict]
     ]:
         """Get a connection from the adapter.
 
         Returns:
-            ConnectionProtocol: A MongoDB database connection.
+            AsyncConnectionProtocol: A MongoDB database connection.
 
         Raises:
             RuntimeError: If not connected to MongoDB.
         """
         if self._pool is None:
             raise RuntimeError("Not connected to MongoDB")
-        conn = await (await self._pool.acquire())
+        conn = await self._pool.acquire()
         return conn
 
     async def connect(self) -> None:
@@ -152,7 +153,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             raise RuntimeError("Not connected to MongoDB")
 
         # Acquire connection from pool
-        conn = await (await self._pool.acquire())
+        conn = await self._pool.acquire()
         try:
             # Get collection from connection
             collection = conn.get_collection(name)
@@ -263,9 +264,13 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
 
         Returns:
             Inserted model with ID
+
+        Raises:
+            ValueError: If model has no table or name
+            RuntimeError: If not connected to MongoDB
         """
-        collection = self._get_collection(type(model))
-        result = collection.insert_one(model.to_dict())
+        collection = await self.get_collection(self._get_collection_name(type(model)))
+        result = await collection.insert_one(model.to_dict())
         model.id = result.inserted_id
         return model
 
@@ -277,13 +282,22 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
 
         Returns:
             Inserted models with IDs
+
+        Raises:
+            ValueError: If any model has no table or name
+            RuntimeError: If not connected to MongoDB
         """
         if not models:
             return []
-        collection = self._get_collection(type(models[0]))
-        result = collection.insert_many([model.to_dict() for model in models])
-        for model, id_ in zip(models, result.inserted_ids):
-            model.id = id_
+
+        collection = await self.get_collection(
+            self._get_collection_name(type(models[0]))
+        )
+        docs = [model.to_dict() for model in models]
+        result = await collection.insert_many(docs)
+
+        for model, id in zip(models, result.inserted_ids):
+            model.id = id
         return models
 
     async def update(self, model: ModelT) -> ModelT:
@@ -296,12 +310,14 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             Updated model
 
         Raises:
-            ValueError: If model has no ID
+            ValueError: If model has no ID or no table/name
+            RuntimeError: If not connected to MongoDB
         """
         if not model.id:
             raise ValueError("Model has no ID")
-        collection = self._get_collection(type(model))
-        collection.update_one({"_id": model.id}, {"$set": model.to_dict()})
+
+        collection = await self.get_collection(self._get_collection_name(type(model)))
+        await collection.update_one({"_id": model.id}, {"$set": model.to_dict()})
         return model
 
     async def update_many(self, models: List[ModelT]) -> List[ModelT]:
@@ -314,16 +330,24 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             Updated models
 
         Raises:
-            ValueError: If any model has no ID
+            ValueError: If any model has no ID or no table/name
+            RuntimeError: If not connected to MongoDB
         """
         if not models:
             return []
+
+        collection = await self.get_collection(
+            self._get_collection_name(type(models[0]))
+        )
+
+        # Check all models have IDs
         for model in models:
             if not model.id:
                 raise ValueError("Model has no ID")
-        collection = self._get_collection(type(models[0]))
+
+        # Update each model individually since bulk_write has type issues
         for model in models:
-            collection.update_one({"_id": model.id}, {"$set": model.to_dict()})
+            await collection.update_one({"_id": model.id}, {"$set": model.to_dict()})
         return models
 
     async def delete(self, model: ModelT) -> None:
@@ -333,12 +357,14 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             model: Model to delete
 
         Raises:
-            ValueError: If model has no ID
+            ValueError: If model has no ID or no table/name
+            RuntimeError: If not connected to MongoDB
         """
         if not model.id:
             raise ValueError("Model has no ID")
-        collection = self._get_collection(type(model))
-        collection.delete_one({"_id": model.id})
+
+        collection = await self.get_collection(self._get_collection_name(type(model)))
+        await collection.delete_one({"_id": model.id})
 
     async def delete_many(self, models: List[ModelT]) -> None:
         """Delete multiple models from database.
@@ -347,12 +373,21 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             models: Models to delete
 
         Raises:
-            ValueError: If any model has no ID
+            ValueError: If any model has no ID or no table/name
+            RuntimeError: If not connected to MongoDB
         """
         if not models:
             return
+
+        collection = await self.get_collection(
+            self._get_collection_name(type(models[0]))
+        )
+
+        # Check all models have IDs
         for model in models:
             if not model.id:
                 raise ValueError("Model has no ID")
-        collection = self._get_collection(type(models[0]))
-        collection.delete_many({"_id": {"$in": [model.id for model in models]}})
+
+        # Bulk delete
+        ids = [model.id for model in models]
+        await collection.delete_many({"_id": {"$in": ids}})

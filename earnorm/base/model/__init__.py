@@ -20,11 +20,7 @@ Examples:
 """
 
 from .base import BaseModel
-from .decorators import depends, model, multi
 
 __all__ = [
     "BaseModel",
-    "multi",
-    "model",
-    "depends",
 ]

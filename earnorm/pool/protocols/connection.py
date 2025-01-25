@@ -82,8 +82,13 @@ class AsyncOperations(Protocol[DBType, CollType]):
         ...
 
 
-class AsyncConnectionProtocol(Protocol[DBType, CollType]):
+class AsyncConnectionProtocol(
+    AsyncLifecycle, AsyncOperations[DBType, CollType], Protocol
+):
     """Protocol for async database connections.
+
+    This protocol defines the interface that all async database connections must implement.
+    It provides methods for getting collections and managing the connection lifecycle.
 
     Type Parameters:
         DBType: The database type (e.g. AsyncIOMotorDatabase)
@@ -131,12 +136,38 @@ class AsyncConnectionProtocol(Protocol[DBType, CollType]):
         """Execute operation."""
         ...
 
+    async def connect(self) -> None:
+        """Connect to database.
+
+        Raises:
+            ConnectionError: If connection fails
+        """
+        ...
+
+    async def disconnect(self) -> None:
+        """Disconnect from database."""
+        ...
+
     def get_database(self) -> DBType:
-        """Get database instance."""
+        """Get database instance.
+
+        Returns:
+            Database instance
+        """
         ...
 
     def get_collection(self, name: str) -> CollType:
-        """Get collection instance."""
+        """Get collection instance.
+
+        Args:
+            name: Collection name
+
+        Returns:
+            Collection instance
+
+        Raises:
+            ValueError: If collection name is empty
+        """
         ...
 
     @property

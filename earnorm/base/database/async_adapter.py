@@ -1,10 +1,10 @@
-"""Database adapter interface.
+"""Asynchronous database adapter interface.
 
-This module provides the base adapter interface for database operations.
+This module provides the base adapter interface for asynchronous database operations.
 It provides methods for querying, inserting, updating, and deleting data asynchronously.
 
 Examples:
-    >>> adapter = MongoAdapter(client)
+    >>> adapter = AsyncMongoAdapter(client)
     >>> users = await adapter.query(User).filter(
     ...     DomainBuilder()
     ...     .field("age").greater_than(18)
@@ -19,7 +19,7 @@ Examples:
 """
 
 from abc import ABC, abstractmethod
-from typing import Generic, List, Type, TypeVar
+from typing import Any, Generic, List, Optional, Type, TypeVar
 
 from earnorm.base.database.query.base.query import Query
 from earnorm.base.database.transaction.base import TransactionManager
@@ -28,8 +28,8 @@ from earnorm.types import DatabaseModel
 ModelT = TypeVar("ModelT", bound=DatabaseModel)
 
 
-class DatabaseAdapter(Generic[ModelT], ABC):
-    """Base class for all database adapters.
+class AsyncDatabaseAdapter(Generic[ModelT], ABC):
+    """Base class for all asynchronous database adapters.
 
     This class defines the interface that all database-specific adapters must implement.
     It provides methods for querying, inserting, updating, and deleting data asynchronously.
@@ -37,6 +37,40 @@ class DatabaseAdapter(Generic[ModelT], ABC):
     Args:
         ModelT: Type of model being queried
     """
+
+    def __init__(self) -> None:
+        """Initialize adapter."""
+        self._connection: Optional[Any] = None
+
+    @abstractmethod
+    async def init(self) -> None:
+        """Initialize adapter.
+
+        This method should be called before using the adapter.
+        It should initialize any resources needed by the adapter.
+
+        Raises:
+            ConnectionError: If initialization fails
+        """
+        pass
+
+    @abstractmethod
+    async def close(self) -> None:
+        """Close adapter.
+
+        This method should be called when the adapter is no longer needed.
+        It should clean up any resources used by the adapter.
+        """
+        pass
+
+    @abstractmethod
+    def get_connection(self) -> Any:
+        """Get database connection.
+
+        Returns:
+            Database connection
+        """
+        pass
 
     @abstractmethod
     async def connect(self) -> None:

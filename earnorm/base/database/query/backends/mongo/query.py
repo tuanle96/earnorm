@@ -19,7 +19,7 @@ Examples:
     >>> results = await query.execute_async()
 """
 
-from typing import List, Optional, TypeVar, Union
+from typing import List, Optional, Type, TypeVar, Union
 
 from motor.motor_asyncio import AsyncIOMotorCollection
 from pymongo import ASCENDING, DESCENDING
@@ -44,7 +44,7 @@ class MongoQuery(AsyncQuery[ModelT]):
     """
 
     def __init__(
-        self, collection: AsyncIOMotorCollection[JsonDict], model_cls: type[ModelT]
+        self, collection: AsyncIOMotorCollection[JsonDict], model_cls: Type[ModelT]
     ) -> None:
         """Initialize query.
 
@@ -112,7 +112,9 @@ class MongoQuery(AsyncQuery[ModelT]):
         )
         results: List[ModelT] = []
         async for doc in cursor:
-            results.append(self._model_cls.from_dict(doc))
+            model = self._model_cls()
+            model.from_dict(doc)
+            results.append(model)
         return results
 
     async def count_async(self) -> int:
@@ -121,7 +123,8 @@ class MongoQuery(AsyncQuery[ModelT]):
         Returns:
             Number of results
         """
-        return await self._collection.count_documents(self.to_filter())
+        count = await self._collection.count_documents(self.to_filter())
+        return count
 
     async def exists_async(self) -> bool:
         """Check if any results exist asynchronously.
@@ -143,4 +146,6 @@ class MongoQuery(AsyncQuery[ModelT]):
         )
         if not doc:
             return None
-        return self._model_cls.from_dict(doc)
+        model = self._model_cls()
+        model.from_dict(doc)
+        return model
