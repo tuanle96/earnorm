@@ -176,6 +176,6 @@ class RetryContext:
             while True:
                 try:
                     return await operation(*args, **kwargs)
-                except Exception as e:
+                except Exception as e:  # pylint: disable=broad-exception-caught
                     if not await self.__aexit__(type(e), e, None):
                         raise

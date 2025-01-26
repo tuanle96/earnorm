@@ -297,7 +297,7 @@ class RedisPool(AsyncPoolProtocol[DB, COLL]):
         try:
             result = await self._client.ping()  # type: ignore
             return bool(result)
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-exception-caught
             logger.error("Failed to ping Redis: %s", str(e))
             return False
 

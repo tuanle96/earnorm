@@ -373,7 +373,8 @@ class FileField(BaseField[Union[Path, str, ObjectId]]):
             not in allowed  # pylint: disable=unsupported-membership-test
         ):
             raise FieldValidationError(
-                message=f"Content type {content_type} not allowed. Allowed types: {', '.join(sorted(allowed))}",
+                message=f"Content type {content_type} not allowed. Allowed \
+                types: {', '.join(sorted(allowed))}",
                 field_name=self.name,
             )
 
@@ -492,7 +493,7 @@ class FileField(BaseField[Union[Path, str, ObjectId]]):
                 metadata = grid_out.metadata or {}
                 return FileInfo(
                     filename=grid_out.filename,
-                    path=grid_out._id,
+                    path=grid_out._id,  # pylint: disable=protected-access
                     content_type=metadata.get("content_type"),
                     size=grid_out.length,
                     created_at=grid_out.upload_date,

@@ -13,7 +13,6 @@ It includes:
 from datetime import UTC, datetime
 from typing import (
     Any,
-    AsyncContextManager,
     ClassVar,
     Dict,
     List,
@@ -31,8 +30,8 @@ from earnorm.base.database.query.base.query import AsyncQuery
 from earnorm.base.domain.expression import DomainExpression, LogicalOp, Operator
 from earnorm.base.env import Environment
 from earnorm.base.model.meta import MetaModel
-from earnorm.fields import Field
-from earnorm.types import DatabaseModel, JsonDict, M, ModelName, ValueType
+from earnorm.fields import BaseField
+from earnorm.types import DatabaseModel, JsonDict, M, ValueType
 
 
 class FieldsDescriptor:
@@ -45,7 +44,7 @@ class FieldsDescriptor:
 
     def __get__(
         self, obj: Optional["BaseModel"], objtype: Type["BaseModel"]
-    ) -> Dict[str, Field[Any]]:
+    ) -> Dict[str, BaseField[Any]]:
         """Get fields dictionary.
 
         Args:
@@ -137,7 +136,7 @@ class BaseModel(DatabaseModel, metaclass=MetaModel):
     _sequence: ClassVar[Optional[str]] = None
 
     # Model fields
-    _fields: Dict[str, Field[Any]]  # Set by metaclass
+    _fields: Dict[str, BaseField[Any]]  # Set by metaclass
     id: int = 0  # Record ID with default value
 
     # Use descriptors for fields and environment access
@@ -584,7 +583,7 @@ class BaseModel(DatabaseModel, metaclass=MetaModel):
         return values
 
     @property
-    def fields(self) -> Dict[str, Field[Any]]:
+    def fields(self) -> Dict[str, BaseField[Any]]:
         """Get model fields.
 
         Returns:

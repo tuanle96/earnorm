@@ -227,7 +227,7 @@ class DistributedLock:
                 self.name, self._owner, nx=True, ex=self.timeout
             )
             if locked:
-                logger.debug(f"Acquired lock {self.name}")
+                logger.debug("Acquired lock %s", self.name)
                 return True
 
             retries -= 1
@@ -235,7 +235,7 @@ class DistributedLock:
                 await asyncio.sleep(self.retry_delay)
 
         logger.warning(
-            f"Failed to acquire lock {self.name} after {self.retry_count} retries"
+            "Failed to acquire lock %s after %d retries", self.name, self.retry_count
         )
         return False
 
@@ -271,7 +271,7 @@ class DistributedLock:
         """
         await cast(Any, self.client).eval(script, 1, self.name, self._owner)
         self._owner = None
-        logger.debug(f"Released lock {self.name}")
+        logger.debug("Released lock %s", self.name)
 
     async def extend(self, additional_time: int) -> bool:
         """Extend lock timeout if owner.
@@ -313,11 +313,11 @@ class DistributedLock:
                 )
                 if extended:
                     logger.debug(
-                        f"Extended lock {self.name} by {additional_time} seconds"
+                        "Extended lock %s by %d seconds", self.name, additional_time
                     )
                 return extended
         except RedisError as e:
-            logger.error(f"Failed to extend lock {self.name}: {str(e)}")
+            logger.error("Failed to extend lock %s: %s", self.name, str(e))
 
         return False
 
@@ -344,7 +344,7 @@ class DistributedLock:
         try:
             return bool(await self.client.exists(self.name))
         except RedisError as e:
-            logger.error(f"Failed to check lock {self.name}: {str(e)}")
+            logger.error("Failed to check lock %s: %s", self.name, str(e))
             return False
 
     async def force_unlock(self) -> bool:
@@ -368,8 +368,8 @@ class DistributedLock:
         try:
             deleted = bool(await self.client.delete(self.name))
             if deleted:
-                logger.warning(f"Forced unlock of {self.name}")
+                logger.warning("Forced unlock of %s", self.name)
             return deleted
         except RedisError as e:
-            logger.error(f"Failed to force unlock {self.name}: {str(e)}")
+            logger.error("Failed to force unlock %s: %s", self.name, str(e))
             return False

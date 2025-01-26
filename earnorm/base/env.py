@@ -12,7 +12,6 @@ from earnorm.base.model.meta import BaseModel
 from earnorm.cache import CacheManager
 from earnorm.config import SystemConfig
 from earnorm.di import container
-from earnorm.events.core.bus import EventBus
 from earnorm.types import DatabaseModel
 
 logger = logging.getLogger(__name__)
@@ -52,7 +51,6 @@ class Environment:
         self._initialized = False
         self._cache_manager: Optional[CacheManager] = None
         self._adapter: Optional[DatabaseAdapter[DatabaseModel]] = None
-        self._event_bus: Optional[EventBus] = None
         Environment._instance = self
 
     @classmethod
@@ -88,7 +86,6 @@ class Environment:
             # Get services from DI container
             self._cache_manager = await container.get("cache_manager")
             self._adapter = await container.get("database_adapter")
-            self._event_bus = await container.get("event_bus")
 
             # Register self in container
             container.register("env", self)
@@ -170,15 +167,6 @@ class Environment:
             Database adapter instance
         """
         return self.get_service("database_adapter")
-
-    @property
-    def event_bus(self) -> EventBus:
-        """Get event bus.
-
-        Returns:
-            Event bus instance
-        """
-        return self.get_service("event_bus")
 
     def get_model(self, name: str) -> Type[BaseModel]:
         """Get model by name.

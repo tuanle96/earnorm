@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional, Set, Type, TypeVar, cast
 
-from earnorm.fields.base import Field
+from earnorm.fields import BaseField
 from earnorm.fields.primitive import DateTimeField, StringField
 
 
@@ -35,7 +35,7 @@ class ModelInfo:
     model_class: Type["BaseModel"]
     is_abstract: bool
     parent_models: Set[str]
-    fields: Dict[str, Field[Any]]
+    fields: Dict[str, BaseField[Any]]
 
 
 # Forward reference for BaseModel
@@ -61,7 +61,7 @@ class BaseModel:
 
     # Required attributes
     _name: str
-    fields: Dict[str, Field[Any]]
+    fields: Dict[str, BaseField[Any]]
 
     # Abstract flag - not in slots because it's a class variable
     _abstract: bool = False
@@ -150,7 +150,7 @@ class MetaModel(type):
     _inherit_graph: Dict[str, Set[str]] = {}
 
     # Define default fields that every model should have
-    DEFAULT_FIELDS: Dict[str, Field[Any]] = {
+    DEFAULT_FIELDS: Dict[str, BaseField[Any]] = {
         "id": StringField(
             required=True,
             readonly=True,
@@ -186,13 +186,13 @@ class MetaModel(type):
             slots.update(getattr(base, "__slots__", ()))
 
         # Collect fields from parent classes
-        inherited_fields: Dict[str, Field[Any]] = {}
+        inherited_fields: Dict[str, BaseField[Any]] = {}
         for base in bases:
             if hasattr(base, "fields"):
                 inherited_fields.update(getattr(base, "fields", {}))
 
         # Add default fields first
-        fields: Dict[str, Field[Any]] = {}
+        fields: Dict[str, BaseField[Any]] = {}
         for field_name, field in mcs.DEFAULT_FIELDS.items():
             # Create a new instance of the field for each model
             new_field = field.__class__(**field.__dict__)
@@ -202,7 +202,7 @@ class MetaModel(type):
 
         # Add user-defined fields
         for key, value in attrs.items():
-            if isinstance(value, Field):
+            if isinstance(value, BaseField):
                 if key in fields:
                     raise ValueError(f"Cannot override default field '{key}'")
                 slots.add(f"_{key}")

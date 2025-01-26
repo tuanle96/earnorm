@@ -43,7 +43,7 @@ async def init_container(**config: Any) -> None:
                 - validate_on_borrow: Whether to validate connections on borrow
                 - test_on_return: Whether to test connections on return
     """
-    global lifecycle
+    global lifecycle  # pylint: disable=global-statement
 
     # Initialize container
     await container.init(**config)

@@ -16,7 +16,11 @@ Examples:
 from typing import Any, Dict, TypeVar, cast
 
 from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
-from redis.asyncio import Redis
+
+try:
+    from redis.asyncio import Redis
+except ImportError:
+    Redis = None
 
 from earnorm.base.database.adapters.mongo import MongoAdapter
 from earnorm.base.env import Environment
@@ -30,8 +34,8 @@ DB = AsyncIOMotorDatabase[Dict[str, Any]]
 COLL = AsyncIOMotorCollection[Dict[str, Any]]
 
 # Type vars for pools
-DBType = TypeVar("DBType")
-CollType = TypeVar("CollType")
+DBType = TypeVar("DBType")  # pylint: disable=invalid-name
+CollType = TypeVar("CollType")  # pylint: disable=invalid-name
 
 
 async def register_core_services() -> None:
@@ -139,54 +143,6 @@ async def register_cache_services(config: SystemConfig) -> None:
     )
 
 
-async def register_event_services() -> None:
-    """Register event services.
-
-    This includes:
-    - Event registry
-    - Default handlers
-    - Default event types
-    """
-    from earnorm.events.core.registry import EventRegistry
-    from earnorm.events.handlers import CreateUserHandler, UserHandler
-
-    registry = EventRegistry()
-
-    # Register default handlers
-    registry.register("user.*", UserHandler())
-    registry.register("user.created", CreateUserHandler())
-
-    # Register default event types
-    registry.register_type("user.created")
-    registry.register_type("user.updated")
-
-    container.register("event_registry", registry)
-
-
-async def register_validator_services() -> None:
-    """Register validator services.
-
-    This includes:
-    - Validator registry
-    - Default validators
-    """
-    from earnorm.fields.validators.registry import (
-        RangeValidator,
-        RegexValidator,
-        RequiredValidator,
-        TypeValidator,
-        ValidatorRegistry,
-    )
-
-    registry = ValidatorRegistry()
-    registry.register("required", RequiredValidator)
-    registry.register("type", TypeValidator)
-    registry.register("range", RangeValidator)
-    registry.register("regex", RegexValidator)
-
-    container.register("validator_registry", registry)
-
-
 async def register_all(config: SystemConfig) -> None:
     """Register all services in correct order.
 
@@ -222,12 +178,6 @@ async def register_all(config: SystemConfig) -> None:
 
     # 5. Cache services
     await register_cache_services(config)
-
-    # 6. Event services
-    await register_event_services()
-
-    # 7. Validator services
-    await register_validator_services()
 
 
 __all__ = ["register_all"]

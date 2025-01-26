@@ -3,7 +3,7 @@
 This module provides the base field class that all relation field types inherit from.
 It handles:
 - Model references and lazy loading
-- Back references and cascade operations 
+- Back references and cascade operations
 - Domain filtering and context
 - Validation and type checking
 
@@ -65,7 +65,9 @@ class ModelProtocol(Protocol[M_co]):
     id: str
 
     @classmethod
-    async def get(cls, env: Environment, id: str) -> "ModelProtocol[M_co]": ...
+    async def get(cls, env: Environment, _id: str) -> "ModelProtocol[M_co]":
+        """Get model by ID."""
+        ...
 
 
 class ModelList(BaseModel, Generic[M]):

@@ -48,6 +48,8 @@ from earnorm.exceptions import DatabaseConnectionError, PoolExhaustedError
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+# pylint: disable=invalid-name,typevar-name-incorrect-variance
 DBType = TypeVar("DBType", covariant=True)
 CollType = TypeVar("CollType", covariant=True)
 
@@ -216,7 +218,8 @@ class ConnectionManager:
                     conn = await self._create_connection()
                     self._connections.append(conn)
                     self._idle_connections.add(conn)
-                except Exception as e:
+                except Exception as e:  # pylint: disable=broad-exception-caught
+                    # pylint: disable=logging-fstring-interpolation
                     logger.error(f"Failed to pre-warm connection: {e}")
                     break
 
@@ -252,7 +255,7 @@ class ConnectionManager:
             if not is_valid:
                 wrapper.metrics.validation_failures += 1
             return is_valid
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-exception-caught
             wrapper.metrics.validation_failures += 1
             wrapper.last_error = e
             wrapper.error_severity = self._factory.classify_error(e)
@@ -267,8 +270,9 @@ class ConnectionManager:
         try:
             await self._factory.cleanup_connection(wrapper.connection)
             wrapper.state = ConnectionState.CLOSED
-        except Exception as e:
-            logger.error(f"Failed to cleanup connection: {e}", exc_info=True)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            # pylint: disable=logging-fstring-interpolation
+            logger.error(f"Failed to cleanup connection: {e}")
             wrapper.last_error = e
             wrapper.error_severity = self._factory.classify_error(e)
             wrapper.state = ConnectionState.ERROR
@@ -281,8 +285,9 @@ class ConnectionManager:
                 await self._cleanup_idle()
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.error(f"Error in cleanup loop: {e}", exc_info=True)
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                # pylint: disable=logging-fstring-interpolation
+                logger.error(f"Error in cleanup loop: {e}")
 
     async def _cleanup_idle(self) -> None:
         """Clean up idle connections."""

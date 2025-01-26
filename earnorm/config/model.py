@@ -405,15 +405,6 @@ class SystemConfig(BaseModel):
             except (ValueError, TypeError, RuntimeError) as e:
                 logger.error("Failed to notify listener: %s", str(e))
 
-    @property
-    def data(self) -> Dict[str, Any]:
-        """Get config data as dictionary."""
-        return {
-            key: getattr(self, key).value
-            for key in self.__fields__
-            if not key.startswith("_") and hasattr(self, key)
-        }
-
     @classmethod
     def from_env(cls) -> "SystemConfig":
         """Create config instance from environment variables.
