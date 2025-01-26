@@ -6,7 +6,7 @@ from contextlib import AbstractAsyncContextManager
 from typing import Any, Generic, TypeVar
 
 # pylint: disable=redefined-builtin
-from earnorm.exceptions import ConnectionError, PoolExhaustedError
+from earnorm.exceptions import DatabaseConnectionError, PoolExhaustedError
 from earnorm.pool.core.circuit import CircuitBreaker
 from earnorm.pool.core.retry import RetryPolicy
 from earnorm.pool.protocols.connection import AsyncConnectionProtocol
@@ -102,7 +102,7 @@ class BasePool(
                     conn = self._create_connection()
                     self._available.append(conn)
                 except Exception as e:
-                    raise ConnectionError(
+                    raise DatabaseConnectionError(
                         f"Failed to create connection: {e}",
                         backend=self._backend,
                     ) from e
@@ -136,7 +136,7 @@ class BasePool(
                     self._in_use.append(conn)
                     return conn
                 except Exception as e:
-                    raise ConnectionError(
+                    raise DatabaseConnectionError(
                         f"Failed to create connection: {e}",
                         backend=self._backend,
                     ) from e
@@ -178,7 +178,7 @@ class BasePool(
             finally:
                 await self.release(conn)
         except Exception as e:
-            raise ConnectionError(
+            raise DatabaseConnectionError(
                 f"Failed to ping connection: {e}",
                 backend=self._backend,
             ) from e

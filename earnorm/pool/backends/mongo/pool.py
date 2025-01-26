@@ -11,7 +11,7 @@ from motor.motor_asyncio import (
 )
 
 # pylint: disable=redefined-builtin
-from earnorm.exceptions import ConnectionError, PoolExhaustedError
+from earnorm.exceptions import MongoDBConnectionError, PoolExhaustedError
 from earnorm.pool.backends.mongo.connection import MongoConnection
 from earnorm.pool.core.circuit import CircuitBreaker
 from earnorm.pool.core.retry import RetryPolicy
@@ -123,9 +123,8 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
                     self.size,
                 )
             except Exception as e:
-                raise ConnectionError(
+                raise MongoDBConnectionError(
                     f"Failed to initialize MongoDB pool: {e!s}",
-                    backend=self.backend,
                 ) from e
 
     async def clear(self) -> None:
@@ -170,9 +169,8 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
                     conn = self._create_connection()
                     self._available.add(conn)
                 except Exception as e:
-                    raise ConnectionError(
+                    raise MongoDBConnectionError(
                         f"Failed to create connection: {e!s}",
-                        backend=self.backend,
                     ) from e
 
             # Check if pool is exhausted
@@ -218,9 +216,8 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
             ConnectionError: If pool is not initialized
         """
         if not self._client:
-            raise ConnectionError(
+            raise MongoDBConnectionError(
                 "Pool not initialized",
-                backend=self.backend,
             )
 
         return cast(

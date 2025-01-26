@@ -43,7 +43,7 @@ from typing import (
     TypeVar,
 )
 
-from earnorm.exceptions import ConnectionError, PoolExhaustedError
+from earnorm.exceptions import DatabaseConnectionError, PoolExhaustedError
 
 logger = logging.getLogger(__name__)
 
@@ -233,7 +233,7 @@ class ConnectionManager:
             conn = await self._factory.create_connection()
             return ConnectionWrapper(connection=conn)
         except Exception as e:
-            raise ConnectionError(
+            raise DatabaseConnectionError(
                 f"Failed to create connection: {e}",
                 backend=self._factory.backend,
             ) from e

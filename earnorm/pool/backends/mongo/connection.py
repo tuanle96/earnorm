@@ -26,7 +26,7 @@ from motor.motor_asyncio import (
 )
 
 # pylint: disable=redefined-builtin
-from earnorm.exceptions import ConnectionError, QueryError
+from earnorm.exceptions import DatabaseConnectionError, QueryError
 from earnorm.pool.constants import DEFAULT_MAX_IDLE_TIME, DEFAULT_MAX_LIFETIME
 from earnorm.pool.core.circuit import CircuitBreaker
 from earnorm.pool.core.decorators import with_resilience
@@ -120,7 +120,7 @@ class MongoConnection(AsyncConnectionProtocol[DBType, CollType]):
             self.touch()
             return True
         except Exception as e:
-            raise ConnectionError(
+            raise DatabaseConnectionError(
                 f"Failed to ping MongoDB: {e!s}",
                 backend=self.backend,
             ) from e
@@ -191,7 +191,7 @@ class MongoConnection(AsyncConnectionProtocol[DBType, CollType]):
         try:
             await self.ping()
         except Exception as e:
-            raise ConnectionError(
+            raise DatabaseConnectionError(
                 f"Failed to connect to MongoDB: {e!s}",
                 backend=self.backend,
             ) from e

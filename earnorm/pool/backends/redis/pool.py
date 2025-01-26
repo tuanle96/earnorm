@@ -37,7 +37,7 @@ from typing import Any, AsyncContextManager, Optional, Set, TypeVar, cast
 
 from redis.asyncio import Redis
 
-from earnorm.exceptions import ConnectionError, PoolExhaustedError
+from earnorm.exceptions import PoolExhaustedError, RedisConnectionError
 from earnorm.pool.backends.redis.connection import RedisConnection
 from earnorm.pool.core.circuit import CircuitBreaker
 from earnorm.pool.core.retry import RetryPolicy
@@ -115,10 +115,7 @@ class RedisPool(AsyncPoolProtocol[DB, COLL]):
             ConnectionError: If connection creation fails
         """
         if not self._client:
-            raise ConnectionError(
-                "Pool is not connected",
-                backend=self.backend,
-            )
+            raise RedisConnectionError("Pool is not connected")
 
         return cast(
             AsyncConnectionProtocol[DB, COLL],
@@ -174,9 +171,8 @@ class RedisPool(AsyncPoolProtocol[DB, COLL]):
                     self.size,
                 )
             except Exception as e:
-                raise ConnectionError(
+                raise RedisConnectionError(
                     f"Failed to initialize Redis pool: {e!s}",
-                    backend=self.backend,
                 ) from e
 
     async def clear(self) -> None:
@@ -221,9 +217,8 @@ class RedisPool(AsyncPoolProtocol[DB, COLL]):
                     conn = self._create_connection()
                     self._available.add(conn)
                 except Exception as e:
-                    raise ConnectionError(
+                    raise RedisConnectionError(
                         f"Failed to create connection: {e!s}",
-                        backend=self.backend,
                     ) from e
 
             # Check if pool is exhausted

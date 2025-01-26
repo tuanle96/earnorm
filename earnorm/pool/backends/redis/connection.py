@@ -5,10 +5,10 @@ from collections.abc import Awaitable
 from typing import Any, TypeVar, cast
 
 from redis.asyncio import Redis
-from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import ConnectionError as BaseRedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
-from earnorm.exceptions import ConnectionError, QueryError
+from earnorm.exceptions import QueryError, RedisConnectionError
 from earnorm.pool.core.circuit import CircuitBreaker
 from earnorm.pool.core.decorators import with_resilience
 from earnorm.pool.core.retry import RetryPolicy
@@ -105,10 +105,9 @@ class RedisConnection(AsyncConnectionProtocol[DB, None]):
             result = await self.execute("ping")
             self.touch()
             return bool(result)
-        except (RedisConnectionError, RedisTimeoutError) as e:
-            raise ConnectionError(
+        except (BaseRedisConnectionError, RedisTimeoutError) as e:
+            raise RedisConnectionError(
                 f"Failed to ping Redis: {e!s}",
-                backend=self.backend,
             ) from e
 
     async def ping(self) -> bool:
@@ -176,9 +175,8 @@ class RedisConnection(AsyncConnectionProtocol[DB, None]):
         try:
             await self.ping()
         except Exception as e:
-            raise ConnectionError(
+            raise RedisConnectionError(
                 f"Failed to connect to Redis: {e!s}",
-                backend=self.backend,
             ) from e
 
     async def disconnect(self) -> None:

@@ -11,7 +11,7 @@ from bson import ObjectId
 from bson.errors import InvalidId
 from motor.motor_asyncio import AsyncIOMotorCollection
 
-from earnorm.types import ModelInterface
+from earnorm.types import ModelProtocol
 from earnorm.validators.base import BaseValidator, ValidationError
 
 
@@ -35,7 +35,7 @@ class ExistsValidator(BaseValidator):
     def __init__(
         self,
         collection: AsyncIOMotorCollection[Dict[str, Any]],
-        model_class: Type[ModelInterface],
+        model_class: Type[ModelProtocol],
         message: Optional[str] = None,
     ) -> None:
         """Initialize validator.
@@ -92,7 +92,7 @@ class ExistsValidator(BaseValidator):
 
 def validate_exists(
     collection: AsyncIOMotorCollection[Dict[str, Any]],
-    model_class: Type[ModelInterface],
+    model_class: Type[ModelProtocol],
     message: Optional[str] = None,
 ) -> ExistsValidator:
     """Create reference existence validator.

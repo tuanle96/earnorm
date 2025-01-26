@@ -129,17 +129,58 @@ class DatabaseError(EarnORMError):
         super().__init__(f"{backend}: {message}")
 
 
-class ConnectionError(DatabaseError):
+class DatabaseConnectionError(DatabaseError):
     """Error raised when database connection fails."""
 
-    def __init__(self, message: str, *, backend: str) -> None:
+    ...
+
+
+class MongoDBConnectionError(DatabaseError):
+    """Error raised when MongoDB connection fails."""
+
+    def __init__(self, message: str) -> None:
         """Initialize connection error.
 
         Args:
             message: Error message
-            backend: Database backend name
         """
-        super().__init__(message, backend=backend)
+        super().__init__(message, backend="mongodb")
+
+
+class RedisConnectionError(DatabaseError):
+    """Error raised when Redis connection fails."""
+
+    def __init__(self, message: str) -> None:
+        """Initialize connection error.
+
+        Args:
+            message: Error message
+        """
+        super().__init__(message, backend="redis")
+
+
+class MySQLConnectionError(DatabaseError):
+    """Error raised when MySQL connection fails."""
+
+    def __init__(self, message: str) -> None:
+        """Initialize connection error.
+
+        Args:
+            message: Error message
+        """
+        super().__init__(message, backend="mysql")
+
+
+class PostgreSQLConnectionError(DatabaseError):
+    """Error raised when PostgreSQL connection fails."""
+
+    def __init__(self, message: str) -> None:
+        """Initialize connection error.
+
+        Args:
+            message: Error message
+        """
+        super().__init__(message, backend="postgresql")
 
 
 class QueryError(DatabaseError):
@@ -279,14 +320,7 @@ class CacheError(EarnORMError):
 class CacheConnectionError(CacheError):
     """Error raised when cache connection fails."""
 
-    def __init__(self, message: str, *, backend: str) -> None:
-        """Initialize cache connection error.
-
-        Args:
-            message: Error message
-            backend: Cache backend name
-        """
-        super().__init__(message, backend=backend)
+    ...
 
 
 class CacheKeyError(CacheError):

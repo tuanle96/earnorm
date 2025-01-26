@@ -8,7 +8,7 @@ from typing import Any, Coroutine, Dict, Optional, Type
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorCollection
 
-from earnorm.types import ModelInterface
+from earnorm.types import ModelProtocol
 from earnorm.validators.base import BaseValidator, ValidationError
 
 
@@ -34,7 +34,7 @@ class UniqueValidator(BaseValidator):
         self,
         collection: AsyncIOMotorCollection[Dict[str, Any]],
         field: str,
-        model_class: Type[ModelInterface],
+        model_class: Type[ModelProtocol],
         message: Optional[str] = None,
         case_sensitive: bool = True,
         exclude_id: Optional[ObjectId] = None,
@@ -105,7 +105,7 @@ class UniqueValidator(BaseValidator):
 def validate_unique(
     collection: AsyncIOMotorCollection[Dict[str, Any]],
     field: str,
-    model_class: Type[ModelInterface],
+    model_class: Type[ModelProtocol],
     message: Optional[str] = None,
     case_sensitive: bool = True,
     exclude_id: Optional[ObjectId] = None,

@@ -119,10 +119,10 @@ ValidatorFunc = Callable[[Any], None]
 
 if TYPE_CHECKING:
     from earnorm.base.model.base import BaseModel as BaseModelType
-    from earnorm.fields.base import Field
+    from earnorm.fields.base import BaseField
 
     M = TypeVar("M", bound="BaseModelType")  # Model type
-    F = TypeVar("F", bound="Field[Any]")  # Field type with Any type parameter
+    F = TypeVar("F", bound="BaseField[Any]")  # Field type with Any type parameter
 else:
     M = TypeVar("M")  # Model type at runtime
     F = TypeVar("F")  # Field type at runtime
@@ -209,7 +209,7 @@ class ModelProtocol(Protocol):
         """Get transaction context manager."""
         ...
 
-    async def _prefetch_field(self, field: "Field[Any]") -> None:
+    async def _prefetch_field(self, field: "BaseField[Any]") -> None:
         """Setup prefetching for field."""
         ...
 
