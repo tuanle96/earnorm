@@ -296,8 +296,8 @@ class MongoAdapter(AsyncDatabaseAdapter[ModelT]):
         docs = [model.to_dict() for model in models]
         result = await collection.insert_many(docs)
 
-        for model, id in zip(models, result.inserted_ids):
-            model.id = id
+        for model, _id in zip(models, result.inserted_ids):  # type: ignore
+            model.id = _id
         return models
 
     async def update(self, model: ModelT) -> ModelT:

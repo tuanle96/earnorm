@@ -64,7 +64,7 @@ class AsyncDatabaseAdapter(Generic[ModelT], ABC):
         pass
 
     @abstractmethod
-    def get_connection(self) -> Any:
+    async def get_connection(self) -> Any:
         """Get database connection.
 
         Returns:
