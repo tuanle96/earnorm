@@ -37,9 +37,15 @@ Examples:
 """
 
 import logging
-from typing import Any, Dict, Optional, cast
+from typing import Any, Dict, Optional, TypeVar, cast
 
-from redis.asyncio import Redis  # type: ignore
+try:
+    from redis.asyncio import Redis  # type: ignore
+except ImportError as e:
+    raise ImportError(
+        "Redis package is not installed. Please install it with: "
+        "pip install 'redis[hiredis]>=4.2.0'"
+    ) from e
 
 from earnorm.di import container
 from earnorm.events.backends.base import EventBackend
@@ -48,6 +54,10 @@ from earnorm.events.core.exceptions import RedisConnectionError
 from earnorm.pool.backends.redis.pool import RedisPool
 
 logger = logging.getLogger(__name__)
+
+# Type variables for Redis pool
+DB = TypeVar("DB", bound=Redis)
+COLL = TypeVar("COLL", bound=None)
 
 
 class RedisBackend(EventBackend):
@@ -79,7 +89,16 @@ class RedisBackend(EventBackend):
         self._db = db
         self._password = password
         self._kwargs = kwargs
-        self._pool: Optional[RedisPool[Redis]] = None
+        self._pool: Optional[RedisPool[Redis, None]] = None
+
+    @property
+    def is_connected(self) -> bool:
+        """Check if backend is connected.
+
+        Returns:
+            bool: True if connected to Redis
+        """
+        return self._pool is not None
 
     @property
     def id(self) -> str:
@@ -110,7 +129,7 @@ class RedisBackend(EventBackend):
             if not pool:
                 raise RedisConnectionError("Redis pool not found in container")
 
-            self._pool = cast(RedisPool[Redis], pool)
+            self._pool = cast(RedisPool[Redis, None], pool)
         except Exception as e:
             raise RedisConnectionError(f"Failed to get Redis pool: {str(e)}") from e
 

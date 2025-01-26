@@ -35,7 +35,13 @@ import asyncio
 import logging
 from typing import Any, AsyncContextManager, Optional, Set, TypeVar, cast
 
-from redis.asyncio import Redis
+try:
+    from redis.asyncio import Redis
+except ImportError as e:
+    raise ImportError(
+        "Redis package is not installed. Please install it with: "
+        "pip install 'redis[hiredis]>=4.2.0'"
+    ) from e
 
 from earnorm.exceptions import PoolExhaustedError, RedisConnectionError
 from earnorm.pool.backends.redis.connection import RedisConnection
@@ -291,7 +297,8 @@ class RedisPool(AsyncPoolProtocol[DB, COLL]):
         try:
             result = await self._client.ping()  # type: ignore
             return bool(result)
-        except Exception:
+        except Exception as e:
+            logger.error("Failed to ping Redis: %s", str(e))
             return False
 
     def get_stats(self) -> dict[str, Any]:
