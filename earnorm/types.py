@@ -58,6 +58,7 @@ from typing import (
     Optional,
     Protocol,
     Set,
+    Type,
     TypeAlias,
     TypeVar,
     Union,
@@ -120,7 +121,7 @@ if TYPE_CHECKING:
     from earnorm.base.model.base import BaseModel as BaseModelType
     from earnorm.fields.base import Field
 
-    M = TypeVar("M", bound="BaseModelType[Any]")  # Model type
+    M = TypeVar("M", bound="BaseModelType")  # Model type
     F = TypeVar("F", bound="Field[Any]")  # Field type with Any type parameter
 else:
     M = TypeVar("M")  # Model type at runtime
@@ -180,9 +181,7 @@ class ModelProtocol(Protocol):
         ...
 
     @classmethod
-    async def browse(
-        cls, ids: Union[int, List[int]]
-    ) -> Union["ModelProtocol", List["ModelProtocol"]]:
+    async def browse(cls: Type[M], ids: Union[int, List[int]]) -> Union[M, List[M]]:
         """Browse records by IDs.
 
         Args:

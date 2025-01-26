@@ -16,7 +16,7 @@ Examples:
     >>> query.sort("name", ascending=True)
     >>> query.limit(10)
     >>> query.offset(20)
-    >>> results = await query.execute_async()
+    >>> results = await query.execute()
 """
 
 from typing import List, Optional, Type, TypeVar, Union
@@ -98,8 +98,8 @@ class MongoQuery(AsyncQuery[ModelT]):
             for field, ascending in self._sort_fields
         ]
 
-    async def execute_async(self) -> List[ModelT]:
-        """Execute query and return results asynchronously.
+    async def execute(self) -> List[ModelT]:
+        """Execute query and return results.
 
         Returns:
             Query results
@@ -117,8 +117,8 @@ class MongoQuery(AsyncQuery[ModelT]):
             results.append(model)
         return results
 
-    async def count_async(self) -> int:
-        """Count results without fetching them asynchronously.
+    async def count(self) -> int:
+        """Count results without fetching them.
 
         Returns:
             Number of results
@@ -126,17 +126,17 @@ class MongoQuery(AsyncQuery[ModelT]):
         count = await self._collection.count_documents(self.to_filter())
         return count
 
-    async def exists_async(self) -> bool:
-        """Check if any results exist asynchronously.
+    async def exists(self) -> bool:
+        """Check if any results exist.
 
         Returns:
             True if results exist
         """
-        count = await self.count_async()
+        count = await self.count()
         return count > 0
 
-    async def first_async(self) -> Optional[ModelT]:
-        """Get first result or None asynchronously.
+    async def first(self) -> Optional[ModelT]:
+        """Get first result or None.
 
         Returns:
             First result or None
@@ -149,3 +149,26 @@ class MongoQuery(AsyncQuery[ModelT]):
         model = self._model_cls()
         model.from_dict(doc)
         return model
+
+    async def update(self, values: JsonDict) -> int:
+        """Update matching documents.
+
+        Args:
+            values: Values to update
+
+        Returns:
+            Number of updated documents
+        """
+        result = await self._collection.update_many(
+            filter=self.to_filter(), update={"$set": values}
+        )
+        return result.modified_count
+
+    async def delete(self) -> int:
+        """Delete matching documents.
+
+        Returns:
+            Number of deleted documents
+        """
+        result = await self._collection.delete_many(filter=self.to_filter())
+        return result.deleted_count

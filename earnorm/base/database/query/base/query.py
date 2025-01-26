@@ -33,7 +33,7 @@ Examples:
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Generic, List, Optional, TypeVar
+from typing import Any, Generic, List, Optional, Self, TypeVar
 
 from earnorm.base.domain.expression import DomainExpression, Operator
 from earnorm.types import DatabaseModel, JsonDict, ValueType
@@ -41,11 +41,10 @@ from earnorm.types import DatabaseModel, JsonDict, ValueType
 ModelT = TypeVar("ModelT", bound=DatabaseModel)
 
 
-class Query(Generic[ModelT], ABC):
+class BaseQuery(Generic[ModelT], ABC):
     """Base class for all database queries.
 
-    This class defines the interface that all database-specific queries must implement.
-    It provides methods for filtering, sorting, limiting, and executing queries.
+    This class defines the common attributes and methods for all queries.
 
     Args:
         ModelT: Type of model being queried
@@ -58,7 +57,7 @@ class Query(Generic[ModelT], ABC):
         self._limit: Optional[int] = None
         self._offset: Optional[int] = None
 
-    def filter(self, domain: DomainExpression[ValueType]) -> "Query[ModelT]":
+    def filter(self, domain: DomainExpression[ValueType]) -> Self:
         """Add domain expression filter.
 
         Args:
@@ -74,7 +73,7 @@ class Query(Generic[ModelT], ABC):
         self._domain = domain
         return self
 
-    def sort(self, field: str, ascending: bool = True) -> "Query[ModelT]":
+    def sort(self, field: str, ascending: bool = True) -> Self:
         """Add sort field.
 
         Args:
@@ -92,7 +91,7 @@ class Query(Generic[ModelT], ABC):
         self._sort_fields.append((field, ascending))
         return self
 
-    def limit(self, limit: int) -> "Query[ModelT]":
+    def limit(self, limit: int) -> Self:
         """Set result limit.
 
         Args:
@@ -109,7 +108,7 @@ class Query(Generic[ModelT], ABC):
         self._limit = limit
         return self
 
-    def offset(self, offset: int) -> "Query[ModelT]":
+    def offset(self, offset: int) -> Self:
         """Set result offset.
 
         Args:
@@ -144,6 +143,17 @@ class Query(Generic[ModelT], ABC):
         """
         pass
 
+
+class Query(BaseQuery[ModelT], ABC):
+    """Base class for all synchronous database queries.
+
+    This class defines the interface that all database-specific queries must implement.
+    It provides methods for filtering, sorting, limiting, and executing queries.
+
+    Args:
+        ModelT: Type of model being queried
+    """
+
     @abstractmethod
     def execute(self) -> List[ModelT]:
         """Execute query and return results.
@@ -181,8 +191,8 @@ class Query(Generic[ModelT], ABC):
         pass
 
 
-class AsyncQuery(Query[ModelT], ABC):
-    """Base class for all async database queries.
+class AsyncQuery(BaseQuery[ModelT], ABC):
+    """Base class for all asynchronous database queries.
 
     This class defines the interface that all async database-specific queries must implement.
     It provides methods for filtering, sorting, limiting, and executing queries asynchronously.
@@ -191,40 +201,8 @@ class AsyncQuery(Query[ModelT], ABC):
         ModelT: Type of model being queried
     """
 
-    def execute(self) -> List[ModelT]:
-        """Execute query and return results.
-
-        Returns:
-            Query results
-        """
-        raise NotImplementedError("Use execute_async() instead")
-
-    def count(self) -> int:
-        """Count results without fetching them.
-
-        Returns:
-            Number of results
-        """
-        raise NotImplementedError("Use count_async() instead")
-
-    def exists(self) -> bool:
-        """Check if any results exist.
-
-        Returns:
-            True if results exist
-        """
-        raise NotImplementedError("Use exists_async() instead")
-
-    def first(self) -> Optional[ModelT]:
-        """Get first result or None.
-
-        Returns:
-            First result or None
-        """
-        raise NotImplementedError("Use first_async() instead")
-
     @abstractmethod
-    async def execute_async(self) -> List[ModelT]:
+    async def execute(self) -> List[ModelT]:
         """Execute query and return results asynchronously.
 
         Returns:
@@ -233,7 +211,7 @@ class AsyncQuery(Query[ModelT], ABC):
         pass
 
     @abstractmethod
-    async def count_async(self) -> int:
+    async def count(self) -> int:
         """Count results without fetching them asynchronously.
 
         Returns:
@@ -242,7 +220,7 @@ class AsyncQuery(Query[ModelT], ABC):
         pass
 
     @abstractmethod
-    async def exists_async(self) -> bool:
+    async def exists(self) -> bool:
         """Check if any results exist asynchronously.
 
         Returns:
@@ -251,11 +229,32 @@ class AsyncQuery(Query[ModelT], ABC):
         pass
 
     @abstractmethod
-    async def first_async(self) -> Optional[ModelT]:
+    async def first(self) -> Optional[ModelT]:
         """Get first result or None asynchronously.
 
         Returns:
             First result or None
+        """
+        pass
+
+    @abstractmethod
+    async def update(self, values: JsonDict) -> int:
+        """Update matching records asynchronously.
+
+        Args:
+            values: Values to update
+
+        Returns:
+            Number of updated records
+        """
+        pass
+
+    @abstractmethod
+    async def delete(self) -> int:
+        """Delete matching records asynchronously.
+
+        Returns:
+            Number of deleted records
         """
         pass
 

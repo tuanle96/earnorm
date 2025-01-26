@@ -33,7 +33,7 @@ from motor.motor_asyncio import (
 from pymongo.collection import Collection
 from pymongo.database import Database
 
-from earnorm.base.database.async_adapter import AsyncDatabaseAdapter
+from earnorm.base.database.adapter import DatabaseAdapter
 from earnorm.base.database.query.backends.mongo.builder import MongoQueryBuilder
 from earnorm.base.database.query.backends.mongo.query import MongoQuery
 from earnorm.base.database.transaction.backends.mongo import MongoTransactionManager
@@ -45,7 +45,7 @@ from earnorm.types import DatabaseModel, JsonDict
 ModelT = TypeVar("ModelT", bound=DatabaseModel)
 
 
-class MongoAdapter(AsyncDatabaseAdapter[ModelT]):
+class MongoAdapter(DatabaseAdapter[ModelT]):
     """MongoDB adapter implementation.
 
     This class provides MongoDB-specific implementation of the database adapter interface.

@@ -21,7 +21,7 @@ Examples:
 from abc import ABC, abstractmethod
 from typing import Any, Generic, List, Type, TypeVar
 
-from earnorm.base.database.query.base.query import Query
+from earnorm.base.database.query.base.query import AsyncQuery
 from earnorm.base.database.transaction.base import TransactionManager
 from earnorm.types import DatabaseModel
 
@@ -80,14 +80,14 @@ class DatabaseAdapter(Generic[ModelT], ABC):
         pass
 
     @abstractmethod
-    async def query(self, model_type: Type[ModelT]) -> Query[ModelT]:
+    async def query(self, model_type: Type[ModelT]) -> AsyncQuery[ModelT]:
         """Create query for model type.
 
         Args:
             model_type: Type of model to query
 
         Returns:
-            Query builder
+            Async query builder
         """
         pass
 
@@ -178,5 +178,15 @@ class DatabaseAdapter(Generic[ModelT], ABC):
 
         Raises:
             ValueError: If any model has no ID
+        """
+        pass
+
+    @property
+    @abstractmethod
+    def backend_type(self) -> str:
+        """Get backend type.
+
+        Returns:
+            Backend type (e.g. 'mongodb', 'postgresql', etc.)
         """
         pass
