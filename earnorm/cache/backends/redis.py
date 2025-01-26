@@ -27,19 +27,36 @@ Examples:
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Sequence, cast
+from typing import (
+    Any,
+    AsyncContextManager,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    Sequence,
+    TypeVar,
+    cast,
+)
 
-# pylint: disable=no-name-in-module,import-error
+# pylint: disable=no-name-in-module,import-error,import-self
 from redis.asyncio import Redis
 
 from earnorm.cache.core.backend import BaseCacheBackend
 from earnorm.cache.core.exceptions import CacheError
 from earnorm.cache.core.serializer import SerializerProtocol
 from earnorm.di import Container
-from earnorm.pool.protocols.pool import PoolProtocol
 from earnorm.pool.registry import PoolRegistry
 
 logger = logging.getLogger(__name__)
+
+# Define type variables
+RedisConn = TypeVar("RedisConn", bound=Redis, covariant=True)
+
+
+# Define Pool Protocol
+class AsyncPoolProtocol(Protocol[RedisConn]):
+    async def connection(self) -> AsyncContextManager[RedisConn]: ...
 
 
 class RedisBackend(BaseCacheBackend):
@@ -64,10 +81,10 @@ class RedisBackend(BaseCacheBackend):
         self._container = container
         self._prefix = prefix
         self._ttl = ttl
-        self._pool: Optional[PoolProtocol[Redis, Redis]] = None
+        self._pool: Optional[AsyncPoolProtocol[Redis]] = None
 
     @property
-    def pool(self) -> PoolProtocol[Redis, Redis]:
+    def pool(self) -> AsyncPoolProtocol[Redis]:
         """Get Redis pool.
 
         Returns:
@@ -78,10 +95,7 @@ class RedisBackend(BaseCacheBackend):
         """
         if self._pool is None:
             try:
-                self._pool = cast(
-                    PoolProtocol[Redis, Redis],
-                    PoolRegistry.get("redis")
-                )
+                self._pool = cast(AsyncPoolProtocol[Redis], PoolRegistry.get("redis"))
             except Exception as e:
                 raise CacheError("Failed to get Redis pool") from e
         return self._pool
@@ -111,7 +125,7 @@ class RedisBackend(BaseCacheBackend):
         """
         try:
             async with await self.pool.connection() as conn:
-                value = await cast(Redis, conn).get(self._prefix_key(key))
+                value = await conn.get(self._prefix_key(key))
                 if value is None:
                     return None
                 return self._serializer.loads(value.decode())
@@ -131,7 +145,7 @@ class RedisBackend(BaseCacheBackend):
         """
         try:
             async with await self.pool.connection() as conn:
-                await cast(Redis, conn).set(
+                await conn.set(
                     self._prefix_key(key),
                     self._serializer.dumps(value),
                     ex=ttl or self._ttl,
@@ -150,7 +164,7 @@ class RedisBackend(BaseCacheBackend):
         """
         try:
             async with await self.pool.connection() as conn:
-                await cast(Redis, conn).delete(self._prefix_key(key))
+                await conn.delete(self._prefix_key(key))
         except Exception as e:
             raise CacheError(f"Failed to delete value for key {key}") from e
 
@@ -172,8 +186,7 @@ class RedisBackend(BaseCacheBackend):
         try:
             async with await self.pool.connection() as conn:
                 # Get values in pipeline
-                redis_conn = cast(Redis, conn)
-                pipeline = redis_conn.pipeline()
+                pipeline = conn.pipeline()
                 prefixed_keys = [self._prefix_key(key) for key in keys]
                 for key in prefixed_keys:
                     pipeline.get(key)
@@ -206,8 +219,7 @@ class RedisBackend(BaseCacheBackend):
         try:
             async with await self.pool.connection() as conn:
                 # Set values in pipeline
-                redis_conn = cast(Redis, conn)
-                pipeline = redis_conn.pipeline()
+                pipeline = conn.pipeline()
                 for key, value in mapping.items():
                     pipeline.set(
                         self._prefix_key(key),
@@ -233,8 +245,7 @@ class RedisBackend(BaseCacheBackend):
         try:
             async with await self.pool.connection() as conn:
                 # Delete values in pipeline
-                redis_conn = cast(Redis, conn)
-                pipeline = redis_conn.pipeline()
+                pipeline = conn.pipeline()
                 for key in keys:
                     pipeline.delete(self._prefix_key(key))
                 await pipeline.execute()
