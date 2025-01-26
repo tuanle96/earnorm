@@ -5,6 +5,8 @@ import asyncio
 from contextlib import AbstractAsyncContextManager
 from typing import Any, Generic, TypeVar
 
+# pylint: disable=redefined-builtin
+from earnorm.exceptions import ConnectionError, PoolExhaustedError
 from earnorm.pool.core.circuit import CircuitBreaker
 from earnorm.pool.core.retry import RetryPolicy
 from earnorm.pool.protocols.connection import AsyncConnectionProtocol
@@ -27,6 +29,7 @@ class BasePool(
         max_lifetime: int = 3600,
         retry_policy: RetryPolicy | None = None,
         circuit_breaker: CircuitBreaker | None = None,
+        backend: str = "unknown",
     ) -> None:
         """Initialize base pool.
 
@@ -38,6 +41,7 @@ class BasePool(
             max_lifetime: Maximum lifetime in seconds
             retry_policy: Retry policy
             circuit_breaker: Circuit breaker
+            backend: Database backend name
         """
         self._pool_size = pool_size
         self._min_size = min_size
@@ -46,6 +50,7 @@ class BasePool(
         self._max_lifetime = max_lifetime
         self._retry_policy = retry_policy
         self._circuit_breaker = circuit_breaker
+        self._backend = backend
 
         self._available: list[AsyncConnectionProtocol[DB, COLL]] = []
         self._in_use: list[AsyncConnectionProtocol[DB, COLL]] = []
@@ -57,6 +62,9 @@ class BasePool(
 
         Returns:
             AsyncConnectionProtocol: New connection
+
+        Raises:
+            ConnectionError: If connection creation fails
         """
         ...
 
@@ -65,6 +73,9 @@ class BasePool(
 
         Returns:
             BasePool: Pool instance
+
+        Raises:
+            ConnectionError: If connection fails
         """
         await self.connect()
         return self
@@ -80,14 +91,21 @@ class BasePool(
         await self.disconnect()
 
     async def connect(self) -> None:
-        """Connect to database."""
+        """Connect to database.
+
+        Raises:
+            ConnectionError: If connection fails
+        """
         async with self._lock:
             for _ in range(self._pool_size):
                 try:
                     conn = self._create_connection()
                     self._available.append(conn)
-                except Exception:
-                    break
+                except Exception as e:
+                    raise ConnectionError(
+                        f"Failed to create connection: {e}",
+                        backend=self._backend,
+                    ) from e
 
     async def disconnect(self) -> None:
         """Disconnect from database."""
@@ -104,7 +122,7 @@ class BasePool(
             AsyncConnectionProtocol: Connection instance
 
         Raises:
-            RuntimeError: If no connections are available
+            PoolExhaustedError: If no connections are available
         """
         async with self._lock:
             if self._available:
@@ -113,11 +131,23 @@ class BasePool(
                 return conn
 
             if len(self._in_use) < self._max_size:
-                conn = self._create_connection()
-                self._in_use.append(conn)
-                return conn
+                try:
+                    conn = self._create_connection()
+                    self._in_use.append(conn)
+                    return conn
+                except Exception as e:
+                    raise ConnectionError(
+                        f"Failed to create connection: {e}",
+                        backend=self._backend,
+                    ) from e
 
-            raise RuntimeError("No connections available")
+            raise PoolExhaustedError(
+                "Connection pool exhausted",
+                backend=self._backend,
+                pool_size=self._max_size,
+                active_connections=len(self._in_use),
+                waiting_requests=0,
+            )
 
     async def release(self, conn: AsyncConnectionProtocol[DB, COLL]) -> None:
         """Release a connection.
@@ -147,8 +177,11 @@ class BasePool(
                 return await conn.ping()
             finally:
                 await self.release(conn)
-        except Exception:
-            return False
+        except Exception as e:
+            raise ConnectionError(
+                f"Failed to ping connection: {e}",
+                backend=self._backend,
+            ) from e
 
     def get_stats(self) -> dict[str, Any]:
         """Get pool statistics.

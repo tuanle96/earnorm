@@ -128,6 +128,15 @@ class ConnectionFactory(Protocol[DBType, CollType]):
         """
         ...
 
+    @property
+    def backend(self) -> str:
+        """Get backend name.
+
+        Returns:
+            str: Backend name
+        """
+        ...
+
 
 @dataclass
 class ConnectionWrapper:
@@ -224,7 +233,10 @@ class ConnectionManager:
             conn = await self._factory.create_connection()
             return ConnectionWrapper(connection=conn)
         except Exception as e:
-            raise ConnectionError(f"Failed to create connection: {e}") from e
+            raise ConnectionError(
+                f"Failed to create connection: {e}",
+                backend=self._factory.backend,
+            ) from e
 
     async def _validate_connection(self, wrapper: ConnectionWrapper) -> bool:
         """Validate connection health.
@@ -256,95 +268,84 @@ class ConnectionManager:
             await self._factory.cleanup_connection(wrapper.connection)
             wrapper.state = ConnectionState.CLOSED
         except Exception as e:
-            logger.error(f"Failed to clean up connection: {e}")
-            wrapper.state = ConnectionState.ERROR
+            logger.error(f"Failed to cleanup connection: {e}", exc_info=True)
             wrapper.last_error = e
             wrapper.error_severity = self._factory.classify_error(e)
+            wrapper.state = ConnectionState.ERROR
 
     async def _cleanup_loop(self) -> None:
-        """Background cleanup loop."""
+        """Background task for connection cleanup."""
         while True:
             try:
                 await asyncio.sleep(self._cleanup_interval)
-                await self._cleanup_stale()
+                await self._cleanup_idle()
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Error in cleanup loop: {e}")
+                logger.error(f"Error in cleanup loop: {e}", exc_info=True)
 
-    async def _cleanup_stale(self) -> None:
-        """Clean up stale connections."""
+    async def _cleanup_idle(self) -> None:
+        """Clean up idle connections."""
+        now = time.time()
         async with self._lock:
-            now = time.time()
-            for conn in list(self._connections):
+            for wrapper in list(self._idle_connections):
                 if (
-                    now - conn.metrics.last_used_at > self._max_idle_time
-                    or now - conn.metrics.created_at > self._max_lifetime
+                    now - wrapper.metrics.last_used_at > self._max_idle_time
+                    or now - wrapper.metrics.created_at > self._max_lifetime
                 ):
-                    await self._cleanup_connection(conn)
-                    self._connections.remove(conn)
-                    self._idle_connections.discard(conn)
-
-            # Maintain minimum pool size
-            while len(self._connections) < self._min_size:
-                try:
-                    conn = await self._create_connection()
-                    self._connections.append(conn)
-                    self._idle_connections.add(conn)
-                except Exception as e:
-                    logger.error(f"Failed to maintain minimum pool size: {e}")
-                    break
+                    await self._cleanup_connection(wrapper)
+                    self._idle_connections.remove(wrapper)
+                    self._connections.remove(wrapper)
 
     async def _cleanup_all(self) -> None:
         """Clean up all connections."""
         async with self._lock:
-            for conn in self._connections:
-                await self._cleanup_connection(conn)
+            for wrapper in self._connections:
+                await self._cleanup_connection(wrapper)
             self._connections.clear()
             self._idle_connections.clear()
 
     async def acquire(self) -> AsyncContextManager[Any]:
-        """Acquire a connection.
+        """Acquire a connection from the pool.
 
         Returns:
             AsyncContextManager: Connection context manager
 
         Raises:
-            PoolExhaustedError: If no connections are available
+            PoolExhaustedError: If pool is exhausted
         """
         async with self._lock:
-            # Try to get an idle connection
-            if self._idle_connections:
-                conn = self._idle_connections.pop()
-                if await self._validate_connection(conn):
-                    conn.state = ConnectionState.BUSY
-                    return conn.connection
+            if not self._idle_connections:
+                if len(self._connections) >= self._max_size:
+                    raise PoolExhaustedError(
+                        "Connection pool exhausted",
+                        backend=self._factory.backend,
+                        pool_size=self._max_size,
+                        active_connections=len(self._connections),
+                        waiting_requests=0,
+                    )
+                wrapper = await self._create_connection()
+                self._connections.append(wrapper)
+            else:
+                wrapper = self._idle_connections.pop()
 
-            # Try to create a new connection if pool not full
-            if len(self._connections) < self._max_size:
-                try:
-                    conn = await self._create_connection()
-                    self._connections.append(conn)
-                    conn.state = ConnectionState.BUSY
-                    return conn.connection
-                except Exception as e:
-                    raise PoolExhaustedError("Failed to create new connection") from e
-
-            raise PoolExhaustedError("No connections available")
+            wrapper.state = ConnectionState.BUSY
+            wrapper.metrics.last_used_at = time.time()
+            return wrapper.connection
 
     async def release(self, connection: Any) -> None:
-        """Release a connection.
+        """Release a connection back to the pool.
 
         Args:
             connection: Connection to release
         """
         async with self._lock:
-            for conn in self._connections:
-                if conn.connection == connection:
-                    if await self._validate_connection(conn):
-                        conn.state = ConnectionState.IDLE
-                        self._idle_connections.add(conn)
+            for wrapper in self._connections:
+                if wrapper.connection == connection:
+                    if not await self._validate_connection(wrapper):
+                        await self._cleanup_connection(wrapper)
+                        self._connections.remove(wrapper)
                     else:
-                        await self._cleanup_connection(conn)
-                        self._connections.remove(conn)
+                        wrapper.state = ConnectionState.IDLE
+                        self._idle_connections.add(wrapper)
                     break

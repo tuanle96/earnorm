@@ -13,18 +13,19 @@ Examples:
     @with_resilience(
         retry_policy=RetryPolicy(max_retries=3),
         circuit_breaker=CircuitBreaker(failure_threshold=5),
+        backend="mongodb",
     )
     async def find_user(user_id: str) -> Dict[str, Any]:
         return await db.users.find_one({"_id": user_id})
 
     # Use only retry
-    @with_resilience(retry_policy=RetryPolicy(max_retries=3))
+    @with_resilience(retry_policy=RetryPolicy(max_retries=3), backend="mongodb")
     async def create_user(user: Dict[str, Any]) -> str:
         result = await db.users.insert_one(user)
         return str(result.inserted_id)
 
     # Use only circuit breaker
-    @with_resilience(circuit_breaker=CircuitBreaker(failure_threshold=5))
+    @with_resilience(circuit_breaker=CircuitBreaker(failure_threshold=5), backend="mongodb")
     async def update_user(user_id: str, update: Dict[str, Any]) -> bool:
         result = await db.users.update_one(
             {"_id": user_id},
@@ -140,6 +141,7 @@ def with_resilience(
     *,
     retry_policy: Optional[RetryPolicy] = None,
     circuit_breaker: Optional[CircuitBreaker] = None,
+    backend: str = "unknown",
 ) -> Callable[[AsyncFunc[T]], AsyncFunc[T]]: ...
 
 
@@ -148,6 +150,7 @@ def with_resilience(
     *,
     retry_policy: Optional[RetryPolicy] = None,
     circuit_breaker: Optional[CircuitBreaker] = None,
+    backend: str = "unknown",
 ) -> Union[AsyncFunc[T], Callable[[AsyncFunc[T]], AsyncFunc[T]]]:
     """Decorator to add retry and circuit breaker functionality to async database operations.
 
@@ -160,6 +163,7 @@ def with_resilience(
         func: The async function to decorate
         retry_policy: Configuration for retry mechanism
         circuit_breaker: Configuration for circuit breaker
+        backend: Database backend name
 
     Returns:
         Decorated async function with retry and/or circuit breaker functionality
@@ -172,19 +176,21 @@ def with_resilience(
         >>> @with_resilience(
         ...     retry_policy=RetryPolicy(max_retries=3),
         ...     circuit_breaker=CircuitBreaker(failure_threshold=5),
+        ...     backend="mongodb",
         ... )
         ... async def database_operation() -> Dict[str, Any]:
         ...     return await collection.find_one({"status": "active"})
     """
     if func is None:
-        return lambda f: _with_resilience(f, retry_policy, circuit_breaker)
-    return _with_resilience(func, retry_policy, circuit_breaker)
+        return lambda f: _with_resilience(f, retry_policy, circuit_breaker, backend)
+    return _with_resilience(func, retry_policy, circuit_breaker, backend)
 
 
 def _with_resilience(
     func: AsyncFunc[T],
     retry_policy: Optional[RetryPolicy] = None,
     circuit_breaker: Optional[CircuitBreaker] = None,
+    backend: str = "unknown",
 ) -> AsyncFunc[T]:
     """Internal implementation of with_resilience decorator."""
 
@@ -192,17 +198,22 @@ def _with_resilience(
     async def wrapper(*args: Any, **kwargs: Any) -> T:
         operation_name = f"{func.__module__}.{func.__qualname__}"
         logger.debug(
-            "Executing operation %s with resilience (retry=%s, circuit_breaker=%s)",
+            "Executing operation %s with resilience (retry=%s, circuit_breaker=%s, backend=%s)",
             operation_name,
             bool(retry_policy),
             bool(circuit_breaker),
+            backend,
         )
 
         # Create retry context if policy provided
-        retry_ctx = RetryContext(retry_policy) if retry_policy else None
+        retry_ctx = (
+            RetryContext(retry_policy, backend=backend) if retry_policy else None
+        )
 
         # Create circuit breaker context if provided
         circuit_ctx = circuit_breaker if circuit_breaker else None
+        if circuit_ctx:
+            circuit_ctx._backend = backend  # type: ignore
 
         # Combine retry and circuit breaker
         async def execute_with_resilience() -> T:
@@ -232,48 +243,19 @@ def _with_resilience(
             )
             return result
 
-        except RetryError as e:
-            # Add context to retry error
-            context = getattr(e, "context", {})
-            attempts = context.get("attempts", 0)
-            elapsed = context.get("elapsed", 0.0)
-            error_msg = f"Operation {operation_name} failed after {attempts} retries"
-            error_context = {
-                "attempts": attempts,
-                "elapsed": elapsed,
-                "args": args,
-                "kwargs": kwargs,
-            }
+        except (RetryError, CircuitBreakerError) as e:
             logger.error(
-                error_msg,
-                extra={"error_context": error_context},
+                "Operation %s failed with resilience error: %s",
+                operation_name,
+                str(e),
                 exc_info=True,
+                extra={"error_context": getattr(e, "context", {})},
             )
-            raise RetryError(error_msg, error_context) from e
-
-        except CircuitBreakerError as e:
-            # Add context to circuit breaker error
-            context = getattr(e, "context", {})
-            state = context.get("state", "unknown")
-            failures = context.get("failures", 0)
-            error_msg = f"Circuit breaker for {operation_name} is {state}"
-            error_context = {
-                "state": state,
-                "failures": failures,
-                "args": args,
-                "kwargs": kwargs,
-            }
-            logger.error(
-                error_msg,
-                extra={"error_context": error_context},
-                exc_info=True,
-            )
-            raise CircuitBreakerError(error_msg, error_context) from e
+            raise
 
         except Exception as e:
-            # Log unexpected errors
             logger.error(
-                "Unexpected error in operation %s: %s",
+                "Operation %s failed with unexpected error: %s",
                 operation_name,
                 str(e),
                 exc_info=True,

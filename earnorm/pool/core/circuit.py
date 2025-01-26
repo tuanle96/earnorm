@@ -70,6 +70,7 @@ class CircuitBreaker:
         reset_timeout: float = 60.0,
         half_open_timeout: float = 5.0,
         excluded_exceptions: Optional[List[Type[Exception]]] = None,
+        backend: str = "unknown",
     ) -> None:
         """Initialize circuit breaker.
 
@@ -78,6 +79,7 @@ class CircuitBreaker:
             reset_timeout: Time in seconds before attempting reset
             half_open_timeout: Time in seconds to wait in half-open state
             excluded_exceptions: Exceptions that don't count as failures
+            backend: Database backend name
         """
         if failure_threshold < 1:
             raise ValueError("failure_threshold must be >= 1")
@@ -90,6 +92,7 @@ class CircuitBreaker:
         self._reset_timeout = reset_timeout
         self._half_open_timeout = half_open_timeout
         self._excluded_exceptions = excluded_exceptions or []
+        self._backend = backend
 
         self._state = CircuitState.CLOSED
         self._stats = CircuitStats()
@@ -170,14 +173,13 @@ class CircuitBreaker:
             CircuitBreakerError: If circuit is open
         """
         if self._state == CircuitState.OPEN:
+            reset_time = self._stats.state_change_time + self._reset_timeout
             raise CircuitBreakerError(
                 "Circuit is open",
-                {
-                    "state": self._state.value,
-                    "failures": self._stats.consecutive_failures,
-                    "last_failure": self._stats.last_failure_time,
-                    "reset_time": self._stats.state_change_time + self._reset_timeout,
-                },
+                backend=self._backend,
+                failures=self._stats.consecutive_failures,
+                last_failure_time=self._stats.last_failure_time,
+                reset_time=reset_time,
             )
 
     async def __aenter__(self) -> "CircuitBreaker":

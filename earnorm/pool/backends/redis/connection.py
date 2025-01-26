@@ -8,7 +8,7 @@ from redis.asyncio import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
-from earnorm.exceptions import DatabaseConnectionError, OperationError
+from earnorm.exceptions import ConnectionError, QueryError
 from earnorm.pool.core.circuit import CircuitBreaker
 from earnorm.pool.core.decorators import with_resilience
 from earnorm.pool.core.retry import RetryPolicy
@@ -59,6 +59,15 @@ class RedisConnection(AsyncConnectionProtocol[DB, None]):
         self._last_used_at = time.time()
 
     @property
+    def backend(self) -> str:
+        """Get backend name.
+
+        Returns:
+            str: Backend name
+        """
+        return "redis"
+
+    @property
     def created_at(self) -> float:
         """Get connection creation timestamp."""
         return self._created_at
@@ -89,7 +98,7 @@ class RedisConnection(AsyncConnectionProtocol[DB, None]):
         """Update last used timestamp."""
         self._last_used_at = time.time()
 
-    @with_resilience()
+    @with_resilience(backend="redis")
     async def _ping_impl(self) -> bool:
         """Internal ping implementation."""
         try:
@@ -97,7 +106,10 @@ class RedisConnection(AsyncConnectionProtocol[DB, None]):
             self.touch()
             return bool(result)
         except (RedisConnectionError, RedisTimeoutError) as e:
-            raise DatabaseConnectionError(f"Failed to ping Redis: {e!s}") from e
+            raise ConnectionError(
+                f"Failed to ping Redis: {e!s}",
+                backend=self.backend,
+            ) from e
 
     async def ping(self) -> bool:
         """Check connection health."""
@@ -107,17 +119,19 @@ class RedisConnection(AsyncConnectionProtocol[DB, None]):
         """Close connection."""
         await self._client.close()
 
-    @with_resilience()
-    async def _execute_impl(self, operation: str, **kwargs: Any) -> Any:
+    @with_resilience(backend="redis")
+    async def _execute_impl(self, operation: str, *args: Any, **kwargs: Any) -> Any:
         """Internal execute implementation."""
         try:
             self.touch()
             method = getattr(self._client, operation)
-            result = await method(**kwargs)
+            result = await method(*args, **kwargs)
             return result
         except Exception as e:
-            raise OperationError(
-                f"Failed to execute operation {operation}: {e!s}"
+            raise QueryError(
+                f"Failed to execute operation {operation}: {e!s}",
+                backend=self.backend,
+                query=operation,
             ) from e
 
     async def execute(self, operation: str, **kwargs: Any) -> Any:
@@ -131,7 +145,7 @@ class RedisConnection(AsyncConnectionProtocol[DB, None]):
             Operation result
 
         Raises:
-            OperationError: If operation fails
+            QueryError: If operation fails
         """
         return await self._execute_impl(operation, **kwargs)
 
@@ -162,7 +176,10 @@ class RedisConnection(AsyncConnectionProtocol[DB, None]):
         try:
             await self.ping()
         except Exception as e:
-            raise ConnectionError(f"Failed to connect to Redis: {e!s}") from e
+            raise ConnectionError(
+                f"Failed to connect to Redis: {e!s}",
+                backend=self.backend,
+            ) from e
 
     async def disconnect(self) -> None:
         """Disconnect from Redis."""
@@ -180,6 +197,9 @@ class RedisConnection(AsyncConnectionProtocol[DB, None]):
 
         Returns:
             Operation result
+
+        Raises:
+            QueryError: If operation fails
 
         Examples:
             >>> # Set key
@@ -218,8 +238,4 @@ class RedisConnection(AsyncConnectionProtocol[DB, None]):
             >>> await conn.execute_typed("zrange", "zset", 0, -1)
             ["value"]
         """
-
-        async def _execute() -> Any:
-            return await self._execute_impl(operation, *args, **kwargs)
-
-        return _execute()
+        return await self._execute_impl(operation, *args, **kwargs)

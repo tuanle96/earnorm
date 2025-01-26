@@ -25,7 +25,8 @@ from motor.motor_asyncio import (
     AsyncIOMotorDatabase,
 )
 
-from earnorm.exceptions import ConnectionError, OperationError
+# pylint: disable=redefined-builtin
+from earnorm.exceptions import ConnectionError, QueryError
 from earnorm.pool.constants import DEFAULT_MAX_IDLE_TIME, DEFAULT_MAX_LIFETIME
 from earnorm.pool.core.circuit import CircuitBreaker
 from earnorm.pool.core.decorators import with_resilience
@@ -72,6 +73,15 @@ class MongoConnection(AsyncConnectionProtocol[DBType, CollType]):
         self._last_used_at = time.time()
 
     @property
+    def backend(self) -> str:
+        """Get backend name.
+
+        Returns:
+            str: Backend name
+        """
+        return "mongodb"
+
+    @property
     def created_at(self) -> float:
         """Get connection creation timestamp."""
         return self._created_at
@@ -102,7 +112,7 @@ class MongoConnection(AsyncConnectionProtocol[DBType, CollType]):
         """Update last used timestamp."""
         self._last_used_at = time.time()
 
-    @with_resilience()
+    @with_resilience(backend="mongodb")
     async def _ping_impl(self) -> bool:
         """Internal ping implementation."""
         try:
@@ -110,7 +120,10 @@ class MongoConnection(AsyncConnectionProtocol[DBType, CollType]):
             self.touch()
             return True
         except Exception as e:
-            raise ConnectionError(f"Failed to ping MongoDB: {e!s}") from e
+            raise ConnectionError(
+                f"Failed to ping MongoDB: {e!s}",
+                backend=self.backend,
+            ) from e
 
     async def ping(self) -> bool:
         """Check connection health."""
@@ -120,7 +133,7 @@ class MongoConnection(AsyncConnectionProtocol[DBType, CollType]):
         """Close connection."""
         self._client.close()
 
-    @with_resilience()
+    @with_resilience(backend="mongodb")
     async def _execute_impl(self, operation: str, **kwargs: Any) -> Any:
         """Internal execute implementation."""
         try:
@@ -130,8 +143,10 @@ class MongoConnection(AsyncConnectionProtocol[DBType, CollType]):
             result = await method(**kwargs)
             return result
         except Exception as e:
-            raise OperationError(
-                f"Failed to execute operation {operation}: {e!s}"
+            raise QueryError(
+                f"Failed to execute operation {operation}: {e!s}",
+                backend=self.backend,
+                query=operation,
             ) from e
 
     async def execute(self, operation: str, **kwargs: Any) -> Any:
@@ -145,7 +160,7 @@ class MongoConnection(AsyncConnectionProtocol[DBType, CollType]):
             Operation result
 
         Raises:
-            OperationError: If operation fails
+            QueryError: If operation fails
         """
         return await self._execute_impl(operation, **kwargs)
 
@@ -176,7 +191,10 @@ class MongoConnection(AsyncConnectionProtocol[DBType, CollType]):
         try:
             await self.ping()
         except Exception as e:
-            raise ConnectionError(f"Failed to connect to MongoDB: {e!s}") from e
+            raise ConnectionError(
+                f"Failed to connect to MongoDB: {e!s}",
+                backend=self.backend,
+            ) from e
 
     async def disconnect(self) -> None:
         """Disconnect from MongoDB."""

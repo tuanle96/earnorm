@@ -37,7 +37,7 @@ from typing import Any, AsyncContextManager, Optional, Set, TypeVar, cast
 
 from redis.asyncio import Redis
 
-from earnorm.exceptions import ConnectionError as DatabaseConnectionError
+from earnorm.exceptions import ConnectionError, PoolExhaustedError
 from earnorm.pool.backends.redis.connection import RedisConnection
 from earnorm.pool.core.circuit import CircuitBreaker
 from earnorm.pool.core.retry import RetryPolicy
@@ -96,6 +96,15 @@ class RedisPool(AsyncPoolProtocol[DB, COLL]):
         self._in_use: Set[AsyncConnectionProtocol[DB, COLL]] = set()
         self._lock = asyncio.Lock()
 
+    @property
+    def backend(self) -> str:
+        """Get backend name.
+
+        Returns:
+            str: Backend name
+        """
+        return "redis"
+
     def _create_connection(self) -> AsyncConnectionProtocol[DB, COLL]:
         """Create a new connection.
 
@@ -103,10 +112,13 @@ class RedisPool(AsyncPoolProtocol[DB, COLL]):
             AsyncConnectionProtocol: New connection
 
         Raises:
-            DatabaseConnectionError: If connection creation fails
+            ConnectionError: If connection creation fails
         """
         if not self._client:
-            raise DatabaseConnectionError("Pool is not connected")
+            raise ConnectionError(
+                "Pool is not connected",
+                backend=self.backend,
+            )
 
         return cast(
             AsyncConnectionProtocol[DB, COLL],
@@ -124,6 +136,10 @@ class RedisPool(AsyncPoolProtocol[DB, COLL]):
 
         Returns:
             Connection instance
+
+        Raises:
+            PoolExhaustedError: If no connections are available
+            ConnectionError: If connection creation fails
         """
         return _ConnectionManager(self)
 
@@ -131,28 +147,37 @@ class RedisPool(AsyncPoolProtocol[DB, COLL]):
         """Initialize pool.
 
         This method creates the initial connections.
+
+        Raises:
+            ConnectionError: If pool initialization fails
         """
         async with self._lock:
-            # Create client if not exists
-            if not self._client:
-                self._client = Redis(
-                    host=self._host,
-                    port=self._port,
-                    db=self._db,
-                    username=self._username,
-                    password=self._password,
-                    **self._kwargs,
+            try:
+                # Create client if not exists
+                if not self._client:
+                    self._client = Redis(
+                        host=self._host,
+                        port=self._port,
+                        db=self._db,
+                        username=self._username,
+                        password=self._password,
+                        **self._kwargs,
+                    )
+
+                # Create initial connections
+                for _ in range(self._min_size):
+                    conn = self._create_connection()
+                    self._available.add(conn)
+
+                logger.info(
+                    "Initialized Redis pool with %d connections",
+                    self.size,
                 )
-
-            # Create initial connections
-            for _ in range(self._min_size):
-                conn = self._create_connection()
-                self._available.add(conn)
-
-            logger.info(
-                "Initialized Redis pool with %d connections",
-                self.size,
-            )
+            except Exception as e:
+                raise ConnectionError(
+                    f"Failed to initialize Redis pool: {e!s}",
+                    backend=self.backend,
+                ) from e
 
     async def clear(self) -> None:
         """Clear all connections."""
@@ -180,12 +205,36 @@ class RedisPool(AsyncPoolProtocol[DB, COLL]):
         await self.destroy()
 
     async def acquire(self) -> AsyncConnectionProtocol[DB, COLL]:
-        """Acquire connection from pool."""
+        """Acquire connection from pool.
+
+        Returns:
+            AsyncConnectionProtocol: Connection instance
+
+        Raises:
+            PoolExhaustedError: If no connections are available
+            ConnectionError: If connection creation fails
+        """
         async with self._lock:
             # Get available connection or create new one
             if not self._available and self.size < self.max_size:
-                conn = self._create_connection()
-                self._available.add(conn)
+                try:
+                    conn = self._create_connection()
+                    self._available.add(conn)
+                except Exception as e:
+                    raise ConnectionError(
+                        f"Failed to create connection: {e!s}",
+                        backend=self.backend,
+                    ) from e
+
+            # Check if pool is exhausted
+            if not self._available:
+                raise PoolExhaustedError(
+                    "Connection pool exhausted",
+                    backend=self.backend,
+                    pool_size=self.max_size,
+                    active_connections=len(self._in_use),
+                    waiting_requests=0,
+                )
 
             # Get connection from available set
             conn = self._available.pop()
@@ -194,11 +243,21 @@ class RedisPool(AsyncPoolProtocol[DB, COLL]):
             return conn
 
     async def release(self, conn: AsyncConnectionProtocol[DB, COLL]) -> None:
-        """Release connection back to pool."""
+        """Release connection back to pool.
+
+        Args:
+            conn: Connection to release
+        """
         async with self._lock:
-            # Move connection back to available set
-            self._in_use.remove(conn)
-            self._available.add(conn)
+            try:
+                # Move connection back to available set
+                self._in_use.remove(conn)
+                if await conn.ping():
+                    self._available.add(conn)
+                else:
+                    await conn.close()
+            except ValueError:
+                pass
 
     @property
     def size(self) -> int:
@@ -276,6 +335,10 @@ class _ConnectionManager(AsyncContextManager[AsyncConnectionProtocol[DB, COLL]])
 
         Returns:
             Connection instance
+
+        Raises:
+            PoolExhaustedError: If no connections are available
+            ConnectionError: If connection creation fails
         """
         self.conn = await self.pool.acquire()
         return self.conn
@@ -286,7 +349,7 @@ class _ConnectionManager(AsyncContextManager[AsyncConnectionProtocol[DB, COLL]])
         Args:
             exc_type: Exception type
             exc_val: Exception value
-            exc_tb: Exception traceback
+            exc_tb: Traceback
         """
         if self.conn:
             await self.pool.release(self.conn)

@@ -3,7 +3,7 @@
 This module provides all custom exceptions used throughout EarnORM.
 """
 
-from typing import Optional
+from typing import Any, Dict, Optional
 
 
 class EarnORMError(Exception):
@@ -51,14 +51,14 @@ class FieldError(EarnORMError):
 class FieldValidationError(FieldError):
     """Error raised when field validation fails.
 
-    This error is raised when a field value fails validation,
-    either due to type mismatch, constraint violation, or
-    custom validation rules.
-
-    Attributes:
-        message: Error message
-        field_name: Name of field that caused the error
-        code: Error code for identifying validation error type
+        This error is raised when a field value fails validation,
+        either due to type mismatch, constraint violation, or
+        custom validation rules.
+    ko
+        Attributes:
+            message: Error message
+            field_name: Name of field that caused the error
+            code: Error code for identifying validation error type
     """
 
     def __init__(
@@ -155,6 +155,110 @@ class QueryError(DatabaseError):
         """
         self.query = query
         super().__init__(f"{message} (query={query})", backend=backend)
+
+
+class PoolError(DatabaseError):
+    """Base class for pool-related errors."""
+
+    def __init__(
+        self, message: str, *, backend: str, context: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Initialize pool error.
+
+        Args:
+            message: Error message
+            backend: Database backend name
+            context: Additional context information
+        """
+        self.context = context or {}
+        super().__init__(message, backend=backend)
+
+
+class PoolExhaustedError(PoolError):
+    """Error raised when connection pool is exhausted."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        backend: str,
+        pool_size: int,
+        active_connections: int,
+        waiting_requests: int,
+    ) -> None:
+        """Initialize pool exhausted error.
+
+        Args:
+            message: Error message
+            backend: Database backend name
+            pool_size: Maximum pool size
+            active_connections: Number of active connections
+            waiting_requests: Number of waiting requests
+        """
+        context = {
+            "pool_size": pool_size,
+            "active_connections": active_connections,
+            "waiting_requests": waiting_requests,
+        }
+        super().__init__(message, backend=backend, context=context)
+
+
+class CircuitBreakerError(PoolError):
+    """Error raised when circuit breaker is open."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        backend: str,
+        failures: int,
+        last_failure_time: float,
+        reset_time: float,
+    ) -> None:
+        """Initialize circuit breaker error.
+
+        Args:
+            message: Error message
+            backend: Database backend name
+            failures: Number of consecutive failures
+            last_failure_time: Timestamp of last failure
+            reset_time: Timestamp when circuit will reset
+        """
+        context = {
+            "failures": failures,
+            "last_failure_time": last_failure_time,
+            "reset_time": reset_time,
+        }
+        super().__init__(message, backend=backend, context=context)
+
+
+class RetryError(PoolError):
+    """Error raised when all retry attempts fail."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        backend: str,
+        attempts: int,
+        elapsed: float,
+        last_error: Optional[Exception] = None,
+    ) -> None:
+        """Initialize retry error.
+
+        Args:
+            message: Error message
+            backend: Database backend name
+            attempts: Number of retry attempts
+            elapsed: Total elapsed time
+            last_error: Last error that occurred
+        """
+        context = {
+            "attempts": attempts,
+            "elapsed": elapsed,
+            "last_error": str(last_error) if last_error else None,
+        }
+        super().__init__(message, backend=backend, context=context)
 
 
 # Cache-related exceptions

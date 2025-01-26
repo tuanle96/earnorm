@@ -10,6 +10,8 @@ from motor.motor_asyncio import (
     AsyncIOMotorDatabase,
 )
 
+# pylint: disable=redefined-builtin
+from earnorm.exceptions import ConnectionError, PoolExhaustedError
 from earnorm.pool.backends.mongo.connection import MongoConnection
 from earnorm.pool.core.circuit import CircuitBreaker
 from earnorm.pool.core.retry import RetryPolicy
@@ -60,6 +62,15 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
         self._lock = asyncio.Lock()
 
     @property
+    def backend(self) -> str:
+        """Get backend name.
+
+        Returns:
+            str: Backend name
+        """
+        return "mongodb"
+
+    @property
     def size(self) -> int:
         """Get current pool size."""
         return len(self._available) + len(self._in_use)
@@ -88,25 +99,34 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
         """Initialize pool.
 
         This method creates the initial connections.
+
+        Raises:
+            ConnectionError: If pool initialization fails
         """
         async with self._lock:
-            # Create client
-            self._client = AsyncIOMotorClient(
-                self._uri,
-                minPoolSize=self._min_size,
-                maxPoolSize=self._max_size,
-                **self._kwargs,
-            )
+            try:
+                # Create client
+                self._client = AsyncIOMotorClient(
+                    self._uri,
+                    minPoolSize=self._min_size,
+                    maxPoolSize=self._max_size,
+                    **self._kwargs,
+                )
 
-            # Create initial connections
-            for _ in range(self._min_size):
-                conn = self._create_connection()
-                self._available.add(conn)
+                # Create initial connections
+                for _ in range(self._min_size):
+                    conn = self._create_connection()
+                    self._available.add(conn)
 
-            logger.info(
-                "Initialized MongoDB pool with %d connections",
-                self.size,
-            )
+                logger.info(
+                    "Initialized MongoDB pool with %d connections",
+                    self.size,
+                )
+            except Exception as e:
+                raise ConnectionError(
+                    f"Failed to initialize MongoDB pool: {e!s}",
+                    backend=self.backend,
+                ) from e
 
     async def clear(self) -> None:
         """Clear all connections."""
@@ -134,12 +154,36 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
             logger.info("Destroyed MongoDB pool")
 
     async def acquire(self) -> AsyncConnectionProtocol[DB, COLL]:
-        """Acquire connection from pool."""
+        """Acquire connection from pool.
+
+        Returns:
+            AsyncConnectionProtocol: Connection instance
+
+        Raises:
+            PoolExhaustedError: If no connections are available
+            ConnectionError: If connection creation fails
+        """
         async with self._lock:
             # Get available connection or create new one
             if not self._available and self.size < self.max_size:
-                conn = self._create_connection()
-                self._available.add(conn)
+                try:
+                    conn = self._create_connection()
+                    self._available.add(conn)
+                except Exception as e:
+                    raise ConnectionError(
+                        f"Failed to create connection: {e!s}",
+                        backend=self.backend,
+                    ) from e
+
+            # Check if pool is exhausted
+            if not self._available:
+                raise PoolExhaustedError(
+                    "Connection pool exhausted",
+                    backend=self.backend,
+                    pool_size=self.max_size,
+                    active_connections=len(self._in_use),
+                    waiting_requests=0,
+                )
 
             # Get connection from available set
             conn = self._available.pop()
@@ -148,11 +192,21 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
             return conn
 
     async def release(self, conn: AsyncConnectionProtocol[DB, COLL]) -> None:
-        """Release connection back to pool."""
+        """Release connection back to pool.
+
+        Args:
+            conn: Connection to release
+        """
         async with self._lock:
-            # Move connection back to available set
-            self._in_use.remove(conn)
-            self._available.add(conn)
+            try:
+                # Move connection back to available set
+                self._in_use.remove(conn)
+                if await conn.ping():
+                    self._available.add(conn)
+                else:
+                    await conn.close()
+            except ValueError:
+                pass
 
     def _create_connection(self) -> AsyncConnectionProtocol[DB, COLL]:
         """Create new connection.
@@ -161,10 +215,13 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
             New connection instance
 
         Raises:
-            RuntimeError: If pool is not initialized
+            ConnectionError: If pool is not initialized
         """
         if not self._client:
-            raise RuntimeError("Pool not initialized")
+            raise ConnectionError(
+                "Pool not initialized",
+                backend=self.backend,
+            )
 
         return cast(
             AsyncConnectionProtocol[DB, COLL],
@@ -184,6 +241,10 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
 
         Returns:
             Connection instance
+
+        Raises:
+            PoolExhaustedError: If no connections are available
+            ConnectionError: If connection creation fails
         """
         return _ConnectionManager(self)
 
@@ -240,6 +301,10 @@ class _ConnectionManager(AsyncContextManager[AsyncConnectionProtocol[DB, COLL]])
 
         Returns:
             Connection instance
+
+        Raises:
+            PoolExhaustedError: If no connections are available
+            ConnectionError: If connection creation fails
         """
         self.conn = await self.pool.acquire()
         return self.conn
@@ -250,7 +315,7 @@ class _ConnectionManager(AsyncContextManager[AsyncConnectionProtocol[DB, COLL]])
         Args:
             exc_type: Exception type
             exc_val: Exception value
-            exc_tb: Exception traceback
+            exc_tb: Traceback
         """
         if self.conn:
             await self.pool.release(self.conn)

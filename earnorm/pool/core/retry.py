@@ -24,6 +24,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, List, Optional, Type, TypeVar
 
+from earnorm.exceptions import RetryError
+
 T = TypeVar("T")
 
 
@@ -98,30 +100,18 @@ class RetryPolicy:
         return any(isinstance(exc, exc_type) for exc_type in self.retry_exceptions)
 
 
-class RetryError(Exception):
-    """Error raised when all retry attempts fail."""
-
-    def __init__(self, message: str, context: Any = None) -> None:
-        """Initialize retry error.
-
-        Args:
-            message: Error message
-            context: Additional context
-        """
-        super().__init__(message)
-        self.context = context
-
-
 class RetryContext:
     """Context manager for retrying operations."""
 
-    def __init__(self, policy: RetryPolicy) -> None:
+    def __init__(self, policy: RetryPolicy, backend: str = "unknown") -> None:
         """Initialize retry context.
 
         Args:
             policy: Retry policy configuration
+            backend: Database backend name
         """
         self._policy = policy
+        self._backend = backend
         self._attempt = 0
         self._start_time = 0.0
         self._last_error: Optional[Exception] = None
@@ -150,23 +140,14 @@ class RetryContext:
             return False
 
         if not self._policy.should_retry(self._attempt, exc):
-            if self._last_error is not None:
-                raise RetryError(
-                    f"Failed after {self._attempt} retries",
-                    {
-                        "attempts": self._attempt,
-                        "elapsed": time.time() - self._start_time,
-                        "last_error": str(self._last_error),
-                    },
-                ) from self._last_error
+            elapsed = time.time() - self._start_time
             raise RetryError(
-                f"Failed after {self._attempt} retries",
-                {
-                    "attempts": self._attempt,
-                    "elapsed": time.time() - self._start_time,
-                    "last_error": str(self._last_error),
-                },
-            ) from self._last_error
+                "Operation failed after maximum retries",
+                backend=self._backend,
+                attempts=self._attempt,
+                elapsed=elapsed,
+                last_error=self._last_error,
+            )
 
         self._last_error = exc
         delay = self._policy.calculate_delay(self._attempt)
