@@ -31,305 +31,186 @@ Examples:
     ...     courses = ManyToManyField("Course", through="Enrollment", reverse_name="students")
 """
 
-from typing import Any, Optional, Type, TypeVar, cast
+from typing import Any, Final, List, Optional, Type, TypeVar, Union, cast
 
-from earnorm.base.model.base import BaseModel
-from earnorm.fields.base import Field, ValidationError
+from earnorm.base.env import Environment
+from earnorm.base.model.meta import BaseModel
+from earnorm.exceptions import FieldValidationError
+from earnorm.fields.relation.base import Domain, ModelList, OneToManyRelationField
 
-M = TypeVar("M", bound=BaseModel)
+M = TypeVar("M", bound=BaseModel)  # Model type
+
+# Constants
+DEFAULT_CASCADE: Final[bool] = True
 
 
-class ManyToManyField(Field[list[M]]):
+class ManyToManyField(OneToManyRelationField[M]):
     """Field for many-to-many relationships.
 
+    This field type handles many-to-many relationships, with support for:
+    - Back references
+    - Cascade operations
+    - Lazy loading
+    - Validation
+    - Through models
+    - Bulk operations
+
     Attributes:
-        model_class: Related model class
-        through: Through model class
-        reverse_name: Name of reverse relationship field
-        cascade_delete: Whether to delete related models on deletion
+        model_ref: Referenced model class or name
+        through: Through model class or name
+        back_populates: Name of back reference field
+        cascade: Whether to cascade operations
         lazy_load: Whether to load related models lazily
-        order_by: Fields to order related models by
     """
+
+    model: Any  # Parent model instance
 
     def __init__(
         self,
-        model_class: Type[M] | str,
+        model_ref: Union[str, Type[M]],
         *,
-        through: Optional[Type[BaseModel] | str] = None,
-        reverse_name: Optional[str] = None,
-        cascade_delete: bool = True,
-        lazy_load: bool = False,
-        order_by: Optional[list[str]] = None,
-        **options: Any,
+        through: Optional[Union[str, Type[BaseModel]]] = None,
+        back_populates: Optional[str] = None,
+        cascade: bool = DEFAULT_CASCADE,
+        lazy_load: bool = True,
+        domain: Optional[Domain] = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize many-to-many field.
 
         Args:
-            model_class: Related model class or its name
-            through: Through model class or its name
-            reverse_name: Name of reverse relationship field
-            cascade_delete: Whether to delete related models on deletion
+            model_ref: Referenced model class or name
+            through: Through model class or name
+            back_populates: Name of back reference field
+            cascade: Whether to cascade operations
             lazy_load: Whether to load related models lazily
-            order_by: Fields to order related models by
-            **options: Additional field options
+            domain: Domain for filtering related records
+            **kwargs: Additional field options
         """
-        super().__init__(**options)
-        self._model_class = model_class
-        self._through = through
-        self.reverse_name = reverse_name
-        self.cascade_delete = cascade_delete
-        self.lazy_load = lazy_load
-        self.order_by = list(order_by) if order_by else []
-        self._resolved_model: Optional[Type[M]] = None
-        self._resolved_through: Optional[Type[BaseModel]] = None
-
-        # Update backend options
-        self.backend_options.update(
-            {
-                "mongodb": {
-                    "type": "array",
-                    "items": {
-                        "type": "objectId",
-                        "ref": self._get_model_name(),
-                    },
-                },
-                "postgres": {
-                    "type": "ARRAY",
-                    "items": {
-                        "type": "UUID",
-                        "foreignKey": {
-                            "table": self._get_model_name(),
-                            "column": "id",
-                            "onDelete": "CASCADE" if cascade_delete else "SET NULL",
-                        },
-                    },
-                },
-                "mysql": {
-                    "type": "JSON",
-                    "check": [
-                        f"JSON_TYPE({self.name}) = 'ARRAY'",
-                    ],
-                },
-            }
+        super().__init__(
+            cast(Union[str, Type[ModelList[M]]], model_ref),
+            back_populates=back_populates,
+            cascade=cascade,
+            lazy_load=lazy_load,
+            domain=domain,
+            **kwargs,
         )
+        self.through = through
+        self._through_class: Optional[Type[BaseModel]] = None
 
-    def _get_model_name(self) -> str:
-        """Get name of related model class.
-
-        Returns:
-            Model name
-        """
-        if isinstance(self._model_class, str):
-            return self._model_class
-        return self._model_class.__name__
-
-    async def _resolve_model(self) -> Type[M]:
-        """Resolve related model class.
-
-        Returns:
-            Model class
-
-        Raises:
-            ValidationError: If model cannot be resolved
-        """
-        if self._resolved_model is not None:
-            return self._resolved_model
-
-        if isinstance(self._model_class, str):
-            # Get model class from registry
-            if not hasattr(self, "model"):
-                raise ValidationError(
-                    "Cannot resolve model class without parent model",
-                    self.name,
-                )
-            try:
-                model_class = self.model.env.get_model(self._model_class)  # type: ignore
-                self._resolved_model = cast(Type[M], model_class)
-                return self._resolved_model
-            except KeyError:
-                raise ValidationError(
-                    f"Model {self._model_class} not found in registry",
-                    self.name,
-                )
-        else:
-            self._resolved_model = self._model_class
-            return self._resolved_model
-
-    async def _resolve_through(self) -> Optional[Type[BaseModel]]:
-        """Resolve through model class.
-
-        Returns:
-            Through model class
-
-        Raises:
-            ValidationError: If model cannot be resolved
-        """
-        if self._through is None:
-            return None
-
-        if self._resolved_through is not None:
-            return self._resolved_through
-
-        if isinstance(self._through, str):
-            # Get model class from registry
-            if not hasattr(self, "model"):
-                raise ValidationError(
-                    "Cannot resolve through model class without parent model",
-                    self.name,
-                )
-            try:
-                model_class = self.model.env.get_model(self._through)  # type: ignore
-                self._resolved_through = cast(Type[BaseModel], model_class)
-                return self._resolved_through
-            except KeyError:
-                raise ValidationError(
-                    f"Model {self._through} not found in registry",
-                    self.name,
-                )
-        else:
-            self._resolved_through = self._through
-            return self._resolved_through
-
-    async def setup(self) -> None:
-        """Set up field after model class is created."""
-        await super().setup()  # type: ignore
-
-        # Create reverse relationship
-        if self.reverse_name:
-            model_class = await self._resolve_model()
-            if hasattr(model_class, self.reverse_name):
-                raise ValidationError(
-                    f"Field {self.reverse_name} already exists on {model_class.__name__}",
-                    self.name,
-                )
-
-            # Create reverse field
-            reverse_field = ManyToManyField[M](
-                self.model.__class__,  # type: ignore
-                through=self._through,
-                reverse_name=None,  # Prevent infinite recursion
-                cascade_delete=self.cascade_delete,
-                lazy_load=self.lazy_load,
-                required=False,
-            )
-            setattr(model_class, self.reverse_name, reverse_field)
-
-    async def validate(self, value: Any) -> None:
-        """Validate related models.
+    async def setup(self, name: str, model_name: str) -> None:
+        """Set up the field.
 
         Args:
-            value: Value to validate
-
-        Raises:
-            ValidationError: If validation fails
+            name: Field name
+            model_name: Model name
         """
-        await super().validate(value)
+        await super().setup(name, model_name)
 
-        if value is not None:
-            if not isinstance(value, (list, tuple)):
-                raise ValidationError(
-                    f"Value must be a list or tuple, got {type(value).__name__}",
-                    self.name,
-                )
+        # Resolve through model reference if string
+        if isinstance(self.through, str):
+            env = Environment.get_instance()
+            self._through_class = env.get_model(self.through)
 
-            model_class = await self._resolve_model()
-            # Cast value to list of Any since we'll check types in the loop
-            items = cast(list[Any], value)
-            for item in items:
-                if not isinstance(item, model_class):
-                    raise ValidationError(
-                        f"Item must be an instance of {model_class.__name__}",
-                        self.name,
-                    )
+    def _create_back_reference(self) -> "ManyToManyField[M]":
+        """Create back reference field.
 
-                # Validate model instance
-                try:
-                    await item.validate()  # type: ignore
-                except ValidationError as e:
-                    raise ValidationError(str(e), self.name)
+        Returns:
+            ManyToManyField: Back reference field instance
+        """
+        return ManyToManyField(
+            self.model_name,
+            through=self.through,
+            back_populates=self.name,
+            cascade=self.cascade,
+            lazy_load=self.lazy_load,
+        )
 
-    async def convert(self, value: Any) -> list[M]:
+    async def convert(self, value: Any) -> Optional[ModelList[M]]:
         """Convert value to list of model instances.
 
         Args:
             value: Value to convert
 
         Returns:
-            List of model instances
+            ModelList container or None
 
         Raises:
-            ValidationError: If conversion fails
+            FieldValidationError: If conversion fails
         """
         if value is None:
-            return []
+            return None
 
-        model_class = await self._resolve_model()
-        result: list[M] = []
+        if not isinstance(value, (list, tuple)):
+            raise FieldValidationError(
+                message=f"Expected list or tuple for field {self.name}, got {type(value).__name__}",
+                field_name=self.name,
+            )
+
+        model_class = self.get_model_class()
+        result: List[M] = []
 
         try:
-            if isinstance(value, (list, tuple)):
-                # Cast value to list of Any since we'll check types in the loop
-                items = cast(list[Any], value)
-                for item in items:
-                    if isinstance(item, model_class):
-                        result.append(cast(M, item))  # type: ignore[redundant-cast]
-                    elif isinstance(item, str):
-                        # Try to load by ID
-                        if not hasattr(self, "model"):
-                            raise ValidationError(
-                                "Cannot load related models without parent model",
-                                self.name,
-                            )
-                        try:
-                            instance = await model_class.get(  # type: ignore
-                                self.model.env,  # type: ignore
-                                item,
-                            )
-                            result.append(cast(M, instance))  # type: ignore[redundant-cast]
-                        except Exception as e:
-                            raise ValidationError(str(e), self.name)
-                    else:
-                        raise ValidationError(
-                            f"Cannot convert {type(item).__name__} to {model_class.__name__}",
-                            self.name,
-                        )
-            else:
-                raise ValidationError(
-                    f"Cannot convert {type(value).__name__} to list of {model_class.__name__}",
-                    self.name,
-                )
+            env = Environment.get_instance()
+            for item in cast(List[Union[M, str]], value):
+                if isinstance(item, model_class):
+                    result.append(cast(M, item))
+                elif isinstance(item, str):
+                    # Try to load by ID
+                    try:
+                        instance = await model_class.get(env, item)  # type: ignore
+                        result.append(cast(M, instance))
+                    except Exception as e:
+                        raise FieldValidationError(
+                            message=f"Failed to load {model_class.__name__} with id {item}: {e}",
+                            field_name=self.name,
+                        ) from e
+                else:
+                    raise FieldValidationError(
+                        message=(
+                            f"Cannot convert {type(item).__name__} to {model_class.__name__} "
+                            f"for field {self.name}"
+                        ),
+                        field_name=self.name,
+                    )
         except Exception as e:
-            raise ValidationError(str(e), self.name)
+            raise FieldValidationError(
+                message=str(e),
+                field_name=self.name,
+            ) from e
 
-        return result
+        return ModelList(items=result)
 
     async def to_db(
-        self, value: Optional[list[M]], backend: str
-    ) -> Optional[list[str]]:
-        """Convert model instances to database format.
+        self, value: Optional[ModelList[M]], backend: str
+    ) -> Optional[List[str]]:
+        """Convert list of model instances to database format.
 
         Args:
-            value: List of model instances
+            value: ModelList container
             backend: Database backend type
 
         Returns:
-            Database value
+            List of database values or None
+
+        Raises:
+            FieldValidationError: If conversion fails
         """
-        if not value:
+        if value is None:
             return None
 
-        result: list[str] = []
-        for item in value:
+        result: List[str] = []
+        for item in value.items:
             if not hasattr(item, "id"):
-                raise ValidationError(
-                    f"Model instance {item} has no id attribute",
-                    self.name,
+                raise FieldValidationError(
+                    message=f"Model instance {item} has no id attribute",
+                    field_name=self.name,
                 )
             result.append(str(item.id))  # type: ignore
 
         return result
 
-    async def from_db(self, value: Any, backend: str) -> list[M]:
+    async def from_db(self, value: Any, backend: str) -> Optional[ModelList[M]]:
         """Convert database value to list of model instances.
 
         Args:
@@ -337,37 +218,40 @@ class ManyToManyField(Field[list[M]]):
             backend: Database backend type
 
         Returns:
-            List of model instances
+            ModelList container or None
+
+        Raises:
+            FieldValidationError: If conversion fails
         """
-        if not value:
-            return []
+        if value is None:
+            return None
 
-        model_class = await self._resolve_model()
-        result: list[M] = []
-
-        if not hasattr(self, "model"):
-            raise ValidationError(
-                "Cannot load related models without parent model",
-                self.name,
+        if not isinstance(value, list):
+            raise FieldValidationError(
+                message=f"Expected list from database for field {self.name}, got {type(value).__name__}",
+                field_name=self.name,
             )
 
+        model_class = self.get_model_class()
+        result: List[M] = []
+
         try:
-            # Cast value to list of strings since we know it contains IDs
-            id_list = cast(list[str], value)
-            for item_id in id_list:
+            env = Environment.get_instance()
+            for item_id in cast(List[str], value):
                 if self.lazy_load:
                     # Create model instance without loading
-                    instance = model_class(self.model.env)  # type: ignore
+                    instance = model_class(env)  # type: ignore
                     instance.id = item_id  # type: ignore
-                    result.append(cast(M, instance))  # type: ignore[redundant-cast]
+                    result.append(cast(M, instance))
                 else:
                     # Load and validate model instance
-                    instance = await model_class.get(  # type: ignore
-                        self.model.env,  # type: ignore
-                        item_id,
-                    )
+                    instance = await model_class.get(env, item_id)  # type: ignore
                     await instance.validate()  # type: ignore
-                    result.append(cast(M, instance))  # type: ignore[redundant-cast]
-            return result
+                    result.append(cast(M, instance))
         except Exception as e:
-            raise ValidationError(str(e), self.name)
+            raise FieldValidationError(
+                message=f"Failed to load {model_class.__name__} instances: {e}",
+                field_name=self.name,
+            ) from e
+
+        return ModelList(items=result)

@@ -273,23 +273,6 @@ class SystemConfig(BaseModel):
         assert cls._get_instance() is not None
         return cast(T, cls._get_instance())
 
-    @classmethod
-    def set_current(cls, instance: Optional["SystemConfig"]) -> None:
-        """Set current singleton instance."""
-        cls._instance = instance
-
-    async def save(self) -> None:
-        """Save config to database."""
-        try:
-            self.updated_at = DateTimeField(auto_now=True)
-            await self._write({})  # Save current state
-            self.__class__.set_current(self)
-            container.register("config", self)
-            logger.info("Config updated: %s", self.data)
-        except Exception as e:
-            logger.error("Failed to save config: %s", str(e))
-            raise ConfigError(f"Failed to save config: {e}") from e
-
     def _validate_all(self) -> None:
         """Run all validation checks."""
         self._validate_database_config()
@@ -528,8 +511,6 @@ class SystemConfig(BaseModel):
     async def reload(self) -> None:
         """Reload config from database."""
         try:
-            # Clear instance cache
-            self.__class__.set_current(None)
 
             # Reload from database
             instance = await self.__class__.get_instance()

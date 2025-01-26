@@ -28,11 +28,13 @@ from typing import (
     runtime_checkable,
 )
 
+from earnorm.fields.adapters.base import DatabaseAdapter
+from earnorm.fields.types import DatabaseValue
+
 # Type for field values (None or actual value)
 FieldValue = Union[None, bool, int, float, str, Dict[str, Any], List[Any], Any]
 
 # Database backend types
-DatabaseValue = Any
 BackendOptions = Dict[str, Any]
 
 # Type variable for field types
@@ -40,27 +42,15 @@ T = TypeVar("T")
 
 
 @runtime_checkable
-class FieldProtocol(Protocol):
-    """Protocol defining field interface.
+class FieldProtocol(Protocol[T]):
+    """Protocol for field classes.
 
-    This protocol defines the attributes and methods that all fields must implement:
-    - Field metadata (name, model_name, help, etc)
-    - Field options (required, readonly, store, etc)
-    - Field operations (validate, convert, etc)
-    - Database operations (to_db, from_db, etc)
-    - Compute methods (compute, depends, etc)
-
-    Attributes:
-        name: Field name
-        model_name: Model name
-        required: Whether field is required
-        readonly: Whether field is readonly
-        store: Whether field is stored
-        index: Whether field is indexed
-        help: Help text
-        compute: Compute method name
-        depends: Field dependencies
-        backend_options: Backend-specific options
+    This protocol defines the interface that all field classes must implement.
+    It includes methods for:
+    - Field setup and configuration
+    - Validation and conversion
+    - Database operations
+    - Computed fields
     """
 
     name: str
@@ -71,8 +61,9 @@ class FieldProtocol(Protocol):
     index: bool
     help: str
     compute: Optional[str]
-    depends: List[str]
+    depends: list[str]
     backend_options: Dict[str, Dict[str, Any]]
+    adapters: Dict[str, DatabaseAdapter[T]]
 
     def setup(self, name: str, model_name: str) -> None:
         """Setup field.
@@ -86,7 +77,7 @@ class FieldProtocol(Protocol):
         """
         ...
 
-    def validate(self, value: Any) -> None:
+    async def validate(self, value: Any) -> None:
         """Validate field value.
 
         This method validates field value according to field type and options.
@@ -100,7 +91,7 @@ class FieldProtocol(Protocol):
         """
         ...
 
-    def convert(self, value: Any) -> FieldValue:
+    async def convert(self, value: Any) -> Optional[T]:
         """Convert value to field type.
 
         This method converts value to field's Python type.
@@ -114,10 +105,10 @@ class FieldProtocol(Protocol):
         """
         ...
 
-    def to_db(self, value: Any, backend: str) -> DatabaseValue:
+    async def to_db(self, value: Optional[T], backend: str) -> DatabaseValue:
         """Convert Python value to database format.
 
-        This method converts Python value to format suitable for database.
+        This method uses the appropriate database adapter to convert the value.
         Each backend may have different format requirements.
 
         Args:
@@ -126,13 +117,18 @@ class FieldProtocol(Protocol):
 
         Returns:
             Database value
-        """
-        ...
 
-    def from_db(self, value: DatabaseValue, backend: str) -> FieldValue:
+        Raises:
+            ValueError: If backend is not supported
+        """
+        if backend not in self.adapters:
+            raise ValueError(f"Unsupported backend: {backend}")
+        return await self.adapters[backend].to_db_value(value)
+
+    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[T]:
         """Convert database value to Python format.
 
-        This method converts database value back to Python type.
+        This method uses the appropriate database adapter to convert the value.
         Each backend may store values in different format.
 
         Args:
@@ -141,8 +137,13 @@ class FieldProtocol(Protocol):
 
         Returns:
             Python value
+
+        Raises:
+            ValueError: If backend is not supported
         """
-        ...
+        if backend not in self.adapters:
+            raise ValueError(f"Unsupported backend: {backend}")
+        return await self.adapters[backend].from_db_value(value)
 
     def get_backend_options(self, backend: str) -> BackendOptions:
         """Get database-specific options.
@@ -159,8 +160,27 @@ class FieldProtocol(Protocol):
 
         Returns:
             Backend-specific options
+
+        Raises:
+            ValueError: If backend is not supported
         """
-        ...
+        if backend not in self.adapters:
+            raise ValueError(f"Unsupported backend: {backend}")
+        return {
+            "type": self.adapters[backend].get_field_type(),
+            **self.adapters[backend].get_field_options(),
+        }
+
+    def register_adapter(self, adapter: DatabaseAdapter[T]) -> None:
+        """Register database adapter.
+
+        This method registers a new database adapter for a specific backend.
+        It allows adding support for new database types.
+
+        Args:
+            adapter: Database adapter instance
+        """
+        self.adapters[adapter.backend_name] = adapter
 
     def setup_triggers(self) -> None:
         """Setup compute triggers.
@@ -170,7 +190,7 @@ class FieldProtocol(Protocol):
         """
         ...
 
-    def copy(self) -> "FieldProtocol":
+    def copy(self) -> "FieldProtocol[T]":
         """Create copy of field.
 
         This method creates deep copy of field.
@@ -197,7 +217,7 @@ class ModelInterface(Protocol):
     """
 
     _name: str
-    _fields: Dict[str, FieldProtocol]
+    _fields: Dict[str, FieldProtocol[Any]]
 
     def validate(self) -> None:
         """Validate model."""

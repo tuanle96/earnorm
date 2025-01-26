@@ -49,20 +49,18 @@ Validators:
     - URLValidator: URL format
     - UniqueValidator: Unique values
 
-Events:
-    - EventEmitter: Base event emitter
-    - EventBus: Event dispatcher
-    - EventType: Event type enum
-    - FieldEvent: Event data container
-    - EventHandler: Event handler type
-    - LoggingHandler: Event logging
-    - ChangeTracker: Change tracking
-    - ValidationHandler: Validation handling
-    - CleanupHandler: Resource cleanup
 """
 
+# Exceptions
+from earnorm.exceptions import (
+    FieldError,
+    FieldValidationError,
+    ModelNotFoundError,
+    ModelResolutionError,
+)
+
 # Base classes
-from earnorm.fields.base import Field, ValidationError
+from earnorm.fields.base import BaseField
 
 # Composite fields
 from earnorm.fields.composite import (
@@ -71,19 +69,6 @@ from earnorm.fields.composite import (
     ListField,
     SetField,
     TupleField,
-)
-
-# Events
-from earnorm.fields.events import (
-    ChangeTracker,
-    CleanupHandler,
-    EventBus,
-    EventEmitter,
-    EventHandler,
-    EventType,
-    FieldEvent,
-    LoggingHandler,
-    ValidationHandler,
 )
 
 # Primitive fields
@@ -102,13 +87,10 @@ from earnorm.fields.primitive import (
 )
 
 # Relation fields
-from earnorm.fields.relation import (
-    ManyToManyField,
-    ManyToOneField,
-    OneToManyField,
-    OneToOneField,
-)
-from earnorm.fields.types import FieldProtocol, RelationProtocol, ValidatorFunc
+from earnorm.fields.relation import ManyToManyField, ManyToOneField, OneToManyField
+
+# Types
+from earnorm.fields.types import FieldProtocol, RelationProtocol
 
 # Validators
 from earnorm.fields.validators.base import (
@@ -129,9 +111,7 @@ from earnorm.fields.validators.common import (
 
 __all__ = [
     # Base classes
-    "Field",
-    "ValidationError",
-    "ValidatorFunc",
+    "BaseField",
     "RelationProtocol",
     "FieldProtocol",
     # Primitive fields
@@ -153,7 +133,6 @@ __all__ = [
     "TupleField",
     "EmbeddedField",
     # Relation fields
-    "OneToOneField",
     "OneToManyField",
     "ManyToOneField",
     "ManyToManyField",
@@ -169,14 +148,9 @@ __all__ = [
     "EmailValidator",
     "URLValidator",
     "UniqueValidator",
-    # Events
-    "EventEmitter",
-    "EventBus",
-    "EventType",
-    "FieldEvent",
-    "EventHandler",
-    "LoggingHandler",
-    "ChangeTracker",
-    "ValidationHandler",
-    "CleanupHandler",
+    # Exceptions
+    "FieldError",
+    "FieldValidationError",
+    "ModelNotFoundError",
+    "ModelResolutionError",
 ]

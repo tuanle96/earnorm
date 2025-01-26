@@ -1,277 +1,258 @@
-"""Enum field type.
+"""Enum field implementation.
 
-This module provides the EnumField class for handling enumeration values.
+This module provides enum field type for handling enumerated values.
 It supports:
-- Enum validation and conversion
-- String/value conversion to enum
-- Case-insensitive enum lookup
-- Default value handling
-- Database backend support
-- Custom validation
+- Enum validation
+- String/integer conversion
+- Case sensitivity control
+- Database type mapping
 
 Examples:
     >>> from enum import Enum
-    >>> class Status(Enum):
+    >>> class UserStatus(Enum):
     ...     ACTIVE = "active"
     ...     INACTIVE = "inactive"
-    ...     PENDING = "pending"
-
+    ...     BANNED = "banned"
+    ...
     >>> class User(Model):
-    ...     status = EnumField(Status, default=Status.INACTIVE)
+    ...     status = EnumField(UserStatus, default=UserStatus.ACTIVE)
     ...     role = EnumField(UserRole, required=True)
-
-    >>> user = User()
-    >>> user.status = "active"  # Converts to Status.ACTIVE
-    >>> user.status = Status.PENDING  # Direct enum assignment
-    >>> user.role = "invalid"  # Raises ValidationError
 """
 
 from enum import Enum
-from typing import Any, List, Optional, Type, TypeVar, Union
+from typing import Any, Final, Generic, Optional, Type, TypeVar
 
-from earnorm.fields.base import Field, ValidationError
+from earnorm.exceptions import FieldValidationError
+from earnorm.fields.base import BaseField
+from earnorm.fields.types import DatabaseValue
+from earnorm.fields.validators.base import TypeValidator, Validator
 
-# Type alias for validator functions
-ValidatorFunc = Any  # Temporary fix until we can import from validators.types
-
+# Type variable for enum type
 E = TypeVar("E", bound=Enum)
 
+# Constants
+DEFAULT_CASE_SENSITIVE: Final[bool] = True
 
-class EnumField(Field[E]):
-    """Enum field type.
 
-    This field handles:
-    - Enum validation and conversion
-    - String/value conversion to enum
-    - Case-insensitive lookup
-    - Database serialization
+class EnumField(BaseField[E], Generic[E]):
+    """Field for enum values.
+
+    This field type handles enumerated values, with support for:
+    - Enum validation
+    - String/integer conversion
+    - Case sensitivity control
+    - Database type mapping
 
     Attributes:
-        required: Whether field is required
-        unique: Whether field value must be unique
-        enum_class: The Enum class to use
-        default: Default enum value
-
-    Raises:
-        ValidationError: With codes:
-            - invalid_value: Value cannot be converted to enum
-            - required: Value is required but None
+        enum_class: Enum class to use
+        case_sensitive: Whether string comparison is case sensitive
+        backend_options: Database backend options
     """
+
+    enum_class: Type[E]
+    case_sensitive: bool
+    backend_options: dict[str, Any]
 
     def __init__(
         self,
         enum_class: Type[E],
         *,
-        required: bool = False,
-        unique: bool = False,
-        default: Optional[Union[E, str, Any]] = None,
-        validators: Optional[List[ValidatorFunc]] = None,
-        **kwargs: Any,
+        case_sensitive: bool = DEFAULT_CASE_SENSITIVE,
+        **options: Any,
     ) -> None:
         """Initialize enum field.
 
         Args:
-            enum_class: The Enum class to use
-            required: Whether field is required (defaults to False)
-            unique: Whether field value must be unique (defaults to False)
-            default: Default value (defaults to first enum value)
-            validators: List of validator functions
-            **kwargs: Additional field options
+            enum_class: Enum class to use
+            case_sensitive: Whether string comparison is case sensitive
+            **options: Additional field options
 
-        Examples:
-            >>> field = EnumField(Status)  # Uses first enum value as default
-            >>> field = EnumField(Status, default=Status.INACTIVE)  # Custom default
-            >>> field = EnumField(Status, required=True)  # Required field
+        Raises:
+            TypeError: If enum_class is not an Enum class
         """
-        # Convert default value if provided as string
-        if isinstance(default, str):
-            try:
-                default = enum_class(default)
-            except ValueError:
-                try:
-                    default = enum_class[default.upper()]
-                except KeyError:
-                    raise ValueError(
-                        f"Invalid default value for enum {enum_class.__name__}: {default}"
-                    )
+        if not isinstance(enum_class, type):
+            raise TypeError(f"{enum_class} is not an Enum class")
 
-        # Get default value from enum if not provided
-        default_value = default if default is not None else next(iter(enum_class))
+        field_validators: list[Validator[Any]] = [TypeValidator(enum_class)]
+        super().__init__(validators=field_validators, **options)
 
-        # Initialize base class
-        super().__init__(
-            required=required,
-            unique=unique,
-            default=default_value,
-            validators=validators,
-            **kwargs,
-        )
         self.enum_class = enum_class
-        self._default_value = default_value
+        self.case_sensitive = case_sensitive
 
-        # Update backend options
-        self.backend_options.update(
-            {
-                "mongodb": {
-                    "type": "string",
-                    "enum": [e.value for e in enum_class],
-                },
-                "postgres": {
-                    "type": "VARCHAR",
-                    "check": f"CHECK ({self.name} IN ({', '.join(repr(e.value) for e in enum_class)}))",
-                },
-                "mysql": {
-                    "type": "ENUM",
-                    "values": [e.value for e in enum_class],
-                },
-            }
+        # Get the type of enum values
+        first_value = next(iter(enum_class.__members__.values())).value
+        value_type = (
+            str
+            if isinstance(first_value, str)
+            else int if isinstance(first_value, int) else object
         )
+
+        # Initialize backend options based on value type
+        if value_type == str:
+            max_length = max(len(str(v.value)) for v in enum_class.__members__.values())
+            self.backend_options = {
+                "mongodb": {"type": "string"},
+                "postgres": {"type": f"VARCHAR({max_length})"},
+                "mysql": {"type": f"VARCHAR({max_length})"},
+            }
+        elif value_type == int:
+            self.backend_options = {
+                "mongodb": {"type": "int"},
+                "postgres": {"type": "INTEGER"},
+                "mysql": {"type": "INTEGER"},
+            }
+        else:
+            self.backend_options = {
+                "mongodb": {"type": "string"},
+                "postgres": {"type": "TEXT"},
+                "mysql": {"type": "TEXT"},
+            }
 
     async def validate(self, value: Any) -> None:
         """Validate enum value.
 
-        Validates:
-        - Value is valid enum type
-        - Value can be converted to enum
-        - Not None if required
+        This method validates:
+        - Value is an instance of enum_class
+        - Value is one of the allowed enum values
 
         Args:
             value: Value to validate
 
         Raises:
-            ValidationError: With codes:
-                - invalid_type: Value is not a valid enum type
-                - invalid_value: Value cannot be converted to enum
-                - required: Value is required but None
-
-        Examples:
-            >>> field = EnumField(Status)
-            >>> await field.validate(Status.ACTIVE)  # Valid
-            >>> await field.validate("active")  # Valid
-            >>> await field.validate("invalid")  # Raises ValidationError
-            >>> await field.validate(None)  # Valid if not required
+            FieldValidationError: If validation fails
         """
         await super().validate(value)
 
         if value is not None:
-            try:
-                if not isinstance(value, self.enum_class):
-                    await self.convert(value)  # Try converting
-            except (ValueError, KeyError) as e:
-                valid_values = ", ".join(
-                    f"{e.name}={e.value!r}" for e in self.enum_class
-                )
-                raise ValidationError(
-                    message=f"Invalid value for enum {self.enum_class.__name__}: {value!r}. Valid values are: {valid_values}",
+            if not isinstance(value, self.enum_class):
+                raise FieldValidationError(
+                    message=(
+                        f"Value must be an instance of {self.enum_class.__name__}, "
+                        f"got {type(value).__name__}"
+                    ),
                     field_name=self.name,
-                    code="invalid_value",
-                ) from e
+                    code="invalid_type",
+                )
 
-    async def convert(self, value: Any) -> E:
+            if value not in self.enum_class.__members__.values():
+                raise FieldValidationError(
+                    message=(
+                        f"Invalid enum value: {value}. "
+                        f"Allowed values: {list(self.enum_class.__members__.values())}"
+                    ),
+                    field_name=self.name,
+                    code="invalid_choice",
+                )
+
+    async def convert(self, value: Any) -> Optional[E]:
         """Convert value to enum.
 
         Handles:
-        - None values (returns default)
-        - Enum values (returned as is)
-        - String values (case-insensitive lookup)
-        - Raw values (direct enum lookup)
+        - None values
+        - Enum instances
+        - String values (names or values)
+        - Integer values (for integer enums)
 
         Args:
             value: Value to convert
 
         Returns:
-            Converted enum value
+            Converted enum value or None
 
         Raises:
-            ValidationError: With code "invalid_value" if value cannot be converted
-
-        Examples:
-            >>> field = EnumField(Status)
-            >>> await field.convert(None)  # Returns default value
-            >>> await field.convert(Status.ACTIVE)  # Returns Status.ACTIVE
-            >>> await field.convert("active")  # Returns Status.ACTIVE
-            >>> await field.convert("ACTIVE")  # Returns Status.ACTIVE
-            >>> await field.convert("invalid")  # Raises ValidationError
+            FieldValidationError: If value cannot be converted
         """
         if value is None:
-            return self._default_value  # type: ignore[return-value]
-
-        if isinstance(value, self.enum_class):
-            return value
+            return None
 
         try:
-            # First try direct value lookup
-            enum_value = self.enum_class(value)
-            if not isinstance(enum_value, self.enum_class):
-                raise ValueError("Invalid enum value")
-            return enum_value  # type: ignore[return-value]
-        except ValueError:
-            try:
-                # Then try case-insensitive name lookup
-                enum_value = self.enum_class[str(value).upper()]
-                if not isinstance(enum_value, self.enum_class):
-                    raise ValueError("Invalid enum value")
-                return enum_value  # type: ignore[return-value]
-            except KeyError as e:
-                valid_values = ", ".join(
-                    f"{e.name}={e.value!r}" for e in self.enum_class
-                )
-                raise ValidationError(
-                    message=f"Cannot convert {value!r} to enum {self.enum_class.__name__}. Valid values are: {valid_values}",
-                    field_name=self.name,
-                    code="invalid_value",
-                ) from e
+            if isinstance(value, self.enum_class):
+                return value
 
-    async def to_db(self, value: Optional[E], backend: str) -> Optional[str]:
+            # Try to convert from string
+            if isinstance(value, str):
+                # Try by name
+                try:
+                    if self.case_sensitive:
+                        return self.enum_class[value]
+                    else:
+                        upper_value = value.upper()
+                        for name, member in self.enum_class.__members__.items():
+                            if name.upper() == upper_value:
+                                return member
+                        raise KeyError(value)
+                except KeyError:
+                    # Try by value
+                    for member in self.enum_class.__members__.values():
+                        member_value = str(member.value)
+                        if (
+                            self.case_sensitive
+                            and member_value == value
+                            or not self.case_sensitive
+                            and member_value.upper() == value.upper()
+                        ):
+                            return member
+
+            # Try to convert from integer
+            if isinstance(value, int):
+                for member in self.enum_class.__members__.values():
+                    if member.value == value:
+                        return member
+
+            raise ValueError(
+                f"Cannot convert {value} to {self.enum_class.__name__}. "
+                f"Allowed values: {list(self.enum_class.__members__.values())}"
+            )
+        except (TypeError, ValueError) as e:
+            raise FieldValidationError(
+                message=str(e),
+                field_name=self.name,
+                code="conversion_error",
+            ) from e
+
+    async def to_db(self, value: Optional[E], backend: str) -> DatabaseValue:
         """Convert enum to database format.
 
         Args:
             value: Enum value to convert
-            backend: Database backend type ('mongodb', 'postgres', 'mysql')
+            backend: Database backend type
 
         Returns:
-            Database string value or None
-
-        Examples:
-            >>> field = EnumField(Status)
-            >>> await field.to_db(Status.ACTIVE, "mongodb")  # Returns "active"
-            >>> await field.to_db(None, "postgres")  # Returns None
+            Converted enum value or None
         """
         if value is None:
             return None
+
         return value.value
 
-    async def from_db(self, value: Any, backend: str) -> E:
+    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[E]:
         """Convert database value to enum.
 
         Args:
             value: Database value to convert
-            backend: Database backend type ('mongodb', 'postgres', 'mysql')
+            backend: Database backend type
 
         Returns:
-            Converted enum value
+            Converted enum value or None
 
         Raises:
-            ValidationError: With code "invalid_value" if value cannot be converted
-
-        Examples:
-            >>> field = EnumField(Status)
-            >>> await field.from_db("active", "mongodb")  # Returns Status.ACTIVE
-            >>> await field.from_db(None, "postgres")  # Returns default value
-            >>> await field.from_db("invalid", "mysql")  # Raises ValidationError
+            FieldValidationError: If value cannot be converted
         """
         if value is None:
-            return self._default_value  # type: ignore[return-value]
+            return None
 
         try:
-            enum_value = self.enum_class(value)
-            if not isinstance(enum_value, self.enum_class):
-                raise ValueError("Invalid enum value")
-            return enum_value  # type: ignore[return-value]
-        except ValueError as e:
-            valid_values = ", ".join(f"{e.name}={e.value!r}" for e in self.enum_class)
-            raise ValidationError(
-                message=f"Cannot convert database value {value!r} to enum {self.enum_class.__name__}. Valid values are: {valid_values}",
+            for member in self.enum_class.__members__.values():
+                if member.value == value:
+                    return member
+
+            raise ValueError(
+                f"Cannot convert database value {value} to {self.enum_class.__name__}. "
+                f"Allowed values: {list(self.enum_class.__members__.values())}"
+            )
+        except (TypeError, ValueError) as e:
+            raise FieldValidationError(
+                message=str(e),
                 field_name=self.name,
-                code="invalid_value",
+                code="conversion_error",
             ) from e

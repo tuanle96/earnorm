@@ -1,219 +1,193 @@
-"""Decimal field type.
+"""Decimal field implementation.
 
-This module provides the DecimalField class for storing decimal values.
-It includes:
-- Decimal validation with precision and scale
-- Decimal conversion from various types
-- Range validation (min/max values)
-- Precision and scale validation
-- Database backend support (MongoDB, PostgreSQL, MySQL)
-- Automatic type conversion
+This module provides decimal field type for handling decimal numbers.
+It supports:
+- Decimal validation
+- Precision and scale control
+- Range validation (min/max)
+- Rounding control
+- Database type mapping
 
 Examples:
-    >>> from earnorm.fields.primitive.decimal import DecimalField
-    >>>
     >>> class Product(Model):
-    ...     price = DecimalField(precision=10, scale=2)
-    ...     tax = DecimalField(precision=5, scale=2)
-    ...     total = DecimalField(precision=10, scale=2, compute="_compute_total")
-
-    >>> product = Product()
-    >>> product.price = "123.45"  # Converts to Decimal('123.45')
-    >>> product.tax = 12.5  # Converts to Decimal('12.50')
-    >>> await product.validate()  # Validates precision and scale
-    >>> product.price = "123.456"  # Raises ValidationError for invalid scale
+    ...     price = DecimalField(max_digits=10, decimal_places=2)
+    ...     weight = DecimalField(max_digits=5, decimal_places=3)
+    ...     rating = DecimalField(max_digits=3, decimal_places=1, min_value=0, max_value=5)
 """
 
-from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, List, Optional, Union
+from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
+from typing import Any, Final, Optional, Union
 
-from earnorm.fields.base import Field, ValidationError
+from earnorm.exceptions import FieldValidationError
+from earnorm.fields.base import BaseField
+from earnorm.fields.types import DatabaseValue
+from earnorm.fields.validators.base import RangeValidator, TypeValidator, Validator
+
+# Constants
+DEFAULT_MAX_DIGITS: Final[int] = 65
+DEFAULT_DECIMAL_PLACES: Final[int] = 30
+DEFAULT_ROUNDING: Final[str] = ROUND_HALF_EVEN
 
 
-class DecimalField(Field[Decimal]):
-    """Field for storing decimal values.
+class DecimalField(BaseField[Decimal]):
+    """Field for decimal numbers.
 
-    This field handles:
-    - Decimal validation with precision and scale
-    - Conversion from various numeric types
-    - Range validation with min/max values
-    - Database backend support
-    - Automatic type conversion
+    This field type handles decimal numbers, with support for:
+    - Decimal validation
+    - Precision and scale control
+    - Range validation (min/max)
+    - Rounding control
+    - Database type mapping
 
     Attributes:
-        precision: Total number of digits (integer + decimal)
-        scale: Number of decimal places
-        min_value: Minimum allowed value (inclusive)
-        max_value: Maximum allowed value (inclusive)
-        default: Default value if None
-
-    Raises:
-        ValidationError: With codes:
-            - invalid_type: Value is not a decimal
-            - invalid_precision: Value exceeds precision limit
-            - invalid_scale: Value exceeds scale limit
-            - min_value: Value is less than minimum
-            - max_value: Value is greater than maximum
-            - conversion_failed: Value cannot be converted to decimal
-
-    Examples:
-        >>> field = DecimalField(precision=5, scale=2)
-        >>> await field.validate(Decimal("123.45"))  # Valid
-        >>> await field.validate(Decimal("1234.5"))  # Raises ValidationError(code="invalid_precision")
-        >>> await field.validate(Decimal("12.345"))  # Raises ValidationError(code="invalid_scale")
-
-        >>> field = DecimalField(min_value=Decimal("0"), max_value=Decimal("100"))
-        >>> await field.validate(Decimal("-1"))  # Raises ValidationError(code="min_value")
-        >>> await field.validate(Decimal("101"))  # Raises ValidationError(code="max_value")
+        max_digits: Maximum number of digits (precision)
+        decimal_places: Number of decimal places (scale)
+        min_value: Minimum allowed value
+        max_value: Maximum allowed value
+        rounding: Rounding mode for decimal operations
+        backend_options: Database backend options
     """
+
+    max_digits: int
+    decimal_places: int
+    min_value: Optional[Decimal]
+    max_value: Optional[Decimal]
+    rounding: str
+    backend_options: dict[str, Any]
 
     def __init__(
         self,
         *,
-        precision: int = 10,
-        scale: int = 2,
-        min_value: Optional[Decimal] = None,
-        max_value: Optional[Decimal] = None,
-        default: Optional[Decimal] = None,
-        **kwargs: Any,
+        max_digits: int = DEFAULT_MAX_DIGITS,
+        decimal_places: int = DEFAULT_DECIMAL_PLACES,
+        min_value: Optional[Union[Decimal, float, str, int]] = None,
+        max_value: Optional[Union[Decimal, float, str, int]] = None,
+        rounding: str = DEFAULT_ROUNDING,
+        **options: Any,
     ) -> None:
         """Initialize decimal field.
 
         Args:
-            precision: Total number of digits (integer + decimal)
-            scale: Number of decimal places
-            min_value: Minimum allowed value (inclusive)
-            max_value: Maximum allowed value (inclusive)
-            default: Default value if None
-            **kwargs: Additional field options
+            max_digits: Maximum number of digits (precision)
+            decimal_places: Number of decimal places (scale)
+            min_value: Minimum allowed value
+            max_value: Maximum allowed value
+            rounding: Rounding mode for decimal operations
+            **options: Additional field options
 
-        Examples:
-            >>> field = DecimalField()  # Default precision=10, scale=2
-            >>> field = DecimalField(precision=5, scale=2)  # Custom precision/scale
-            >>> field = DecimalField(min_value=Decimal("0"))  # Non-negative values
+        Raises:
+            ValueError: If max_digits or decimal_places are invalid
         """
-        super().__init__(**kwargs)
-        self.precision = precision
-        self.scale = scale
-        self.min_value = min_value
-        self.max_value = max_value
-        self.default = default
+        if max_digits < 1:
+            raise ValueError("max_digits must be positive")
+            if decimal_places < 0:
+                raise ValueError("decimal_places must be non-negative")
+        if decimal_places > max_digits:
+            raise ValueError("decimal_places cannot be greater than max_digits")
 
-        # Set backend options
-        backend_opts: Dict[str, Dict[str, Any]] = {
-            "mongodb": {
-                "type": "decimal",
-            },
-            "postgres": {
-                "type": f"DECIMAL({precision}, {scale})",
-                "null": not getattr(self, "required", False),
-                "default": str(default) if default else None,
-            },
-            "mysql": {
-                "type": f"DECIMAL({precision}, {scale})",
-                "null": not getattr(self, "required", False),
-                "default": str(default) if default else None,
-            },
-        }
-
-        # Add constraints if min/max values are set
+        # Create validators
+        field_validators: list[Validator[Any]] = [TypeValidator(Decimal)]
         if min_value is not None or max_value is not None:
-            constraints: List[str] = []
-            if min_value is not None:
-                constraints.append(f"{self.name} >= {min_value}")
-            if max_value is not None:
-                constraints.append(f"{self.name} <= {max_value}")
-            check_constraint = " AND ".join(constraints)
-            backend_opts["postgres"]["check"] = f"CHECK ({check_constraint})"
-            backend_opts["mysql"]["check"] = f"CHECK ({check_constraint})"
+            field_validators.append(
+                RangeValidator(
+                    min_value=(
+                        Decimal(str(min_value)) if min_value is not None else None
+                    ),
+                    max_value=(
+                        Decimal(str(max_value)) if max_value is not None else None
+                    ),
+                    message=(
+                        f"Value must be between {min_value or '-∞'} "
+                        f"and {max_value or '∞'}"
+                    ),
+                )
+            )
 
-        self.backend_options.update(backend_opts)
+        super().__init__(validators=field_validators, **options)
+
+        self.max_digits = max_digits
+        self.decimal_places = decimal_places
+        self.min_value = Decimal(str(min_value)) if min_value is not None else None
+        self.max_value = Decimal(str(max_value)) if max_value is not None else None
+        self.rounding = rounding
+
+        # Initialize backend options
+        self.backend_options = {
+            "mongodb": {"type": "decimal"},
+            "postgres": {"type": f"DECIMAL({max_digits}, {decimal_places})"},
+            "mysql": {"type": f"DECIMAL({max_digits}, {decimal_places})"},
+        }
 
     async def validate(self, value: Any) -> None:
         """Validate decimal value.
 
-        Validates:
-        - Type is Decimal
-        - Within precision limit
-        - Within scale limit
-        - Within min/max range
-        - Not None if required
+        This method validates:
+        - Value is decimal type
+        - Value is within min/max range
+        - Value precision and scale
 
         Args:
             value: Value to validate
 
         Raises:
-            ValidationError: With codes:
-                - invalid_type: Value is not a decimal
-                - invalid_precision: Value exceeds precision limit
-                - invalid_scale: Value exceeds scale limit
-                - min_value: Value is less than minimum
-                - max_value: Value is greater than maximum
-
-        Examples:
-            >>> field = DecimalField(precision=5, scale=2)
-            >>> await field.validate(Decimal("123.45"))  # Valid
-            >>> await field.validate(123.45)  # Raises ValidationError(code="invalid_type")
-            >>> await field.validate(Decimal("1234.5"))  # Raises ValidationError(code="invalid_precision")
-            >>> await field.validate(Decimal("12.345"))  # Raises ValidationError(code="invalid_scale")
+            FieldValidationError: If validation fails
         """
         await super().validate(value)
-        if value is None:
-            return
 
-        if not isinstance(value, Decimal):
-            raise ValidationError(
-                message=f"Value must be a Decimal, got {type(value).__name__}",
-                field_name=self.name,
-                code="invalid_type",
-            )
-
-        # Check precision and scale
-        str_value = str(value)
-        if "." in str_value:
-            integer_part, decimal_part = str_value.split(".")
-            if len(decimal_part) > self.scale:
-                raise ValidationError(
-                    message=f"Value must have at most {self.scale} decimal places, got {len(decimal_part)}",
+        if value is not None:
+            if not isinstance(value, Decimal):
+                raise FieldValidationError(
+                    message=f"Value must be a decimal, got {type(value).__name__}",
                     field_name=self.name,
-                    code="invalid_scale",
-                )
-            if len(integer_part.lstrip("-")) + len(decimal_part) > self.precision:
-                raise ValidationError(
-                    message=f"Value must have at most {self.precision} total digits, got {len(integer_part.lstrip('-')) + len(decimal_part)}",
-                    field_name=self.name,
-                    code="invalid_precision",
-                )
-        else:
-            if len(str_value.lstrip("-")) > self.precision:
-                raise ValidationError(
-                    message=f"Value must have at most {self.precision} total digits, got {len(str_value.lstrip('-'))}",
-                    field_name=self.name,
-                    code="invalid_precision",
+                    code="invalid_type",
                 )
 
-        # Check min/max values
-        if self.min_value is not None and value < self.min_value:
-            raise ValidationError(
-                message=f"Value must be greater than or equal to {self.min_value}, got {value}",
-                field_name=self.name,
-                code="min_value",
-            )
-        if self.max_value is not None and value > self.max_value:
-            raise ValidationError(
-                message=f"Value must be less than or equal to {self.max_value}, got {value}",
-                field_name=self.name,
-                code="max_value",
-            )
+            # Check precision and scale
+            str_val = str(value.normalize())
+            if "E" in str_val:
+                raise FieldValidationError(
+                    message="Scientific notation is not supported",
+                    field_name=self.name,
+                    code="invalid_format",
+                )
+
+            parts = str_val.split(".")
+            if len(parts) == 2:
+                digits = len(parts[0].lstrip("-")) + len(parts[1])
+                decimals = len(parts[1])
+            else:
+                digits = len(parts[0].lstrip("-"))
+                decimals = 0
+
+            if digits > self.max_digits:
+                raise FieldValidationError(
+                    message=(
+                        f"Value has {digits} digits, but only {self.max_digits} "
+                        "are allowed"
+                    ),
+                    field_name=self.name,
+                    code="max_digits_exceeded",
+                )
+
+            if decimals > self.decimal_places:
+                raise FieldValidationError(
+                    message=(
+                        f"Value has {decimals} decimal places, but only "
+                        f"{self.decimal_places} are allowed"
+                    ),
+                    field_name=self.name,
+                    code="decimal_places_exceeded",
+                )
 
     async def convert(self, value: Any) -> Optional[Decimal]:
         """Convert value to decimal.
 
         Handles:
         - None values
-        - Decimal values
-        - Integer/float values
+        - Decimal objects
+        - Float values
         - String values
+        - Integer values
 
         Args:
             value: Value to convert
@@ -222,86 +196,7 @@ class DecimalField(Field[Decimal]):
             Converted decimal value or None
 
         Raises:
-            ValidationError: With code "conversion_failed" if value cannot be converted
-
-        Examples:
-            >>> field = DecimalField()
-            >>> await field.convert("123.45")  # Returns Decimal('123.45')
-            >>> await field.convert(123)  # Returns Decimal('123')
-            >>> await field.convert(123.45)  # Returns Decimal('123.45')
-            >>> await field.convert(None)  # Returns default value
-            >>> await field.convert("invalid")  # Raises ValidationError
-        """
-        if value is None:
-            return self.default
-
-        if isinstance(value, Decimal):
-            return value
-
-        try:
-            if isinstance(value, (int, float, str)):
-                return Decimal(str(value))
-            raise TypeError(f"Cannot convert {type(value).__name__} to Decimal")
-        except (InvalidOperation, ValueError, TypeError) as e:
-            raise ValidationError(
-                message=f"Cannot convert value to Decimal: {str(e)}",
-                field_name=self.name,
-                code="conversion_failed",
-            )
-
-    async def to_db(
-        self, value: Optional[Decimal], backend: str
-    ) -> Union[None, str, Decimal]:
-        """Convert decimal to database format.
-
-        Args:
-            value: Decimal value to convert
-            backend: Database backend type ('mongodb', 'postgres', 'mysql')
-
-        Returns:
-            - None if value is None
-            - Decimal for MongoDB (BSON Decimal128)
-            - str for PostgreSQL and MySQL
-
-        Examples:
-            >>> field = DecimalField()
-            >>> value = Decimal("123.45")
-            >>> await field.to_db(value, "mongodb")  # Returns Decimal('123.45')
-            >>> await field.to_db(value, "postgres")  # Returns "123.45"
-            >>> await field.to_db(None, "mysql")  # Returns None
-        """
-        if value is None:
-            return None
-
-        # MongoDB stores decimals as BSON Decimal128
-        if backend == "mongodb":
-            return value
-
-        # PostgreSQL and MySQL store decimals as strings
-        if backend in ("postgres", "mysql"):
-            return str(value)
-
-        return value
-
-    async def from_db(self, value: Any, backend: str) -> Optional[Decimal]:
-        """Convert database value to decimal.
-
-        Args:
-            value: Database value to convert
-            backend: Database backend type ('mongodb', 'postgres', 'mysql')
-
-        Returns:
-            Converted decimal value or None
-
-        Raises:
-            ValidationError: With code "conversion_failed" if value cannot be converted
-
-        Examples:
-            >>> field = DecimalField()
-            >>> await field.from_db("123.45", "postgres")  # Returns Decimal('123.45')
-            >>> await field.from_db(Decimal("123.45"), "mongodb")  # Returns Decimal('123.45')
-            >>> await field.from_db(None, "mysql")  # Returns None
-            >>> await field.from_db("invalid", "postgres")  # Raises ValidationError
+            FieldValidationError: If value cannot be converted
         """
         if value is None:
             return None
@@ -309,12 +204,65 @@ class DecimalField(Field[Decimal]):
         try:
             if isinstance(value, Decimal):
                 return value
-            if isinstance(value, (int, float, str)):
+            elif isinstance(value, (float, str, int)):
                 return Decimal(str(value))
-            raise TypeError(f"Cannot convert {type(value).__name__} to Decimal")
-        except (InvalidOperation, ValueError, TypeError) as e:
-            raise ValidationError(
-                message=f"Cannot convert database value to Decimal: {str(e)}",
+            else:
+                raise TypeError(f"Cannot convert {type(value).__name__} to decimal")
+        except (TypeError, ValueError, InvalidOperation) as e:
+            raise FieldValidationError(
+                message=f"Cannot convert {value} to decimal: {str(e)}",
                 field_name=self.name,
-                code="conversion_failed",
+                code="conversion_error",
+            ) from e
+
+    async def to_db(self, value: Optional[Decimal], backend: str) -> DatabaseValue:
+        """Convert decimal to database format.
+
+        Args:
+            value: Decimal value to convert
+            backend: Database backend type
+
+        Returns:
+            Converted decimal value or None
+        """
+        if value is None:
+            return None
+
+        # Round value if needed
+        if self.decimal_places > 0:
+            value = value.quantize(
+                Decimal(f"0.{'0' * self.decimal_places}"),
+                rounding=self.rounding,
             )
+
+            return value
+
+    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[Decimal]:
+        """Convert database value to decimal.
+
+        Args:
+            value: Database value to convert
+            backend: Database backend type
+
+        Returns:
+            Converted decimal value or None
+
+        Raises:
+            FieldValidationError: If value cannot be converted
+        """
+        if value is None:
+            return None
+
+        try:
+            if isinstance(value, Decimal):
+                return value
+            elif isinstance(value, (float, str, int)):
+                return Decimal(str(value))
+            else:
+                raise TypeError(f"Cannot convert {type(value).__name__} to decimal")
+        except (TypeError, ValueError, InvalidOperation) as e:
+            raise FieldValidationError(
+                message=f"Cannot convert database value to decimal: {str(e)}",
+                field_name=self.name,
+                code="conversion_error",
+            ) from e

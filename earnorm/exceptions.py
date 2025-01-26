@@ -1,159 +1,200 @@
-"""Exception definitions for EarnORM.
+"""Global exceptions for EarnORM.
 
-This module defines all custom exceptions used throughout EarnORM.
-These exceptions provide detailed error information and help with error handling.
-
-Examples:
-    ```python
-    try:
-        await db.users.find_one({"_id": "invalid"})
-    except ConnectionError as e:
-        print(f"Connection failed: {e}")
-    except OperationError as e:
-        print(f"Operation failed: {e}")
-    ```
+This module provides all custom exceptions used throughout EarnORM.
 """
 
-from typing import Any, Optional
+from typing import Optional
 
 
-class EarnBaseError(Exception):
-    """Base class for all EarnORM-related errors."""
+class EarnORMError(Exception):
+    """Base class for all EarnORM errors."""
 
-    def __init__(self, message: str, context: Optional[Any] = None) -> None:
-        """Initialize base error.
+    def __init__(self, message: str) -> None:
+        """Initialize EarnORM error.
 
         Args:
             message: Error message
-            context: Additional context
         """
+        self.message = message
         super().__init__(message)
-        self.context = context
 
 
-# Database-related errors
-class DatabaseError(EarnBaseError):
+# Field-related exceptions
+class FieldError(EarnORMError):
+    """Base class for field-related errors.
+
+    Attributes:
+        message: Error message
+        field_name: Name of field that caused the error
+        code: Error code for identifying error type
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        field_name: str,
+        code: Optional[str] = None,
+    ) -> None:
+        """Initialize field error.
+
+        Args:
+            message: Error message
+            field_name: Field name
+            code: Error code for identifying error type
+        """
+        self.field_name = field_name
+        self.code = code or "field_error"
+        super().__init__(f"{field_name}: {message} (code={self.code})")
+
+
+class FieldValidationError(FieldError):
+    """Error raised when field validation fails.
+
+    This error is raised when a field value fails validation,
+    either due to type mismatch, constraint violation, or
+    custom validation rules.
+
+    Attributes:
+        message: Error message
+        field_name: Name of field that caused the error
+        code: Error code for identifying validation error type
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        field_name: str,
+        code: Optional[str] = "validation_error",
+    ) -> None:
+        """Initialize validation error.
+
+        Args:
+            message: Error message
+            field_name: Field name
+            code: Error code for identifying validation error type
+        """
+        super().__init__(message, field_name=field_name, code=code)
+
+
+class ModelResolutionError(FieldError):
+    """Error raised when model resolution fails.
+
+    This error is raised when a model class cannot be resolved,
+    typically when trying to resolve a model name to its class
+    without having access to the model registry.
+    """
+
+    def __init__(self, message: str, *, field_name: str) -> None:
+        """Initialize model resolution error.
+
+        Args:
+            message: Error message
+            field_name: Field name
+        """
+        super().__init__(message, field_name=field_name, code="model_resolution_error")
+
+
+class ModelNotFoundError(FieldError):
+    """Error raised when model is not found.
+
+    This error is raised when a model class cannot be found
+    in the model registry, typically when trying to resolve
+    a model name that doesn't exist.
+    """
+
+    def __init__(self, message: str, *, field_name: str) -> None:
+        """Initialize model not found error.
+
+        Args:
+            message: Error message
+            field_name: Field name
+        """
+        super().__init__(message, field_name=field_name, code="model_not_found_error")
+
+
+# Database-related exceptions
+class DatabaseError(EarnORMError):
     """Base class for database-related errors."""
 
-    pass
+    def __init__(self, message: str, *, backend: str) -> None:
+        """Initialize database error.
 
-
-class PoolError(DatabaseError):
-    """Error raised when pool operation fails."""
-
-    pass
+        Args:
+            message: Error message
+            backend: Database backend name
+        """
+        self.backend = backend
+        super().__init__(f"{backend}: {message}")
 
 
 class ConnectionError(DatabaseError):
-    """Error raised when connection fails."""
-
-    pass
-
-
-class DatabaseConnectionError(ConnectionError):
     """Error raised when database connection fails."""
 
-    pass
+    def __init__(self, message: str, *, backend: str) -> None:
+        """Initialize connection error.
+
+        Args:
+            message: Error message
+            backend: Database backend name
+        """
+        super().__init__(message, backend=backend)
 
 
-class OperationError(DatabaseError):
-    """Error raised when database operation fails."""
+class QueryError(DatabaseError):
+    """Error raised when database query fails."""
 
-    pass
+    def __init__(self, message: str, *, backend: str, query: str) -> None:
+        """Initialize query error.
 
-
-class DatabaseValidationError(DatabaseError):
-    """Error raised when database validation fails."""
-
-    pass
-
-
-class ConfigurationError(DatabaseError):
-    """Error raised when configuration is invalid."""
-
-    pass
+        Args:
+            message: Error message
+            backend: Database backend name
+            query: Failed query
+        """
+        self.query = query
+        super().__init__(f"{message} (query={query})", backend=backend)
 
 
-class TimeoutError(DatabaseError):
-    """Error raised when operation times out."""
+# Cache-related exceptions
+class CacheError(EarnORMError):
+    """Base class for cache-related errors."""
 
-    pass
+    def __init__(self, message: str, *, backend: str) -> None:
+        """Initialize cache error.
 
-
-class RetryError(DatabaseError):
-    """Error raised when retry attempts are exhausted."""
-
-    pass
-
-
-class CircuitBreakerError(DatabaseError):
-    """Error raised when circuit breaker prevents operation."""
-
-    pass
+        Args:
+            message: Error message
+            backend: Cache backend name
+        """
+        self.backend = backend
+        super().__init__(f"{backend}: {message}")
 
 
-class PoolExhaustedError(DatabaseError):
-    """Error raised when connection pool is exhausted."""
+class CacheConnectionError(CacheError):
+    """Error raised when cache connection fails."""
 
-    pass
+    def __init__(self, message: str, *, backend: str) -> None:
+        """Initialize cache connection error.
 
-
-class StaleConnectionError(DatabaseError):
-    """Error raised when connection is stale."""
-
-    pass
-
-
-class TransactionError(DatabaseError):
-    """Error raised when transaction operation fails."""
-
-    pass
+        Args:
+            message: Error message
+            backend: Cache backend name
+        """
+        super().__init__(message, backend=backend)
 
 
-class SessionError(DatabaseError):
-    """Error raised when session operation fails."""
+class CacheKeyError(CacheError):
+    """Error raised when cache key operation fails."""
 
-    pass
+    def __init__(self, message: str, *, backend: str, key: str) -> None:
+        """Initialize cache key error.
 
-
-class BulkOperationError(DatabaseError):
-    """Error raised when bulk operation fails."""
-
-    pass
-
-
-# Model-related errors
-class ModelError(EarnBaseError):
-    """Base class for model-related errors."""
-
-    pass
-
-
-class ModelValidationError(ModelError):
-    """Error raised when model validation fails."""
-
-    pass
-
-
-class SerializationError(ModelError):
-    """Error raised when model serialization fails."""
-
-    pass
-
-
-class DeserializationError(ModelError):
-    """Error raised when model deserialization fails."""
-
-    pass
-
-
-class RelationshipError(ModelError):
-    """Error raised when model relationship operation fails."""
-
-    pass
-
-
-class QueryError(ModelError):
-    """Error raised when model query operation fails."""
-
-    pass
+        Args:
+            message: Error message
+            backend: Cache backend name
+            key: Failed key
+        """
+        self.key = key
+        super().__init__(f"{message} (key={key})", backend=backend)

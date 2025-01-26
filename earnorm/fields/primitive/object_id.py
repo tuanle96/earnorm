@@ -1,111 +1,148 @@
-"""ObjectId field type.
+"""ObjectId field implementation.
 
-This module provides the ObjectIdField class for handling MongoDB ObjectId values.
+This module provides ObjectId field type for handling MongoDB ObjectId values.
 It supports:
-- ObjectId validation and conversion
-- String/value conversion to ObjectId
-- Auto-generation of new ObjectIds
-- Database backend support
+- ObjectId validation
+- String conversion
+- Database type mapping
 
 Examples:
     >>> class User(Model):
-    ...     id = ObjectIdField(primary_key=True)
-    ...     ref_id = ObjectIdField(required=True)
-
-    >>> user = User()
-    >>> user.id  # Auto-generated ObjectId
-    >>> user.ref_id = "507f1f77bcf86cd799439011"  # String conversion
-    >>> user.ref_id = ObjectId()  # Direct ObjectId assignment
+    ...     _id = ObjectIdField(primary_key=True)
+    ...     parent_id = ObjectIdField(nullable=True)
 """
 
-from typing import Any, Optional, Type, Union
+from typing import Any, Final, Optional
 
-from bson import ObjectId
-from bson.errors import InvalidId
+from bson import ObjectId, errors
 
-from earnorm.fields.base import Field, ValidationError
+from earnorm.exceptions import FieldValidationError
+from earnorm.fields.base import BaseField
+from earnorm.fields.types import DatabaseValue
+from earnorm.fields.validators.base import TypeValidator, Validator
+
+# Constants
+DEFAULT_PRIMARY_KEY: Final[bool] = False
 
 
-class ObjectIdField(Field[ObjectId]):
-    """ObjectId field for MongoDB document IDs.
+class ObjectIdField(BaseField[ObjectId]):
+    """Field for MongoDB ObjectId values.
 
-    This field handles:
-    - ObjectId validation and conversion
-    - Auto-generation of new ObjectIds
-    - String conversion to ObjectId
-    - Database serialization
+    This field type handles ObjectId values, with support for:
+    - ObjectId validation
+    - String conversion
+    - Database type mapping
 
     Attributes:
-        required: Whether field is required
-        unique: Whether field value must be unique
-        primary_key: Whether field is primary key
-
-    Raises:
-        ValidationError: With codes:
-            - invalid_type: Value cannot be converted to ObjectId
-            - invalid_format: Value has invalid ObjectId format
+        primary_key: Whether this field is the primary key
+        backend_options: Database backend options
     """
 
-    def _get_field_type(self) -> Type[ObjectId]:
-        """Get field type.
+    primary_key: bool
+    backend_options: dict[str, Any]
 
-        Returns:
-            ObjectId type
-        """
-        return ObjectId
-
-    async def convert(self, value: Any) -> ObjectId:
-        """Convert value to ObjectId.
+    def __init__(
+        self,
+        *,
+        primary_key: bool = DEFAULT_PRIMARY_KEY,
+        **options: Any,
+    ) -> None:
+        """Initialize ObjectId field.
 
         Args:
-            value: Value to convert (None, str, or ObjectId)
+            primary_key: Whether this field is the primary key
+            **options: Additional field options
+        """
+        field_validators: list[Validator[Any]] = [TypeValidator(ObjectId)]
+        super().__init__(validators=field_validators, **options)
 
-        Returns:
-            Converted ObjectId value
+        self.primary_key = primary_key
+
+        # Initialize backend options
+        self.backend_options = {
+            "mongodb": {"type": "objectId"},
+            "postgres": {"type": "VARCHAR(24)"},
+            "mysql": {"type": "CHAR(24)"},
+        }
+
+    async def validate(self, value: Any) -> None:
+        """Validate ObjectId value.
+
+        This method validates:
+        - Value is ObjectId type
+        - Value is a valid ObjectId
+
+        Args:
+            value: Value to validate
 
         Raises:
-            ValidationError: With codes:
-                - invalid_type: Value cannot be converted to ObjectId
-                - invalid_format: Value has invalid ObjectId format
-
-        Examples:
-            >>> field = ObjectIdField()
-            >>> await field.convert(None)  # Returns new ObjectId
-            >>> await field.convert("507f1f77bcf86cd799439011")  # Returns ObjectId
-            >>> await field.convert(ObjectId())  # Returns as is
+            FieldValidationError: If validation fails
         """
-        if value is None or value == "":
-            return ObjectId()  # Generate new ObjectId
+        await super().validate(value)
 
-        if isinstance(value, ObjectId):
-            return value
+        if value is not None:
+            if not isinstance(value, ObjectId):
+                raise FieldValidationError(
+                    message=f"Value must be an ObjectId, got {type(value).__name__}",
+                    field_name=self.name,
+                    code="invalid_type",
+                )
+
+            # Check if value is a valid ObjectId
+            try:
+                str_value = str(value)
+                if not ObjectId.is_valid(str_value):
+                    raise ValueError("Invalid ObjectId format")
+            except (TypeError, ValueError) as e:
+                raise FieldValidationError(
+                    message=f"Invalid ObjectId value: {str(e)}",
+                    field_name=self.name,
+                    code="invalid_format",
+                ) from e
+
+    async def convert(self, value: Any) -> Optional[ObjectId]:
+        """Convert value to ObjectId.
+
+        Handles:
+        - None values
+        - ObjectId instances
+        - String values (hex format)
+
+        Args:
+            value: Value to convert
+
+        Returns:
+            Converted ObjectId value or None
+
+        Raises:
+            FieldValidationError: If value cannot be converted
+        """
+        if value is None:
+            return None
 
         try:
-            return ObjectId(str(value))
-        except (TypeError, InvalidId) as e:
-            raise ValidationError(
-                message=f"Invalid ObjectId format: {value}",
+            if isinstance(value, ObjectId):
+                return value
+            elif isinstance(value, str):
+                return ObjectId(value)
+            else:
+                raise TypeError(f"Cannot convert {type(value).__name__} to ObjectId")
+        except (TypeError, errors.InvalidId) as e:
+            raise FieldValidationError(
+                message=f"Cannot convert value to ObjectId: {str(e)}",
                 field_name=self.name,
-                code="invalid_format",
+                code="conversion_error",
             ) from e
 
-    async def to_db(
-        self, value: Optional[ObjectId], backend: str
-    ) -> Optional[Union[str, ObjectId]]:
-        """Convert ObjectId for database storage.
+    async def to_db(self, value: Optional[ObjectId], backend: str) -> DatabaseValue:
+        """Convert ObjectId to database format.
 
         Args:
             value: ObjectId value to convert
-            backend: Database backend type ('mongodb', 'postgres', 'mysql')
+            backend: Database backend type
 
         Returns:
-            String (SQL) or ObjectId (MongoDB) or None
-
-        Examples:
-            >>> field = ObjectIdField()
-            >>> await field.to_db(ObjectId(), "mongodb")  # Returns ObjectId
-            >>> await field.to_db(ObjectId(), "postgres")  # Returns str
-            >>> await field.to_db(None, "mysql")  # Returns None
+            Converted ObjectId value or None
         """
         if value is None:
             return None
@@ -114,38 +151,32 @@ class ObjectIdField(Field[ObjectId]):
             return value
         return str(value)
 
-    async def from_db(self, value: Any, backend: str) -> ObjectId:
+    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[ObjectId]:
         """Convert database value to ObjectId.
 
         Args:
             value: Database value to convert
-            backend: Database backend type ('mongodb', 'postgres', 'mysql')
+            backend: Database backend type
 
         Returns:
-            Converted ObjectId value
+            Converted ObjectId value or None
 
         Raises:
-            ValidationError: With codes:
-                - invalid_type: Value cannot be converted to ObjectId
-                - invalid_format: Value has invalid ObjectId format
-
-        Examples:
-            >>> field = ObjectIdField()
-            >>> await field.from_db(ObjectId(), "mongodb")  # Returns as is
-            >>> await field.from_db("507f1f77bcf86cd799439011", "postgres")  # Converts
-            >>> await field.from_db(None, "mysql")  # Returns new ObjectId
+            FieldValidationError: If value cannot be converted
         """
         if value is None:
-            return ObjectId()
-
-        if isinstance(value, ObjectId):
-            return value
+            return None
 
         try:
-            return ObjectId(str(value))
-        except (TypeError, InvalidId) as e:
-            raise ValidationError(
-                message=f"Invalid ObjectId format in database: {value}",
+            if isinstance(value, ObjectId):
+                return value
+            elif isinstance(value, str):
+                return ObjectId(value)
+            else:
+                raise TypeError(f"Cannot convert {type(value).__name__} to ObjectId")
+        except (TypeError, errors.InvalidId) as e:
+            raise FieldValidationError(
+                message=f"Cannot convert database value to ObjectId: {str(e)}",
                 field_name=self.name,
-                code="invalid_format",
+                code="conversion_error",
             ) from e

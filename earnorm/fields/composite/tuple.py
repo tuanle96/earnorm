@@ -1,229 +1,328 @@
 """Tuple field implementation.
 
-This module provides tuple field types for handling fixed-length tuples of values.
+This module provides tuple field type for handling fixed-length sequences of values.
 It supports:
-- Fixed-length tuples with different field types
-- Type validation for each position
-- Value conversion for each position
-- JSON array parsing
-- Database conversion
+- Type validation for each element
+- Length validation
+- Database type mapping
+- Custom validation rules
 
 Examples:
-    >>> class Point(Model):
-    ...     # (x, y) coordinates
-    ...     position = TupleField([FloatField(), FloatField()])
-    ...     # RGB color values (0-255)
-    ...     color = TupleField([
-    ...         IntegerField(min_value=0, max_value=255),
-    ...         IntegerField(min_value=0, max_value=255),
-    ...         IntegerField(min_value=0, max_value=255),
-    ...     ])
-    ...     # Start and end dates
-    ...     date_range = TupleField([DateField(), DateField()])
+    >>> class Product(Model):
+    ...     # Tuple of (width, height, depth) in centimeters
+    ...     dimensions = TupleField(
+    ...         fields=(
+    ...             NumberField(min_value=0),  # width
+    ...             NumberField(min_value=0),  # height
+    ...             NumberField(min_value=0),  # depth
+    ...         ),
+    ...         required=True,
+    ...     )
+    ...     # Tuple of (latitude, longitude)
+    ...     location = TupleField(
+    ...         fields=(
+    ...             NumberField(min_value=-90, max_value=90),  # latitude
+    ...             NumberField(min_value=-180, max_value=180),  # longitude
+    ...         ),
+    ...         nullable=True,
+    ...     )
 """
 
-from typing import Any, List, Optional, Sequence, Tuple, TypeVar, cast
+from typing import Any, Generic, List, Optional, Sequence, Tuple, TypeVar
 
-from earnorm.fields.base import Field, ValidationError
+from earnorm.exceptions import FieldValidationError
+from earnorm.fields.base import BaseField
+from earnorm.fields.types import DatabaseValue
 
-T = TypeVar("T")  # Type of tuple items
+# Type variable for tuple elements
+T = TypeVar("T")
 
 
-class TupleField(Field[Tuple[Any, ...]]):
-    """Field for fixed-length tuples.
+class TupleField(BaseField[Tuple[T, ...]], Generic[T]):
+    """Field for fixed-length sequences of values.
+
+    This field type handles tuples of values, with support for:
+    - Type validation for each element
+    - Length validation
+    - Database type mapping
+    - Custom validation rules
 
     Attributes:
-        fields: List of fields for each position
+        fields: Sequence of fields for validating tuple elements
+        backend_options: Database backend options
     """
+
+    fields: Sequence[BaseField[T]]
+    backend_options: dict[str, Any]
 
     def __init__(
         self,
-        fields: Sequence[Field[Any]],
+        fields: Sequence[BaseField[T]],
         **options: Any,
     ) -> None:
         """Initialize tuple field.
 
         Args:
-            fields: List of fields for each position
+            fields: Sequence of fields for validating tuple elements
             **options: Additional field options
         """
         super().__init__(**options)
-        self.fields = list(fields)  # Convert to list for indexing
 
-        # Update backend options
-        self.backend_options.update(
-            {
-                "mongodb": {
-                    "type": "array",
-                },
-                "postgres": {
-                    "type": "JSONB",
-                },
-                "mysql": {
-                    "type": "JSON",
-                },
-            }
-        )
+        if not fields:
+            raise ValueError("TupleField requires at least one field")
 
-        # Set up field names
-        for i, field in enumerate(self.fields):
-            field.name = f"{self.name}[{i}]"
-            field.required = True  # Tuple items can't be None
+        self.fields = fields
+
+        # Initialize backend options
+        self.backend_options = {
+            "mongodb": {"type": "array"},
+            "postgres": {"type": "JSONB"},
+            "mysql": {"type": "JSON"},
+        }
 
     async def validate(self, value: Any) -> None:
         """Validate tuple value.
+
+        This method validates:
+        - Value is a sequence
+        - Value length matches fields length
+        - Each element is valid according to its field
 
         Args:
             value: Value to validate
 
         Raises:
-            ValidationError: If validation fails
+            FieldValidationError: If validation fails
         """
         await super().validate(value)
 
         if value is not None:
             if not isinstance(value, (tuple, list)):
-                raise ValidationError("Value must be a tuple or list", self.name)
-
-            value_seq = cast(Sequence[Any], value)
-            if len(value_seq) != len(self.fields):
-                raise ValidationError(
-                    f"Expected {len(self.fields)} items, got {len(value_seq)}",
-                    self.name,
+                raise FieldValidationError(
+                    message=f"Value must be a tuple or list, got {type(value).__name__}",
+                    field_name=self.name,
+                    code="invalid_type",
                 )
 
-            # Validate each item
-            for i, (item, field) in enumerate(zip(value_seq, self.fields)):
-                try:
-                    await field.validate(item)
-                except ValidationError as e:
-                    raise ValidationError(
-                        f"Invalid item at index {i}: {str(e)}",
-                        self.name,
-                    )
+            value_list: List[Any] = list(
+                value  # type: ignore
+            )  # Convert to list for consistent handling
+            if len(value_list) != len(self.fields):
+                raise FieldValidationError(
+                    message=f"Expected {len(self.fields)} elements, got {len(value_list)}",
+                    field_name=self.name,
+                    code="invalid_length",
+                )
 
-    async def convert(self, value: Any) -> Optional[Tuple[Any, ...]]:
+            # Validate each element
+            for i, (field, element) in enumerate(zip(self.fields, value_list)):
+                try:
+                    await field.validate(element)  # type: ignore
+                except FieldValidationError as e:
+                    raise FieldValidationError(
+                        message=f"Invalid element at index {i}: {str(e)}",
+                        field_name=self.name,
+                        code="invalid_element",
+                    ) from e
+
+    async def convert(self, value: Any) -> Optional[Tuple[T, ...]]:
         """Convert value to tuple.
+
+        Handles:
+        - None values
+        - Tuple values
+        - List values
+        - JSON array values
 
         Args:
             value: Value to convert
 
         Returns:
-            Tuple value
+            Converted tuple or None
 
         Raises:
-            ValidationError: If conversion fails
+            FieldValidationError: If value cannot be converted
         """
         if value is None:
-            return self.default
+            return None
 
         try:
-            if isinstance(value, str):
+            if isinstance(value, (tuple, list)):
+                value_list: List[Any] = list(
+                    value  # type: ignore
+                )  # Convert to list for consistent handling
+                if len(value_list) != len(self.fields):
+                    raise FieldValidationError(
+                        message=f"Expected {len(self.fields)} elements, got {len(value_list)}",
+                        field_name=self.name,
+                        code="invalid_length",
+                    )
+
+                # Convert each element
+                result: List[T] = []
+                for i, (field, element) in enumerate(zip(self.fields, value_list)):
+                    try:
+                        converted = await field.convert(element)  # type: ignore
+                        result.append(converted)  # type: ignore
+                    except FieldValidationError as e:
+                        raise FieldValidationError(
+                            message=f"Invalid element at index {i}: {str(e)}",
+                            field_name=self.name,
+                            code="invalid_element",
+                        ) from e
+
+                return tuple(result)
+            elif isinstance(value, str):
                 # Try to parse as JSON array
                 import json
 
                 try:
-                    value = json.loads(value)
-                    if not isinstance(value, list):
-                        raise ValidationError(
-                            "JSON value must be an array",
-                            self.name,
+                    data = json.loads(value)
+                    if not isinstance(data, list):
+                        raise FieldValidationError(
+                            message="JSON value must be an array",
+                            field_name=self.name,
+                            code="invalid_json",
                         )
+
+                    data_list: List[Any] = list(
+                        data  # type: ignore
+                    )  # Convert to list for consistent handling
+                    if len(data_list) != len(self.fields):
+                        raise FieldValidationError(
+                            message=f"Expected {len(self.fields)} elements, got {len(data_list)}",
+                            field_name=self.name,
+                            code="invalid_length",
+                        )
+
+                    # Convert each element
+                    result: List[T] = []
+                    for i, (field, element) in enumerate(zip(self.fields, data_list)):
+                        try:
+                            converted = await field.convert(element)  # type: ignore
+                            result.append(converted)  # type: ignore
+                        except FieldValidationError as e:
+                            raise FieldValidationError(
+                                message=f"Invalid element at index {i}: {str(e)}",
+                                field_name=self.name,
+                                code="invalid_element",
+                            ) from e
+
+                    return tuple(result)
                 except json.JSONDecodeError as e:
-                    raise ValidationError(
-                        f"Invalid JSON array: {str(e)}",
-                        self.name,
-                    )
-            elif not isinstance(value, (tuple, list)):
-                raise ValidationError(
-                    f"Cannot convert {type(value).__name__} to tuple",
-                    self.name,
+                    raise FieldValidationError(
+                        message=f"Invalid JSON array: {str(e)}",
+                        field_name=self.name,
+                        code="invalid_json",
+                    ) from e
+            else:
+                value_type = type(value).__name__
+                raise FieldValidationError(
+                    message=f"Cannot convert {value_type} to tuple",
+                    field_name=self.name,
+                    code="conversion_error",
                 )
-
-            # Convert each item
-            value_seq = cast(Sequence[Any], value)
-            if len(value_seq) != len(self.fields):
-                raise ValidationError(
-                    f"Expected {len(self.fields)} items, got {len(value_seq)}",
-                    self.name,
-                )
-
-            result: List[Any] = []
-            for i, (item, field) in enumerate(zip(value_seq, self.fields)):
-                try:
-                    converted = await field.convert(item)
-                    if converted is None:
-                        raise ValidationError(
-                            "Tuple items cannot be None",
-                            self.name,
-                        )
-                    result.append(converted)
-                except ValidationError as e:
-                    raise ValidationError(
-                        f"Failed to convert item at index {i}: {str(e)}",
-                        self.name,
-                    )
-
-            return tuple(result)
-        except Exception as e:
-            raise ValidationError(str(e), self.name)
+        except (TypeError, ValueError) as e:
+            raise FieldValidationError(
+                message=str(e),
+                field_name=self.name,
+                code="conversion_error",
+            ) from e
 
     async def to_db(
-        self, value: Optional[Tuple[Any, ...]], backend: str
-    ) -> Optional[List[Any]]:
+        self, value: Optional[Tuple[T, ...]], backend: str
+    ) -> DatabaseValue:
         """Convert tuple to database format.
 
         Args:
-            value: Tuple value
+            value: Tuple to convert
             backend: Database backend type
 
         Returns:
-            Database value
+            Converted tuple or None
+
+        Raises:
+            FieldValidationError: If value cannot be converted
         """
         if value is None:
             return None
 
-        result: List[Any] = []
-        for item, field in zip(value, self.fields):
-            db_value = await field.to_db(item, backend)
-            result.append(db_value)
+        try:
+            # Convert each element
+            value_list: List[Any] = list(
+                value
+            )  # Convert to list for consistent handling
+            result: List[Any] = []
+            for i, (field, element) in enumerate(zip(self.fields, value_list)):
+                try:
+                    converted = await field.to_db(element, backend)  # type: ignore
+                    result.append(converted)
+                except FieldValidationError as e:
+                    raise FieldValidationError(
+                        message=f"Invalid element at index {i}: {str(e)}",
+                        field_name=self.name,
+                        code="invalid_element",
+                    ) from e
 
-        return result
+            return result
+        except Exception as e:
+            raise FieldValidationError(
+                message=f"Cannot convert to database format: {str(e)}",
+                field_name=self.name,
+                code="conversion_error",
+            ) from e
 
-    async def from_db(self, value: Any, backend: str) -> Optional[Tuple[Any, ...]]:
+    async def from_db(
+        self, value: DatabaseValue, backend: str
+    ) -> Optional[Tuple[T, ...]]:
         """Convert database value to tuple.
 
         Args:
-            value: Database value
+            value: Database value to convert
             backend: Database backend type
 
         Returns:
-            Tuple value
+            Converted tuple or None
+
+        Raises:
+            FieldValidationError: If value cannot be converted
         """
         if value is None:
             return None
 
-        if not isinstance(value, list):
-            raise ValidationError(
-                f"Expected list from database, got {type(value).__name__}",
-                self.name,
-            )
-
-        value_list = cast(List[Any], value)
-        if len(value_list) != len(self.fields):
-            raise ValidationError(
-                f"Expected {len(self.fields)} items, got {len(value_list)}",
-                self.name,
-            )
-
-        result: List[Any] = []
-        for item, field in zip(value_list, self.fields):
-            converted = await field.from_db(item, backend)
-            if converted is None:
-                raise ValidationError(
-                    "Tuple items cannot be None",
-                    self.name,
+        try:
+            if not isinstance(value, (tuple, list)):
+                raise TypeError(
+                    f"Expected list from database, got {type(value).__name__}"
                 )
-            result.append(converted)
 
-        return tuple(result)
+            value_list: List[Any] = list(
+                value  # type: ignore
+            )  # Convert to list for consistent handling
+            if len(value_list) != len(self.fields):
+                raise FieldValidationError(
+                    message=f"Expected {len(self.fields)} elements, got {len(value_list)}",
+                    field_name=self.name,
+                    code="invalid_length",
+                )
+
+            # Convert each element
+            result: List[T] = []
+            for i, (field, element) in enumerate(zip(self.fields, value_list)):
+                try:
+                    converted = await field.from_db(element, backend)  # type: ignore
+                    result.append(converted)  # type: ignore
+                except FieldValidationError as e:
+                    raise FieldValidationError(
+                        message=f"Invalid element at index {i}: {str(e)}",
+                        field_name=self.name,
+                        code="invalid_element",
+                    ) from e
+
+            return tuple(result)
+        except Exception as e:
+            raise FieldValidationError(
+                message=f"Cannot convert database value: {str(e)}",
+                field_name=self.name,
+                code="conversion_error",
+            ) from e

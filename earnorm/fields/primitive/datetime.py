@@ -2,84 +2,68 @@
 
 This module provides datetime field types for handling date and time values.
 It supports:
-- DateTime values with timezone awareness
-- Date values with automatic conversion
-- Time values with validation
-- Timezone handling (aware/naive)
+- Date and time validation
+- Timezone handling
+- Format parsing and validation
 - Auto-now and auto-now-add options
-- Custom date/time formats
 - Range validation (min/max)
-- ISO format parsing/formatting
+- Database type mapping
 
 Examples:
-    >>> class Article(Model):
+    >>> class Post(Model):
     ...     created_at = DateTimeField(auto_now_add=True)
     ...     updated_at = DateTimeField(auto_now=True)
     ...     published_at = DateTimeField(nullable=True)
-    ...     due_date = DateField(required=True)
-    ...     reminder_time = TimeField(default=time(9, 0))  # 9:00 AM
-
-    >>> article = Article()
-    >>> await article.validate()  # Sets created_at and updated_at
-    >>> article.published_at = "2024-01-01"  # Converts to datetime
-    >>> article.due_date = date(2024, 12, 31)  # Valid
-    >>> article.reminder_time = "09:00:00"  # Converts to time
 """
 
 from datetime import date, datetime, time, timezone
-from typing import Any, Optional, Union
+from typing import Any, Final, Optional
 
-from earnorm.fields.base import Field, ValidationError
+from earnorm.exceptions import FieldValidationError
+from earnorm.fields.base import BaseField
+from earnorm.fields.types import DatabaseValue
+from earnorm.fields.validators.base import RangeValidator, TypeValidator, Validator
 
-DateTimeValue = Union[datetime, date, time]
+# Constants
+DEFAULT_AUTO_NOW: Final[bool] = False
+DEFAULT_AUTO_NOW_ADD: Final[bool] = False
+DEFAULT_USE_TZ: Final[bool] = True
+DEFAULT_TIME_FORMAT: Final[str] = "%H:%M:%S"
 
 
-class DateTimeField(Field[datetime]):
+class DateTimeField(BaseField[datetime]):
     """Field for datetime values.
 
-    This field handles:
-    - Datetime validation and conversion
-    - Timezone awareness/naiveness
-    - Auto-now and auto-now-add
-    - Format parsing/formatting
-    - Range validation
+    This field type handles date and time values, with support for:
+    - Date and time validation
+    - Timezone handling
+    - Format parsing and validation
+    - Auto-now and auto-now-add options
+    - Range validation (min/max)
+    - Database type mapping
 
     Attributes:
         auto_now: Update value on every save
         auto_now_add: Set value on creation only
         use_tz: Whether to use timezone-aware datetimes
-        default_tz: Default timezone for naive datetimes (defaults to UTC)
-        format: Custom datetime format string for parsing/formatting
-        min_value: Minimum allowed value (inclusive)
-        max_value: Maximum allowed value (inclusive)
-
-    Raises:
-        ValidationError: With codes:
-            - invalid_type: Value is not a datetime
-            - min_value: Value is less than min_value
-            - max_value: Value is greater than max_value
-            - invalid_timezone: Value has incorrect timezone awareness
-            - conversion_failed: Value cannot be converted to datetime
-
-    Examples:
-        >>> field = DateTimeField(auto_now_add=True, use_tz=True)
-        >>> await field.validate(None)  # Sets current datetime with timezone
-
-        >>> field = DateTimeField(min_value=datetime(2024, 1, 1))
-        >>> await field.validate(datetime(2023, 12, 31))  # Raises ValidationError
-
-        >>> field = DateTimeField(format="%Y-%m-%d %H:%M")
-        >>> await field.convert("2024-01-01 09:00")  # Returns datetime
+        min_value: Minimum allowed datetime
+        max_value: Maximum allowed datetime
+        backend_options: Database backend options
     """
+
+    auto_now: bool
+    auto_now_add: bool
+    use_tz: bool
+    min_value: Optional[datetime]
+    max_value: Optional[datetime]
+    backend_options: dict[str, Any]
 
     def __init__(
         self,
         *,
-        auto_now: bool = False,
-        auto_now_add: bool = False,
-        use_tz: bool = True,
-        default_tz: Optional[timezone] = None,
-        format: Optional[str] = None,
+        auto_now: bool = DEFAULT_AUTO_NOW,
+        auto_now_add: bool = DEFAULT_AUTO_NOW_ADD,
+        use_tz: bool = DEFAULT_USE_TZ,
         min_value: Optional[datetime] = None,
         max_value: Optional[datetime] = None,
         **options: Any,
@@ -90,113 +74,84 @@ class DateTimeField(Field[datetime]):
             auto_now: Update value on every save
             auto_now_add: Set value on creation only
             use_tz: Whether to use timezone-aware datetimes
-            default_tz: Default timezone for naive datetimes (defaults to UTC)
-            format: Custom datetime format string for parsing/formatting
-            min_value: Minimum allowed value (inclusive)
-            max_value: Maximum allowed value (inclusive)
+            min_value: Minimum allowed datetime
+            max_value: Maximum allowed datetime
             **options: Additional field options
-
-        Examples:
-            >>> field = DateTimeField(auto_now=True)  # Updates on every save
-            >>> field = DateTimeField(format="%Y-%m-%d")  # Custom format
-            >>> field = DateTimeField(use_tz=False)  # Naive datetimes
         """
-        super().__init__(**options)
+        # Create validators
+        field_validators: list[Validator[Any]] = [TypeValidator(datetime)]
+        if min_value is not None or max_value is not None:
+            field_validators.append(
+                RangeValidator(
+                    min_value=min_value,
+                    max_value=max_value,
+                    message=(
+                        f"Value must be between {min_value or '-∞'} "
+                        f"and {max_value or '∞'}"
+                    ),
+                )
+            )
+
+        super().__init__(validators=field_validators, **options)
+
         self.auto_now = auto_now
         self.auto_now_add = auto_now_add
         self.use_tz = use_tz
-        self.default_tz = default_tz or timezone.utc
-        self.format = format
         self.min_value = min_value
         self.max_value = max_value
 
-        # Update backend options
-        self.backend_options.update(
-            {
-                "mongodb": {
-                    "type": "date",
-                },
-                "postgres": {
-                    "type": "TIMESTAMP WITH TIME ZONE" if use_tz else "TIMESTAMP",
-                },
-                "mysql": {
-                    "type": "DATETIME",
-                },
-            }
-        )
+        # Initialize backend options
+        self.backend_options = {
+            "mongodb": {"type": "date"},
+            "postgres": {"type": "TIMESTAMP WITH TIME ZONE" if use_tz else "TIMESTAMP"},
+            "mysql": {"type": "DATETIME"},
+        }
 
     async def validate(self, value: Any) -> None:
         """Validate datetime value.
 
-        Validates:
-        - Type is datetime
-        - Within min/max range
-        - Timezone awareness matches configuration
-        - Not None if required
+        This method validates:
+        - Value is datetime type
+        - Value is within min/max range
+        - Value has correct timezone info
 
         Args:
             value: Value to validate
 
         Raises:
-            ValidationError: With codes:
-                - invalid_type: Value is not a datetime
-                - min_value: Value is less than min_value
-                - max_value: Value is greater than max_value
-                - invalid_timezone: Value has incorrect timezone awareness
-
-        Examples:
-            >>> field = DateTimeField(min_value=datetime(2024, 1, 1))
-            >>> await field.validate("2024-01-01")  # Raises ValidationError(code="invalid_type")
-            >>> await field.validate(datetime(2023, 12, 31))  # Raises ValidationError(code="min_value")
-            >>> await field.validate(datetime(2024, 1, 1))  # Valid
+            FieldValidationError: If validation fails
         """
         await super().validate(value)
 
         if value is not None:
             if not isinstance(value, datetime):
-                raise ValidationError(
+                raise FieldValidationError(
                     message=f"Value must be a datetime, got {type(value).__name__}",
                     field_name=self.name,
                     code="invalid_type",
                 )
 
-            if self.min_value is not None and value < self.min_value:
-                raise ValidationError(
-                    message=f"Value must be greater than or equal to {self.min_value}, got {value}",
-                    field_name=self.name,
-                    code="min_value",
-                )
-
-            if self.max_value is not None and value > self.max_value:
-                raise ValidationError(
-                    message=f"Value must be less than or equal to {self.max_value}, got {value}",
-                    field_name=self.name,
-                    code="max_value",
-                )
-
-            # Ensure timezone awareness matches field configuration
             if self.use_tz and value.tzinfo is None:
-                raise ValidationError(
-                    message="Value must be timezone-aware when use_tz=True",
+                raise FieldValidationError(
+                    message="Timezone-aware datetime is required",
                     field_name=self.name,
-                    code="invalid_timezone",
+                    code="missing_timezone",
                 )
             elif not self.use_tz and value.tzinfo is not None:
-                raise ValidationError(
-                    message="Value must be timezone-naive when use_tz=False",
+                raise FieldValidationError(
+                    message="Naive datetime is required",
                     field_name=self.name,
-                    code="invalid_timezone",
+                    code="unexpected_timezone",
                 )
 
     async def convert(self, value: Any) -> Optional[datetime]:
         """Convert value to datetime.
 
         Handles:
-        - None values with auto-now/auto-now-add
-        - datetime values with timezone adjustment
-        - date values converted to datetime
-        - string values parsed with format
-        - timestamp values (int/float)
+        - None values
+        - Datetime objects
+        - String values (ISO format)
+        - Integer/float values (Unix timestamps)
 
         Args:
             value: Value to convert
@@ -205,129 +160,106 @@ class DateTimeField(Field[datetime]):
             Converted datetime value or None
 
         Raises:
-            ValidationError: With code "conversion_failed" if value cannot be converted
-
-        Examples:
-            >>> field = DateTimeField(format="%Y-%m-%d")
-            >>> await field.convert("2024-01-01")  # Returns datetime(2024, 1, 1)
-            >>> await field.convert(date(2024, 1, 1))  # Returns datetime at midnight
-            >>> await field.convert(1704067200)  # Returns datetime from timestamp
-            >>> await field.convert(None)  # Returns None or current time if auto_now
-        """
-        if value is None:
-            if self.auto_now or self.auto_now_add:
-                value = datetime.now(self.default_tz if self.use_tz else None)
-            else:
-                return self.default
-
-        try:
-            if isinstance(value, datetime):
-                dt = value
-            elif isinstance(value, date):
-                dt = datetime.combine(value, time())
-            elif isinstance(value, str):
-                if self.format:
-                    dt = datetime.strptime(value, self.format)
-                else:
-                    # Try ISO format as fallback
-                    dt = datetime.fromisoformat(value)
-            elif isinstance(value, (int, float)):
-                dt = datetime.fromtimestamp(
-                    value, self.default_tz if self.use_tz else None
-                )
-            else:
-                raise ValueError(f"Cannot convert {type(value).__name__} to datetime")
-
-            # Ensure correct timezone awareness
-            if self.use_tz and dt.tzinfo is None:
-                dt = dt.replace(tzinfo=self.default_tz)
-            elif not self.use_tz and dt.tzinfo is not None:
-                dt = dt.replace(tzinfo=None)
-
-            return dt
-        except (TypeError, ValueError) as e:
-            raise ValidationError(
-                message=f"Cannot convert value to datetime: {str(e)}",
-                field_name=self.name,
-                code="conversion_failed",
-            )
-
-    async def to_db(
-        self, value: Optional[datetime], backend: str
-    ) -> Optional[datetime]:
-        """Convert datetime to database format.
-
-        Args:
-            value: Datetime value to convert
-            backend: Database backend type ('mongodb', 'postgres', 'mysql')
-
-        Returns:
-            Database datetime value or None
-
-        Examples:
-            >>> field = DateTimeField(use_tz=True)
-            >>> dt = datetime(2024, 1, 1, tzinfo=timezone.utc)
-            >>> await field.to_db(dt, "mongodb")  # Returns UTC datetime
-            >>> await field.to_db(None, "postgres")  # Returns None
+            FieldValidationError: If value cannot be converted
         """
         if value is None:
             return None
 
-        if backend == "mongodb":
-            # MongoDB requires timezone-aware datetimes
+        try:
+            if isinstance(value, datetime):
+                dt = value
+            elif isinstance(value, (int, float)):
+                dt = datetime.fromtimestamp(value)
+            elif isinstance(value, str):
+                dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            else:
+                raise TypeError(f"Cannot convert {type(value).__name__} to datetime")
+
+            # Handle timezone
+            if self.use_tz:
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+            else:
+                if dt.tzinfo is not None:
+                    dt = dt.replace(tzinfo=None)
+
+            return dt
+        except (TypeError, ValueError) as e:
+            raise FieldValidationError(
+                message=f"Cannot convert {type(value).__name__} to datetime: {str(e)}",
+                field_name=self.name,
+                code="conversion_error",
+            ) from e
+
+    async def to_db(self, value: Optional[datetime], backend: str) -> DatabaseValue:
+        """Convert datetime to database format.
+
+        Args:
+            value: Datetime value to convert
+            backend: Database backend type
+
+        Returns:
+            Converted datetime value or None
+        """
+        if value is None:
+            return None
+
+        # Handle auto-now
+        if self.auto_now:
+            value = datetime.now(timezone.utc if self.use_tz else None)
+
+        # Handle timezone
+        if self.use_tz:
             if value.tzinfo is None:
-                value = value.replace(tzinfo=self.default_tz)
-        elif backend in ("postgres", "mysql"):
-            # PostgreSQL and MySQL handle timezone conversion
-            pass
+                value = value.replace(tzinfo=timezone.utc)
+        else:
+            if value.tzinfo is not None:
+                value = value.replace(tzinfo=None)
 
         return value
 
-    async def from_db(self, value: Any, backend: str) -> Optional[datetime]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[datetime]:
         """Convert database value to datetime.
 
         Args:
             value: Database value to convert
-            backend: Database backend type ('mongodb', 'postgres', 'mysql')
+            backend: Database backend type
 
         Returns:
             Converted datetime value or None
 
         Raises:
-            ValidationError: With code "conversion_failed" if value cannot be converted
-
-        Examples:
-            >>> field = DateTimeField(use_tz=True)
-            >>> await field.from_db("2024-01-01T00:00:00Z", "postgres")  # Returns UTC datetime
-            >>> await field.from_db(None, "mongodb")  # Returns None
+            FieldValidationError: If value cannot be converted
         """
         if value is None:
             return None
 
-        try:
-            if isinstance(value, str):
-                # Handle ISO format strings
-                value = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            elif not isinstance(value, datetime):
-                value = datetime.fromtimestamp(float(value))
+        if not isinstance(value, datetime):
+            raise FieldValidationError(
+                message=f"Expected datetime from database, got {type(value).__name__}",
+                field_name=self.name,
+                code="invalid_type",
+            )
 
-            # Ensure correct timezone awareness
-            if self.use_tz and value.tzinfo is None:
-                value = value.replace(tzinfo=self.default_tz)
-            elif not self.use_tz and value.tzinfo is not None:
+        # Handle timezone
+        if self.use_tz:
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+        else:
+            if value.tzinfo is not None:
                 value = value.replace(tzinfo=None)
 
-            return value
-        except (TypeError, ValueError) as e:
-            raise ValidationError(
-                message=f"Cannot convert database value to datetime: {str(e)}",
-                field_name=self.name,
-                code="conversion_failed",
-            )
+        return value
 
 
 class DateField(DateTimeField):
     """Field for date values.
+
+    This field type handles date values, with support for:
+    - Date validation
+    - Range validation (min/max)
+    - Auto-now and auto-now-add options
+    - Database type mapping
 
     Examples:
         >>> class Event(Model):
@@ -351,63 +283,68 @@ class DateField(DateTimeField):
         """
         super().__init__(
             use_tz=False,
-            format="%Y-%m-%d",
             min_value=datetime.combine(min_value, time()) if min_value else None,
             max_value=datetime.combine(max_value, time()) if max_value else None,
             **options,
         )
 
-        # Update backend options
-        self.backend_options.update(
-            {
-                "mongodb": {
-                    "type": "date",
-                },
-                "postgres": {
-                    "type": "DATE",
-                },
-                "mysql": {
-                    "type": "DATE",
-                },
-            }
-        )
+        # Initialize backend options
+        self.backend_options = {
+            "mongodb": {"type": "date"},
+            "postgres": {"type": "DATE"},
+            "mysql": {"type": "DATE"},
+        }
 
     async def convert(self, value: Any) -> Optional[datetime]:
         """Convert value to date.
+
+        Handles:
+        - None values
+        - Date objects
+        - Datetime objects (date part only)
+        - String values (ISO format)
 
         Args:
             value: Value to convert
 
         Returns:
-            Date value as datetime
+            Converted datetime value or None
 
         Raises:
-            ValidationError: If conversion fails
+            FieldValidationError: If value cannot be converted
         """
         if value is None:
-            if self.auto_now or self.auto_now_add:
-                return datetime.combine(date.today(), time())
-            return self.default
+            return None
 
-        if isinstance(value, date):
-            return datetime.combine(value, time())
-        elif isinstance(value, datetime):
-            return datetime.combine(value.date(), time())
-        elif isinstance(value, str):
-            try:
-                parsed_date = datetime.strptime(value, "%Y-%m-%d").date()
-                return datetime.combine(parsed_date, time())
-            except ValueError as e:
-                raise ValidationError(str(e), self.name)
-        else:
-            raise ValidationError(
-                f"Cannot convert {type(value).__name__} to date",
-                self.name,
-            )
+        try:
+            if isinstance(value, datetime):
+                dt = value.replace(
+                    hour=0, minute=0, second=0, microsecond=0, tzinfo=None
+                )
+            elif isinstance(value, date):
+                dt = datetime.combine(value, time())
+            elif isinstance(value, str):
+                dt = datetime.fromisoformat(value.split("T")[0])
+            else:
+                raise TypeError(f"Cannot convert {type(value).__name__} to date")
+
+            return dt
+        except (TypeError, ValueError) as e:
+            raise FieldValidationError(
+                message=f"Cannot convert {type(value).__name__} to date: {str(e)}",
+                field_name=self.name,
+                code="conversion_error",
+            ) from e
 
 
-class TimeField(Field[time]):
+class TimeField(BaseField[time]):
     """Field for time values.
+
+    This field type handles time values, with support for:
+    - Time validation
+    - Range validation (min/max)
+    - Format parsing and validation
+    - Database type mapping
 
     Examples:
         >>> class Schedule(Model):
@@ -415,125 +352,146 @@ class TimeField(Field[time]):
         ...     end_time = TimeField(required=True)
     """
 
+    min_value: Optional[time]
+    max_value: Optional[time]
+    format: str
+    backend_options: dict[str, Any]
+
     def __init__(
         self,
         *,
-        format: Optional[str] = None,
         min_value: Optional[time] = None,
         max_value: Optional[time] = None,
+        format: str = DEFAULT_TIME_FORMAT,  # pylint: disable=redefined-builtin
         **options: Any,
     ) -> None:
         """Initialize time field.
 
         Args:
-            format: Custom time format string
             min_value: Minimum allowed value
             max_value: Maximum allowed value
+            format: Time format string
             **options: Additional field options
         """
-        super().__init__(**options)
-        self.format = format or "%H:%M:%S"
+        field_validators: list[Validator[Any]] = [TypeValidator(time)]
+        if min_value is not None or max_value is not None:
+            field_validators.append(
+                RangeValidator(
+                    min_value=min_value,
+                    max_value=max_value,
+                    message=(
+                        f"Value must be between {min_value or '00:00:00'} "
+                        f"and {max_value or '23:59:59'}"
+                    ),
+                )
+            )
+
+        super().__init__(validators=field_validators, **options)
+
         self.min_value = min_value
         self.max_value = max_value
+        self.format = format
 
-        # Update backend options
-        self.backend_options.update(
-            {
-                "mongodb": {
-                    "type": "string",
-                },
-                "postgres": {
-                    "type": "TIME",
-                },
-                "mysql": {
-                    "type": "TIME",
-                },
-            }
-        )
+        # Initialize backend options
+        self.backend_options = {
+            "mongodb": {"type": "time"},
+            "postgres": {"type": "TIME"},
+            "mysql": {"type": "TIME"},
+        }
 
     async def validate(self, value: Any) -> None:
         """Validate time value.
+
+        This method validates:
+        - Value is time type
+        - Value is within min/max range
 
         Args:
             value: Value to validate
 
         Raises:
-            ValidationError: If validation fails
+            FieldValidationError: If validation fails
         """
         await super().validate(value)
 
-        if value is not None:
-            if not isinstance(value, time):
-                raise ValidationError("Value must be a time", self.name)
-
-            if self.min_value is not None and value < self.min_value:
-                raise ValidationError(
-                    f"Value must be greater than or equal to {self.min_value}",
-                    self.name,
-                )
-
-            if self.max_value is not None and value > self.max_value:
-                raise ValidationError(
-                    f"Value must be less than or equal to {self.max_value}",
-                    self.name,
-                )
+        if value is not None and not isinstance(value, time):
+            raise FieldValidationError(
+                message=f"Value must be a time, got {type(value).__name__}",
+                field_name=self.name,
+                code="invalid_type",
+            )
 
     async def convert(self, value: Any) -> Optional[time]:
         """Convert value to time.
+
+        Handles:
+        - None values
+        - Time objects
+        - Datetime objects (time part only)
+        - String values (using format)
 
         Args:
             value: Value to convert
 
         Returns:
-            Time value
+            Converted time value or None
 
         Raises:
-            ValidationError: If conversion fails
+            FieldValidationError: If value cannot be converted
         """
         if value is None:
-            return self.default
+            return None
 
-        if isinstance(value, time):
-            return value
-        elif isinstance(value, datetime):
-            return value.time()
-        elif isinstance(value, str):
-            try:
+        try:
+            if isinstance(value, time):
+                return value
+            elif isinstance(value, datetime):
+                return value.time()
+            elif isinstance(value, str):
                 return datetime.strptime(value, self.format).time()
-            except ValueError as e:
-                raise ValidationError(str(e), self.name)
-        else:
-            raise ValidationError(
-                f"Cannot convert {type(value).__name__} to time",
-                self.name,
-            )
+            else:
+                raise TypeError(f"Cannot convert {type(value).__name__} to time")
+        except (TypeError, ValueError) as e:
+            raise FieldValidationError(
+                message=(
+                    f"Cannot convert {type(value).__name__} to time: {str(e)}. "
+                    f"Expected format: {self.format}"
+                ),
+                field_name=self.name,
+                code="conversion_error",
+            ) from e
 
-    async def to_db(self, value: Optional[time], backend: str) -> Optional[str]:
+    async def to_db(self, value: Optional[time], backend: str) -> DatabaseValue:
         """Convert time to database format.
 
         Args:
-            value: Time value
+            value: Time value to convert
             backend: Database backend type
 
         Returns:
-            Database value
+            Converted time value or None
         """
-        if value is None:
-            return None
+        return value
 
-        return value.strftime(self.format)
-
-    async def from_db(self, value: Any, backend: str) -> Optional[time]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[time]:
         """Convert database value to time.
 
         Args:
-            value: Database value
+            value: Database value to convert
             backend: Database backend type
 
         Returns:
-            Time value
+            Converted time value or None
+
+        Raises:
+            FieldValidationError: If value cannot be converted
         """
         if value is None:
             return None
 
-        return await self.convert(value)
+        if not isinstance(value, time):
+            raise FieldValidationError(
+                message=f"Expected time from database, got {type(value).__name__}",
+                field_name=self.name,
+                code="invalid_type",
+            )

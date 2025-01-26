@@ -1,83 +1,111 @@
 """String field implementation.
 
-This module provides string field types for text data.
+This module provides string field types for handling text values.
 It supports:
-- String length validation
-- Pattern matching with regex
+- Minimum and maximum length validation
+- Regular expression pattern matching
 - Case sensitivity options
-- String transformations (lower, upper, title, capitalize)
-- Common string formats (email, url)
-- Whitespace stripping
+- String transformations
+- Whitespace handling
+- Email validation
+- URL validation
+- Password validation
+- Text field with unlimited length
 
 Examples:
     >>> class User(Model):
-    ...     username = StringField(min_length=3, max_length=30, pattern=r'^[a-zA-Z0-9_]+$')
+    ...     name = StringField(min_length=2, max_length=50)
+    ...     username = StringField(pattern=r'^[a-z0-9_]+$')
     ...     email = EmailField(required=True)
-    ...     website = URLField()
-    ...     bio = TextField(max_length=1000)
-
-    >>> user = User()
-    >>> await user.validate() # Raises ValidationError for required email
-    >>> user.email = "invalid"  # Raises ValidationError for invalid email format
-    >>> user.email = "user@example.com"  # Valid
-    >>> user.username = "user.1"  # Raises ValidationError for invalid pattern
-    >>> user.username = "user_1"  # Valid
+    ...     password = PasswordField(min_length=8)
+    ...     bio = TextField()
 """
 
 import re
-from typing import Any, Optional, Pattern, Union
+from typing import Any, Final, Literal, Optional, Pattern, Union
 
-from earnorm.fields.base import Field, ValidationError
+from earnorm.exceptions import FieldValidationError
+from earnorm.fields.base import BaseField
+from earnorm.fields.types import DatabaseValue
+from earnorm.fields.validators.base import (
+    RangeValidator,
+    RegexValidator,
+    TypeValidator,
+    Validator,
+)
+
+# Constants
+DEFAULT_MIN_LENGTH: Final[Optional[int]] = None
+DEFAULT_MAX_LENGTH: Final[Optional[int]] = None
+DEFAULT_CASE_SENSITIVE: Final[bool] = True
+DEFAULT_STRIP: Final[bool] = True
+DEFAULT_TRANSFORM: Final[Optional[Literal["lower", "upper", "title", "capitalize"]]] = (
+    None
+)
+
+# Password constants
+DEFAULT_PASSWORD_MIN_LENGTH: Final[int] = 8
+DEFAULT_REQUIRE_UPPER: Final[bool] = True
+DEFAULT_REQUIRE_LOWER: Final[bool] = True
+DEFAULT_REQUIRE_DIGIT: Final[bool] = True
+DEFAULT_REQUIRE_SPECIAL: Final[bool] = True
+
+# URL constants
+DEFAULT_REQUIRE_TLD: Final[bool] = True
+
+# Validation patterns
+EMAIL_PATTERN: Final[Pattern[str]] = re.compile(
+    r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+)
+URL_PATTERN: Final[Pattern[str]] = re.compile(
+    r"^https?://(?:[\w-]+\.)+[\w-]+(?:/[\w-./?%&=]*)?$"
+)
+PASSWORD_PATTERNS: Final[dict[str, Pattern[str]]] = {
+    "upper": re.compile(r"[A-Z]"),
+    "lower": re.compile(r"[a-z]"),
+    "digit": re.compile(r"\d"),
+    "special": re.compile(r"[!@#$%^&*(),.?\":{}|<>]"),
+}
 
 
-class StringField(Field[str]):
+class StringField(BaseField[str]):
     """Field for string values.
 
-    This field handles:
-    - String length validation (min/max)
-    - Pattern matching with regex
-    - Case sensitivity
-    - Whitespace stripping
+    This field type handles text values, with support for:
+    - Minimum and maximum length validation
+    - Regular expression pattern matching
+    - Case sensitivity options
     - String transformations
+    - Whitespace handling
 
     Attributes:
         min_length: Minimum string length
         max_length: Maximum string length
         pattern: Regular expression pattern for validation
         case_sensitive: Whether string matching is case sensitive
-        strip: Whether to strip whitespace
+        strip: Whether to strip whitespace from input
         transform: String transformation ('lower', 'upper', 'title', 'capitalize')
-
-    Raises:
-        ValidationError: With codes:
-            - invalid_type: Value is not a string
-            - min_length: String length is less than min_length
-            - max_length: String length exceeds max_length
-            - invalid_pattern: String does not match pattern
-            - conversion_failed: Value cannot be converted to string
-
-    Examples:
-        >>> name = StringField(min_length=2, max_length=50)
-        >>> await name.validate("A")  # Raises ValidationError(code="min_length")
-        >>> await name.validate("Bob")  # Valid
-
-        >>> username = StringField(pattern=r'^[a-z0-9_]+$')
-        >>> await username.validate("User.1")  # Raises ValidationError(code="invalid_pattern")
-        >>> await username.validate("user_1")  # Valid
-
-        >>> email = StringField(transform="lower", strip=True)
-        >>> await email.convert(" Test@Example.com ")  # Returns "test@example.com"
     """
+
+    min_length: Optional[int]
+    max_length: Optional[int]
+    pattern: Optional[Pattern[str]]
+    case_sensitive: bool
+    strip: bool
+    transform: Optional[Literal["lower", "upper", "title", "capitalize"]]
+    backend_options: dict[str, Any]  # Add type hint for backend_options
 
     def __init__(
         self,
         *,
-        min_length: Optional[int] = None,
-        max_length: Optional[int] = None,
+        min_length: Optional[int] = DEFAULT_MIN_LENGTH,
+        max_length: Optional[int] = DEFAULT_MAX_LENGTH,
         pattern: Optional[Union[str, Pattern[str]]] = None,
-        case_sensitive: bool = True,
-        strip: bool = True,
-        transform: Optional[str] = None,
+        case_sensitive: bool = DEFAULT_CASE_SENSITIVE,
+        strip: bool = DEFAULT_STRIP,
+        transform: Optional[
+            Literal["lower", "upper", "title", "capitalize"]
+        ] = DEFAULT_TRANSFORM,
         **options: Any,
     ) -> None:
         """Initialize string field.
@@ -90,13 +118,29 @@ class StringField(Field[str]):
             strip: Whether to strip whitespace from input
             transform: String transformation ('lower', 'upper', 'title', 'capitalize')
             **options: Additional field options
-
-        Examples:
-            >>> name = StringField(min_length=2, max_length=50)
-            >>> username = StringField(pattern=r'^[a-z0-9_]+$')
-            >>> email = StringField(transform="lower", strip=True)
         """
-        super().__init__(**options)
+        # Create validators
+        field_validators: list[Validator[Any]] = [TypeValidator(str)]
+        if min_length is not None or max_length is not None:
+            field_validators.append(
+                RangeValidator(
+                    min_value=min_length,
+                    max_value=max_length,
+                    message=(
+                        f"String length must be between {min_length or 0} "
+                        f"and {max_length or 'unlimited'}"
+                    ),
+                )
+            )
+        if pattern is not None:
+            field_validators.append(
+                RegexValidator(
+                    str(pattern) if isinstance(pattern, Pattern) else pattern
+                )
+            )
+
+        super().__init__(validators=field_validators, **options)
+
         self.min_length = min_length
         self.max_length = max_length
         self.pattern = re.compile(pattern) if isinstance(pattern, str) else pattern
@@ -104,23 +148,21 @@ class StringField(Field[str]):
         self.strip = strip
         self.transform = transform
 
-        # Update backend options
-        self.backend_options.update(
-            {
-                "mongodb": {
-                    "type": "string",
-                    "maxLength": max_length,
-                },
-                "postgres": {
-                    "type": "VARCHAR",
-                    "length": max_length,
-                },
-                "mysql": {
-                    "type": "VARCHAR",
-                    "length": max_length,
-                },
-            }
-        )
+        # Initialize backend options
+        self.backend_options = {
+            "mongodb": {
+                "type": "string",
+                "maxLength": max_length,
+            },
+            "postgres": {
+                "type": "VARCHAR",
+                "length": max_length,
+            },
+            "mysql": {
+                "type": "VARCHAR",
+                "length": max_length,
+            },
+        }
 
     async def validate(self, value: Any) -> None:
         """Validate string value.
@@ -135,7 +177,7 @@ class StringField(Field[str]):
             value: Value to validate
 
         Raises:
-            ValidationError: With codes:
+            FieldValidationError: With codes:
                 - invalid_type: Value is not a string
                 - min_length: String length is less than min_length
                 - max_length: String length exceeds max_length
@@ -143,15 +185,15 @@ class StringField(Field[str]):
 
         Examples:
             >>> field = StringField(min_length=2, pattern=r'^[a-z]+$')
-            >>> await field.validate("A")  # Raises ValidationError(code="min_length")
-            >>> await field.validate("Ab")  # Raises ValidationError(code="invalid_pattern")
+            >>> await field.validate("A")  # Raises FieldValidationError(code="min_length")
+            >>> await field.validate("Ab")  # Raises FieldValidationError(code="invalid_pattern")
             >>> await field.validate("ab")  # Valid
         """
         await super().validate(value)
 
         if value is not None:
             if not isinstance(value, str):
-                raise ValidationError(
+                raise FieldValidationError(
                     message=f"Value must be a string, got {type(value).__name__}",
                     field_name=self.name,
                     code="invalid_type",
@@ -161,14 +203,14 @@ class StringField(Field[str]):
                 value = value.strip()
 
             if self.min_length is not None and len(value) < self.min_length:
-                raise ValidationError(
+                raise FieldValidationError(
                     message=f"String length must be at least {self.min_length}, got {len(value)}",
                     field_name=self.name,
                     code="min_length",
                 )
 
             if self.max_length is not None and len(value) > self.max_length:
-                raise ValidationError(
+                raise FieldValidationError(
                     message=f"String length must be at most {self.max_length}, got {len(value)}",
                     field_name=self.name,
                     code="max_length",
@@ -176,7 +218,7 @@ class StringField(Field[str]):
 
             if self.pattern is not None:
                 if not self.pattern.match(value):
-                    raise ValidationError(
+                    raise FieldValidationError(
                         message=f"String must match pattern {self.pattern.pattern}",
                         field_name=self.name,
                         code="invalid_pattern",
@@ -198,42 +240,37 @@ class StringField(Field[str]):
             Converted string value or None
 
         Raises:
-            ValidationError: With code "conversion_failed" if value cannot be converted
-
-        Examples:
-            >>> field = StringField(transform="lower", strip=True)
-            >>> await field.convert(" Test ")  # Returns "test"
-            >>> await field.convert(123)  # Returns "123"
-            >>> await field.convert(None)  # Returns None
+            FieldValidationError: If value cannot be converted
         """
         if value is None:
-            return self.default
+            return None
 
         try:
             value = str(value)
         except (TypeError, ValueError) as e:
-            raise ValidationError(
+            raise FieldValidationError(
                 message=f"Cannot convert {type(value).__name__} to string: {str(e)}",
                 field_name=self.name,
-                code="conversion_failed",
-            )
+                code="conversion_error",
+            ) from e
 
         if self.strip:
             value = value.strip()
 
         if self.transform:
-            if self.transform == "lower":
-                value = value.lower()
-            elif self.transform == "upper":
-                value = value.upper()
-            elif self.transform == "title":
-                value = value.title()
-            elif self.transform == "capitalize":
-                value = value.capitalize()
+            match self.transform:
+                case "lower":
+                    value = value.lower()
+                case "upper":
+                    value = value.upper()
+                case "title":
+                    value = value.title()
+                case "capitalize":
+                    value = value.capitalize()
 
         return value
 
-    async def to_db(self, value: Optional[str], backend: str) -> Optional[str]:
+    async def to_db(self, value: Optional[str], backend: str) -> DatabaseValue:
         """Convert string to database format.
 
         Args:
@@ -242,11 +279,6 @@ class StringField(Field[str]):
 
         Returns:
             Converted string value or None
-
-        Examples:
-            >>> field = StringField(case_sensitive=False)
-            >>> await field.to_db("Test", "mongodb")  # Returns "test"
-            >>> await field.to_db(None, "mongodb")  # Returns None
         """
         if value is None:
             return None
@@ -256,7 +288,7 @@ class StringField(Field[str]):
 
         return value
 
-    async def from_db(self, value: Any, backend: str) -> Optional[str]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[str]:
         """Convert database value to string.
 
         Args:
@@ -267,34 +299,23 @@ class StringField(Field[str]):
             Converted string value or None
 
         Raises:
-            ValidationError: With code "conversion_failed" if value cannot be converted
-
-        Examples:
-            >>> field = StringField()
-            >>> await field.from_db("test", "mongodb")  # Returns "test"
-            >>> await field.from_db(None, "mongodb")  # Returns None
+            FieldValidationError: If value cannot be converted
         """
         if value is None:
             return None
 
-        try:
-            return str(value)
-        except (TypeError, ValueError) as e:
-            raise ValidationError(
-                message=f"Cannot convert database value to string: {str(e)}",
+        if not isinstance(value, str):
+            raise FieldValidationError(
+                message=f"Expected string from database, got {type(value).__name__}",
                 field_name=self.name,
-                code="conversion_failed",
+                code="invalid_type",
             )
+
+        return value
 
 
 class EmailField(StringField):
-    """Field for email addresses.
-
-    Examples:
-        >>> class User(Model):
-        ...     email = EmailField(required=True)
-        ...     backup_email = EmailField()
-    """
+    """Field for email addresses."""
 
     def __init__(self, **options: Any) -> None:
         """Initialize email field.
@@ -303,24 +324,20 @@ class EmailField(StringField):
             **options: Additional field options
         """
         super().__init__(
-            pattern=r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$",
-            case_sensitive=False,
-            strip=True,
+            pattern=EMAIL_PATTERN,
             transform="lower",
+            strip=True,
+            case_sensitive=False,
             **options,
         )
 
 
 class URLField(StringField):
-    """Field for URLs.
+    """Field for URLs."""
 
-    Examples:
-        >>> class Website(Model):
-        ...     url = URLField(required=True)
-        ...     favicon = URLField()
-    """
-
-    def __init__(self, *, require_tld: bool = True, **options: Any) -> None:
+    def __init__(
+        self, *, require_tld: bool = DEFAULT_REQUIRE_TLD, **options: Any
+    ) -> None:
         """Initialize URL field.
 
         Args:
@@ -328,47 +345,30 @@ class URLField(StringField):
             **options: Additional field options
         """
         pattern = (
-            r"^https?://"  # http:// or https://
-            r"(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|"  # domain
-            r"localhost|"  # localhost
-            r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"  # ip
-            r"(?::\d+)?"  # optional port
-            r"(?:/?|[/?]\S+)$"  # path
+            URL_PATTERN
+            if require_tld
+            else URL_PATTERN.pattern.replace(r"\.[a-zA-Z]{2,}", "")
         )
-        if not require_tld:
-            pattern = pattern.replace(r"[A-Z]{2,6}", r"[A-Z]{2,}")
-
         super().__init__(
             pattern=pattern,
-            case_sensitive=False,
-            strip=True,
             transform="lower",
+            strip=True,
+            case_sensitive=False,
             **options,
         )
 
 
 class PasswordField(StringField):
-    """Field for passwords with hashing.
-
-    Examples:
-        >>> class User(Model):
-        ...     password = PasswordField(
-        ...         min_length=8,
-        ...         require_upper=True,
-        ...         require_lower=True,
-        ...         require_digit=True,
-        ...         require_special=True,
-        ...     )
-    """
+    """Field for passwords with validation rules."""
 
     def __init__(
         self,
         *,
-        min_length: int = 8,
-        require_upper: bool = True,
-        require_lower: bool = True,
-        require_digit: bool = True,
-        require_special: bool = True,
+        min_length: int = DEFAULT_PASSWORD_MIN_LENGTH,
+        require_upper: bool = DEFAULT_REQUIRE_UPPER,
+        require_lower: bool = DEFAULT_REQUIRE_LOWER,
+        require_digit: bool = DEFAULT_REQUIRE_DIGIT,
+        require_special: bool = DEFAULT_REQUIRE_SPECIAL,
         **options: Any,
     ) -> None:
         """Initialize password field.
@@ -381,37 +381,59 @@ class PasswordField(StringField):
             require_special: Require special character
             **options: Additional field options
         """
-        pattern_parts: list[str] = []
-        if require_upper:
-            pattern_parts.append(r"(?=.*[A-Z])")
-        if require_lower:
-            pattern_parts.append(r"(?=.*[a-z])")
-        if require_digit:
-            pattern_parts.append(r"(?=.*\d)")
-        if require_special:
-            pattern_parts.append(r'(?=.*[!@#$%^&*(),.?":{}|<>])')
+        super().__init__(min_length=min_length, strip=True, **options)
 
-        pattern = (
-            f"{''.join(pattern_parts)}"
-            rf"[A-Za-z\d!@#$%^&*(),.?\":{{}}|<>]{{{min_length},}}"
-        )
+        self.require_upper = require_upper
+        self.require_lower = require_lower
+        self.require_digit = require_digit
+        self.require_special = require_special
 
-        super().__init__(
-            min_length=min_length,
-            pattern=pattern,
-            strip=True,
-            **options,
-        )
+    async def validate(self, value: Any) -> None:
+        """Validate password value.
+
+        Args:
+            value: Value to validate
+
+        Raises:
+            FieldValidationError: If validation fails
+        """
+        await super().validate(value)
+
+        if value is not None:
+            if self.require_upper and not PASSWORD_PATTERNS["upper"].search(value):
+                raise FieldValidationError(
+                    message="Password must contain at least one uppercase letter",
+                    field_name=self.name,
+                    code="missing_upper",
+                )
+            if self.require_lower and not PASSWORD_PATTERNS["lower"].search(value):
+                raise FieldValidationError(
+                    message="Password must contain at least one lowercase letter",
+                    field_name=self.name,
+                    code="missing_lower",
+                )
+            if self.require_digit and not PASSWORD_PATTERNS["digit"].search(value):
+                raise FieldValidationError(
+                    message="Password must contain at least one digit",
+                    field_name=self.name,
+                    code="missing_digit",
+                )
+            if self.require_special and not PASSWORD_PATTERNS["special"].search(value):
+                raise FieldValidationError(
+                    message="Password must contain at least one special character",
+                    field_name=self.name,
+                    code="missing_special",
+                )
 
     async def to_db(self, value: Optional[str], backend: str) -> Optional[str]:
         """Convert password to database format.
 
         Args:
-            value: Password value
+            value: Password value to convert
             backend: Database backend type
 
         Returns:
-            Hashed password
+            Hashed password value or None
         """
         if value is None:
             return None
@@ -421,14 +443,7 @@ class PasswordField(StringField):
 
 
 class TextField(StringField):
-    """Field for long text content.
-
-    Examples:
-        >>> class Article(Model):
-        ...     title = StringField(max_length=200)
-        ...     content = TextField()
-        ...     summary = TextField(max_length=500)
-    """
+    """Field for long text content."""
 
     def __init__(self, **options: Any) -> None:
         """Initialize text field.
@@ -441,14 +456,8 @@ class TextField(StringField):
         # Update backend options for text type
         self.backend_options.update(
             {
-                "mongodb": {
-                    "type": "string",
-                },
-                "postgres": {
-                    "type": "TEXT",
-                },
-                "mysql": {
-                    "type": "TEXT",
-                },
+                "mongodb": {"type": "string"},
+                "postgres": {"type": "TEXT"},
+                "mysql": {"type": "TEXT"},
             }
         )

@@ -15,7 +15,7 @@ Examples:
     >>> field = StringField(validators=[validator])
 """
 
-from typing import Any, Callable, Dict, List, Optional, TypeVar
+from typing import Any, Callable, Dict, Final, List, Optional, TypeVar, final
 
 from earnorm.fields.validators.base import (
     RangeValidator,
@@ -24,15 +24,22 @@ from earnorm.fields.validators.base import (
     TypeValidator,
     Validator,
 )
+from earnorm.fields.validators.common import DateTimeValidator
 
 T = TypeVar("T")  # Type of value to validate
 
-
+# Type aliases with better type hints
 ValidatorFactory = Callable[..., Validator[Any]]
+ValidatorCache = Dict[str, Dict[str, Validator[Any]]]
+ValidatorRegistry = Dict[str, ValidatorFactory]
 
 
-class ValidatorRegistry:
+@final
+class ValidatorManager:
     """Registry for field validators.
+
+    This class manages validator registration and creation.
+    It supports caching of created validators for better performance.
 
     Attributes:
         _validators: Dictionary mapping validator names to validator factories
@@ -41,8 +48,8 @@ class ValidatorRegistry:
 
     def __init__(self) -> None:
         """Initialize validator registry."""
-        self._validators: Dict[str, ValidatorFactory] = {}
-        self._cache: Dict[str, Dict[str, Validator[Any]]] = {}
+        self._validators: ValidatorRegistry = {}
+        self._cache: ValidatorCache = {}
 
     def register(
         self,
@@ -72,10 +79,8 @@ class ValidatorRegistry:
         Args:
             name: Name of validator to unregister
         """
-        if name in self._validators:
-            del self._validators[name]
-        if name in self._cache:
-            del self._cache[name]
+        self._validators.pop(name, None)
+        self._cache.pop(name, None)
 
     def create(
         self,
@@ -101,8 +106,9 @@ class ValidatorRegistry:
 
         # Check cache first
         if cache_key and name in self._cache:
-            if cache_key in self._cache[name]:
-                return self._cache[name][cache_key]
+            cached = self._cache[name].get(cache_key)
+            if cached is not None:
+                return cached
 
         # Create new validator
         validator = self._validators[name](**kwargs)
@@ -131,7 +137,7 @@ class ValidatorRegistry:
         Returns:
             List of validator names
         """
-        return list(self._validators.keys())
+        return list(self._validators)
 
     def has_validator(self, name: str) -> bool:
         """Check if validator is registered.
@@ -146,10 +152,11 @@ class ValidatorRegistry:
 
 
 # Create default registry
-default_registry = ValidatorRegistry()
+default_registry: Final[ValidatorManager] = ValidatorManager()
 
-
+# Register default validators
 default_registry.register("required", RequiredValidator)
 default_registry.register("type", TypeValidator)
 default_registry.register("range", RangeValidator)
 default_registry.register("regex", RegexValidator)
+default_registry.register("datetime", DateTimeValidator)

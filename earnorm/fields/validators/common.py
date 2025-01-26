@@ -21,20 +21,47 @@ Examples:
 import re
 from datetime import datetime
 from re import Pattern
-from typing import Any, List, Optional, Sequence, Set, Union
+from typing import (
+    Any,
+    Final,
+    FrozenSet,
+    List,
+    Optional,
+    Protocol,
+    Sequence,
+    Set,
+    TypeGuard,
+    TypeVar,
+    Union,
+    final,
+)
 from urllib.parse import urlparse
 
-from earnorm.fields.validators.base import ValidationContext, ValidationError, Validator
+from earnorm.exceptions import FieldValidationError
+from earnorm.fields.validators.base import ValidationContext, Validator
+
+# Type variables with constraints
+S = TypeVar("S", str, Sequence[Any])
+T = TypeVar("T")
 
 
-class MinLengthValidator(Validator[Union[str, Sequence[Any]]]):
+class LengthProtocol(Protocol):
+    """Protocol for objects that support len()."""
+
+    def __len__(self) -> int: ...
+
+
+@final
+class MinLengthValidator(Validator[S]):
     """Validator for minimum length."""
+
+    DEFAULT_CODE: Final[str] = "min_length"
 
     def __init__(
         self,
         min_length: int,
         message: Optional[str] = None,
-        code: str = "min_length",
+        code: str = DEFAULT_CODE,
     ) -> None:
         """Initialize minimum length validator.
 
@@ -43,12 +70,11 @@ class MinLengthValidator(Validator[Union[str, Sequence[Any]]]):
             message: Error message template
             code: Error code
         """
-        super().__init__(message=message, code=code)
-        self.min_length = min_length
+        super().__init__(message=message)
+        self.code = code
+        self.min_length: int = min_length
 
-    async def validate(
-        self, value: Union[str, Sequence[Any]], context: ValidationContext
-    ) -> None:
+    async def validate(self, value: S, context: ValidationContext) -> None:
         """Validate value length.
 
         Args:
@@ -56,25 +82,27 @@ class MinLengthValidator(Validator[Union[str, Sequence[Any]]]):
             context: Validation context
 
         Raises:
-            ValidationError: If value is too short
+            FieldValidationError: If value is too short
         """
         if len(value) < self.min_length:
-            raise ValidationError(
+            raise FieldValidationError(
                 message=self.message
                 or f"Value must be at least {self.min_length} characters long",
-                field_name=context.field.name,
-                code=self.code or "min_length",
+                field_name=getattr(context.field, "name", "unknown"),
             )
 
 
-class MaxLengthValidator(Validator[Union[str, Sequence[Any]]]):
+@final
+class MaxLengthValidator(Validator[S]):
     """Validator for maximum length."""
+
+    DEFAULT_CODE: Final[str] = "max_length"
 
     def __init__(
         self,
         max_length: int,
         message: Optional[str] = None,
-        code: str = "max_length",
+        code: str = DEFAULT_CODE,
     ) -> None:
         """Initialize maximum length validator.
 
@@ -83,12 +111,11 @@ class MaxLengthValidator(Validator[Union[str, Sequence[Any]]]):
             message: Error message template
             code: Error code
         """
-        super().__init__(message=message, code=code)
-        self.max_length = max_length
+        super().__init__(message=message)
+        self.code = code
+        self.max_length: int = max_length
 
-    async def validate(
-        self, value: Union[str, Sequence[Any]], context: ValidationContext
-    ) -> None:
+    async def validate(self, value: S, context: ValidationContext) -> None:
         """Validate value length.
 
         Args:
@@ -96,25 +123,27 @@ class MaxLengthValidator(Validator[Union[str, Sequence[Any]]]):
             context: Validation context
 
         Raises:
-            ValidationError: If value is too long
+            FieldValidationError: If value is too long
         """
         if len(value) > self.max_length:
-            raise ValidationError(
+            raise FieldValidationError(
                 message=self.message
                 or f"Value must be at most {self.max_length} characters long",
-                field_name=context.field.name,
-                code=self.code or "max_length",
+                field_name=getattr(context.field, "name", "unknown"),
             )
 
 
+@final
 class PatternValidator(Validator[str]):
     """Validator for pattern matching."""
+
+    DEFAULT_CODE: Final[str] = "invalid_pattern"
 
     def __init__(
         self,
         pattern: Union[str, Pattern[str]],
         message: Optional[str] = None,
-        code: str = "invalid_pattern",
+        code: str = DEFAULT_CODE,
     ) -> None:
         """Initialize pattern validator.
 
@@ -123,8 +152,11 @@ class PatternValidator(Validator[str]):
             message: Error message template
             code: Error code
         """
-        super().__init__(message=message, code=code)
-        self.pattern = pattern if isinstance(pattern, Pattern) else re.compile(pattern)
+        super().__init__(message=message)
+        self.code = code
+        self.pattern: Pattern[str] = (
+            pattern if isinstance(pattern, Pattern) else re.compile(pattern)
+        )
 
     async def validate(self, value: str, context: ValidationContext) -> None:
         """Validate value matches pattern.
@@ -134,26 +166,27 @@ class PatternValidator(Validator[str]):
             context: Validation context
 
         Raises:
-            ValidationError: If value doesn't match pattern
+            FieldValidationError: If value doesn't match pattern
         """
         if not self.pattern.match(value):
-            raise ValidationError(
+            raise FieldValidationError(
                 message=self.message
                 or f"Value must match pattern {self.pattern.pattern}",
-                field_name=context.field.name,
-                code=self.code or "invalid_pattern",
+                field_name=getattr(context.field, "name", "unknown"),
             )
 
 
+@final
 class EmailValidator(Validator[str]):
     """Validator for email addresses."""
 
-    EMAIL_PATTERN = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+    EMAIL_PATTERN: Final[str] = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+    DEFAULT_CODE: Final[str] = "invalid_email"
 
     def __init__(
         self,
         message: Optional[str] = None,
-        code: str = "invalid_email",
+        code: str = DEFAULT_CODE,
     ) -> None:
         """Initialize email validator.
 
@@ -161,8 +194,20 @@ class EmailValidator(Validator[str]):
             message: Error message template
             code: Error code
         """
-        super().__init__(message=message, code=code)
-        self.pattern = re.compile(self.EMAIL_PATTERN)
+        super().__init__(message=message)
+        self.code = code
+        self.pattern: Pattern[str] = re.compile(self.EMAIL_PATTERN)
+
+    def is_valid_email(self, value: str) -> TypeGuard[str]:
+        """Check if value is valid email.
+
+        Args:
+            value: Value to check
+
+        Returns:
+            True if value is valid email
+        """
+        return bool(self.pattern.match(value))
 
     async def validate(self, value: str, context: ValidationContext) -> None:
         """Validate email address.
@@ -172,24 +217,27 @@ class EmailValidator(Validator[str]):
             context: Validation context
 
         Raises:
-            ValidationError: If value is not valid email
+            FieldValidationError: If value is not valid email
         """
-        if not self.pattern.match(value):
-            raise ValidationError(
+        if not self.is_valid_email(value):
+            raise FieldValidationError(
                 message=self.message or "Invalid email address",
-                field_name=context.field.name,
-                code=self.code or "invalid_email",
+                field_name=getattr(context.field, "name", "unknown"),
             )
 
 
+@final
 class URLValidator(Validator[str]):
     """Validator for URLs."""
+
+    DEFAULT_SCHEMES: Final[FrozenSet[str]] = frozenset({"http", "https"})
+    DEFAULT_CODE: Final[str] = "invalid_url"
 
     def __init__(
         self,
         allowed_schemes: Optional[Set[str]] = None,
         message: Optional[str] = None,
-        code: str = "invalid_url",
+        code: str = DEFAULT_CODE,
     ) -> None:
         """Initialize URL validator.
 
@@ -198,8 +246,30 @@ class URLValidator(Validator[str]):
             message: Error message template
             code: Error code
         """
-        super().__init__(message=message, code=code)
-        self.allowed_schemes = allowed_schemes or {"http", "https"}
+        super().__init__(message=message)
+        self.code = code
+        self.allowed_schemes: FrozenSet[str] = frozenset(
+            allowed_schemes or self.DEFAULT_SCHEMES
+        )
+
+    def is_valid_url(self, value: str) -> TypeGuard[str]:
+        """Check if value is valid URL.
+
+        Args:
+            value: Value to check
+
+        Returns:
+            True if value is valid URL
+        """
+        try:
+            result = urlparse(value)
+            return bool(
+                result.scheme
+                and result.netloc
+                and result.scheme in self.allowed_schemes
+            )
+        except Exception:
+            return False
 
     async def validate(self, value: str, context: ValidationContext) -> None:
         """Validate URL.
@@ -209,28 +279,13 @@ class URLValidator(Validator[str]):
             context: Validation context
 
         Raises:
-            ValidationError: If value is not valid URL
+            FieldValidationError: If value is not valid URL
         """
-        try:
-            result = urlparse(value)
-            if not all([result.scheme, result.netloc]):
-                raise ValidationError(
-                    message=self.message or "Invalid URL",
-                    field_name=context.field.name,
-                    code=self.code or "invalid_url",
-                )
-            if result.scheme not in self.allowed_schemes:
-                raise ValidationError(
-                    message=self.message
-                    or f"URL scheme must be one of: {', '.join(self.allowed_schemes)}",
-                    field_name=context.field.name,
-                    code=self.code or "invalid_scheme",
-                )
-        except Exception as e:
-            raise ValidationError(
-                message=str(e),
-                field_name=context.field.name,
-                code=self.code or "invalid_url",
+        if not self.is_valid_url(value):
+            raise FieldValidationError(
+                message=self.message
+                or f"Invalid URL. Allowed schemes: {', '.join(sorted(self.allowed_schemes))}",
+                field_name=getattr(context.field, "name", "unknown"),
             )
 
 
@@ -264,19 +319,17 @@ class DateTimeValidator(Validator[datetime]):
             context: Validation context
 
         Raises:
-            ValidationError: If value is outside range
+            FieldValidationError: If value is outside range
         """
         if self.min_value and value < self.min_value:
-            raise ValidationError(
+            raise FieldValidationError(
                 message=self.message or f"Value must be after {self.min_value}",
-                field_name=context.field.name,
-                code=self.code or "before_min_value",
+                field_name=getattr(context.field, "name", "unknown"),
             )
         if self.max_value and value > self.max_value:
-            raise ValidationError(
+            raise FieldValidationError(
                 message=self.message or f"Value must be before {self.max_value}",
-                field_name=context.field.name,
-                code=self.code or "after_max_value",
+                field_name=getattr(context.field, "name", "unknown"),
             )
 
 
@@ -304,7 +357,7 @@ class UniqueValidator(Validator[Sequence[Any]]):
             context: Validation context
 
         Raises:
-            ValidationError: If sequence contains duplicates
+            FieldValidationError: If sequence contains duplicates
         """
         seen: Set[Any] = set()
         duplicates: List[Any] = []
@@ -313,9 +366,8 @@ class UniqueValidator(Validator[Sequence[Any]]):
                 duplicates.append(item)
             seen.add(item)
         if duplicates:
-            raise ValidationError(
+            raise FieldValidationError(
                 message=self.message
                 or f"Duplicate values found: {', '.join(str(x) for x in duplicates)}",
-                field_name=context.field.name,
-                code=self.code or "duplicate_values",
+                field_name=getattr(context.field, "name", "unknown"),
             )

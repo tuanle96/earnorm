@@ -1,141 +1,119 @@
 """UUID field implementation.
 
-This module provides UUID field types for handling UUID values.
+This module provides UUID field type for handling UUID values.
 It supports:
-- UUID values and string representations
-- Auto-generation of UUIDs (v1 or v4)
-- Version validation (v1, v3, v4, v5)
-- Primary key support
-- Database backend support
+- UUID validation
+- String conversion
+- Auto-generation
+- Database type mapping
 
 Examples:
     >>> class User(Model):
-    ...     id = UUIDField(primary_key=True, auto_generate=True)  # Auto UUID v4
-    ...     session_id = UUIDField(version=4)  # Must be UUID v4
-    ...     device_id = UUIDField(required=True)  # Any UUID version
+    ...     id = UUIDField(primary_key=True, auto=True)  # Auto-generate UUID4
+    ...     reference_id = UUIDField(nullable=True)
 """
 
 import uuid
-from typing import Any, Optional, Union
+from typing import Any, Final, Optional
 
-from earnorm.fields.base import Field, ValidationError
+from earnorm.exceptions import FieldValidationError
+from earnorm.fields.base import BaseField
+from earnorm.fields.types import DatabaseValue
+from earnorm.fields.validators.base import TypeValidator, Validator
+
+# Constants
+DEFAULT_PRIMARY_KEY: Final[bool] = False
+DEFAULT_AUTO: Final[bool] = False
+DEFAULT_VERSION: Final[int] = 4
 
 
-class UUIDField(Field[uuid.UUID]):
+class UUIDField(BaseField[uuid.UUID]):
     """Field for UUID values.
 
-    This field handles:
-    - UUID validation and conversion
-    - Auto-generation of UUIDs
-    - Version validation
-    - Database serialization
+    This field type handles UUID values, with support for:
+    - UUID validation
+    - String conversion
+    - Auto-generation
+    - Database type mapping
 
     Attributes:
-        version: Required UUID version (1-5)
-        auto_generate: Whether to auto-generate UUID
         primary_key: Whether this field is the primary key
-        required: Whether field is required
-        unique: Whether field value must be unique
-        default: Default UUID value
-
-    Raises:
-        ValidationError: With codes:
-            - invalid_type: Value is not a valid UUID
-            - invalid_version: UUID version does not match required version
-            - required: Value is required but None
-            - auto_generate_error: Cannot auto-generate UUID v3/v5
-
-    Examples:
-        >>> field = UUIDField(version=4)
-        >>> await field.convert("123e4567-e89b-12d3-a456-426614174000")
-        >>> await field.convert(uuid.uuid4())
-        >>> await field.convert("invalid")  # Raises ValidationError
+        auto: Whether to auto-generate UUID on creation
+        version: UUID version to use (1, 3, 4, or 5)
+        backend_options: Database backend options
     """
+
+    primary_key: bool
+    auto: bool
+    version: int
+    backend_options: dict[str, Any]
 
     def __init__(
         self,
         *,
-        version: Optional[int] = None,
-        auto_generate: bool = False,
-        primary_key: bool = False,
+        primary_key: bool = DEFAULT_PRIMARY_KEY,
+        auto: bool = DEFAULT_AUTO,
+        version: int = DEFAULT_VERSION,
         **options: Any,
     ) -> None:
         """Initialize UUID field.
 
         Args:
-            version: Required UUID version (1-5)
-            auto_generate: Whether to auto-generate UUID
             primary_key: Whether this field is the primary key
+            auto: Whether to auto-generate UUID on creation
+            version: UUID version to use (1, 3, 4, or 5)
             **options: Additional field options
 
         Raises:
             ValueError: If version is invalid
-
-        Examples:
-            >>> field = UUIDField()  # Any UUID version
-            >>> field = UUIDField(version=4)  # Must be UUID v4
-            >>> field = UUIDField(auto_generate=True)  # Auto UUID v4
-            >>> field = UUIDField(primary_key=True)  # Primary key field
         """
-        if version is not None and version not in {1, 3, 4, 5}:
+        if version not in {1, 3, 4, 5}:
             raise ValueError("UUID version must be 1, 3, 4, or 5")
 
-        super().__init__(**options)
-        self.version = version
-        self.auto_generate = auto_generate
-        self.primary_key = primary_key
+        field_validators: list[Validator[Any]] = [TypeValidator(uuid.UUID)]
+        super().__init__(validators=field_validators, **options)
 
-        # Update backend options
-        self.backend_options.update(
-            {
-                "mongodb": {
-                    "type": "uuid",
-                },
-                "postgres": {
-                    "type": "UUID",
-                },
-                "mysql": {
-                    "type": "CHAR(36)",
-                },
-            }
-        )
+        self.primary_key = primary_key
+        self.auto = auto
+        self.version = version
+
+        # Initialize backend options
+        self.backend_options = {
+            "mongodb": {"type": "uuid"},
+            "postgres": {"type": "UUID"},
+            "mysql": {"type": "CHAR(36)"},
+        }
 
     async def validate(self, value: Any) -> None:
         """Validate UUID value.
 
-        Validates:
-        - Value is valid UUID type
-        - UUID version matches if specified
-        - Not None if required
+        This method validates:
+        - Value is UUID type
+        - Value has correct version if specified
 
         Args:
             value: Value to validate
 
         Raises:
-            ValidationError: With codes:
-                - invalid_type: Value is not a valid UUID
-                - invalid_version: UUID version does not match
-                - required: Value is required but None
-
-        Examples:
-            >>> field = UUIDField(version=4)
-            >>> await field.validate(uuid.uuid4())  # Valid
-            >>> await field.validate(uuid.uuid1())  # Raises ValidationError
-            >>> await field.validate("invalid")  # Raises ValidationError
+            FieldValidationError: If validation fails
         """
         await super().validate(value)
 
         if value is not None:
             if not isinstance(value, uuid.UUID):
-                raise ValidationError(
+                raise FieldValidationError(
                     message=f"Value must be a UUID, got {type(value).__name__}",
                     field_name=self.name,
                     code="invalid_type",
                 )
 
-            if self.version is not None and value.version != self.version:
-                raise ValidationError(
-                    message=f"UUID must be version {self.version}, got version {value.version}",
+            # Check UUID version
+            if value.version != self.version:
+                raise FieldValidationError(
+                    message=(
+                        f"UUID version must be {self.version}, "
+                        f"got version {value.version}"
+                    ),
                     field_name=self.name,
                     code="invalid_version",
                 )
@@ -144,120 +122,79 @@ class UUIDField(Field[uuid.UUID]):
         """Convert value to UUID.
 
         Handles:
-        - None values (returns default or auto-generates)
-        - UUID values (returned as is)
-        - String values (parsed as UUID)
-        - Bytes values (parsed as UUID bytes)
-        - Integer values (parsed as UUID int)
+        - None values
+        - UUID instances
+        - String values (hex format)
+        - Bytes values (16 bytes)
 
         Args:
             value: Value to convert
 
         Returns:
-            Converted UUID value
+            Converted UUID value or None
 
         Raises:
-            ValidationError: With codes:
-                - invalid_type: Cannot convert value type
-                - invalid_format: Invalid UUID format
-                - auto_generate_error: Cannot auto-generate v3/v5
-
-        Examples:
-            >>> field = UUIDField(auto_generate=True)
-            >>> await field.convert(None)  # Auto-generates UUID
-            >>> await field.convert(uuid.uuid4())  # Returns as is
-            >>> await field.convert("123e4567-e89b-12d3-a456-426614174000")
-            >>> await field.convert(b"\\x12\\x3e\\x45\\x67...")  # From bytes
+            FieldValidationError: If value cannot be converted
         """
         if value is None:
-            if self.auto_generate:
+            if self.auto:
                 if self.version == 1:
                     return uuid.uuid1()
                 elif self.version == 3:
-                    raise ValidationError(
-                        message="Cannot auto-generate UUID v3 without namespace and name",
-                        field_name=self.name,
-                        code="auto_generate_error",
-                    )
-                elif self.version == 5:
-                    raise ValidationError(
-                        message="Cannot auto-generate UUID v5 without namespace and name",
-                        field_name=self.name,
-                        code="auto_generate_error",
-                    )
-                else:  # version 4 or None
+                    # Use a namespace UUID and name for version 3
+                    return uuid.uuid3(uuid.NAMESPACE_DNS, str(uuid.uuid4()))
+                elif self.version == 4:
                     return uuid.uuid4()
-            return self.default
+                else:  # version 5
+                    # Use a namespace UUID and name for version 5
+                    return uuid.uuid5(uuid.NAMESPACE_DNS, str(uuid.uuid4()))
+            return None
 
         try:
             if isinstance(value, uuid.UUID):
                 return value
             elif isinstance(value, str):
                 return uuid.UUID(value)
-            elif isinstance(value, (bytes, bytearray)):
-                return uuid.UUID(bytes=bytes(value))
-            elif isinstance(value, int):
-                return uuid.UUID(int=value)
+            elif isinstance(value, bytes):
+                return uuid.UUID(bytes=value)
             else:
-                raise ValidationError(
-                    message=f"Cannot convert {type(value).__name__} to UUID",
-                    field_name=self.name,
-                    code="invalid_type",
-                )
+                raise TypeError(f"Cannot convert {type(value).__name__} to UUID")
         except (TypeError, ValueError) as e:
-            raise ValidationError(
-                message=str(e), field_name=self.name, code="invalid_format"
-            )
+            raise FieldValidationError(
+                message=f"Cannot convert value to UUID: {str(e)}",
+                field_name=self.name,
+                code="conversion_error",
+            ) from e
 
-    async def to_db(
-        self, value: Optional[uuid.UUID], backend: str
-    ) -> Optional[Union[str, bytes]]:
+    async def to_db(self, value: Optional[uuid.UUID], backend: str) -> DatabaseValue:
         """Convert UUID to database format.
 
         Args:
             value: UUID value to convert
-            backend: Database backend type ('mongodb', 'postgres', 'mysql')
+            backend: Database backend type
 
         Returns:
-            Database value:
-                - mongodb: UUID bytes
-                - postgres/mysql: UUID string
-
-        Examples:
-            >>> field = UUIDField()
-            >>> uuid_val = uuid.uuid4()
-            >>> await field.to_db(uuid_val, "mongodb")  # Returns bytes
-            >>> await field.to_db(uuid_val, "postgres")  # Returns string
-            >>> await field.to_db(None, "mysql")  # Returns None
+            Converted UUID value or None
         """
         if value is None:
             return None
 
         if backend == "mongodb":
-            return value.bytes
+            return value
         return str(value)
 
-    async def from_db(self, value: Any, backend: str) -> Optional[uuid.UUID]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[uuid.UUID]:
         """Convert database value to UUID.
 
         Args:
             value: Database value to convert
-            backend: Database backend type ('mongodb', 'postgres', 'mysql')
+            backend: Database backend type
 
         Returns:
-            Converted UUID value
+            Converted UUID value or None
 
         Raises:
-            ValidationError: With codes:
-                - invalid_type: Cannot convert value type
-                - invalid_format: Invalid UUID format
-
-        Examples:
-            >>> field = UUIDField()
-            >>> await field.from_db("123e4567-e89b-12d3-a456-426614174000", "postgres")
-            >>> await field.from_db(b"\\x12\\x3e\\x45\\x67...", "mongodb")
-            >>> await field.from_db(None, "mysql")  # Returns None
-            >>> await field.from_db("invalid", "postgres")  # Raises ValidationError
+            FieldValidationError: If value cannot be converted
         """
         if value is None:
             return None
@@ -267,15 +204,13 @@ class UUIDField(Field[uuid.UUID]):
                 return value
             elif isinstance(value, str):
                 return uuid.UUID(value)
-            elif isinstance(value, (bytes, bytearray)):
-                return uuid.UUID(bytes=bytes(value))
+            elif isinstance(value, bytes):
+                return uuid.UUID(bytes=value)
             else:
-                raise ValidationError(
-                    message=f"Cannot convert {type(value).__name__} to UUID",
-                    field_name=self.name,
-                    code="invalid_type",
-                )
+                raise TypeError(f"Cannot convert {type(value).__name__} to UUID")
         except (TypeError, ValueError) as e:
-            raise ValidationError(
-                message=str(e), field_name=self.name, code="invalid_format"
-            )
+            raise FieldValidationError(
+                message=f"Cannot convert database value to UUID: {str(e)}",
+                field_name=self.name,
+                code="conversion_error",
+            ) from e

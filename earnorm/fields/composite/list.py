@@ -1,248 +1,300 @@
 """List field implementation.
 
-This module provides list field types for handling lists of values.
+This module provides list field type for handling lists of values.
 It supports:
-- Lists of any field type
-- Minimum and maximum length validation
-- Unique value constraints
-- Default values
-- Nested validation
+- List validation
+- Item validation
+- Length validation
+- Unique items
+- Database type mapping
 
 Examples:
-    >>> class Post(Model):
-    ...     tags = ListField(StringField(), default=list)
-    ...     categories = ListField(StringField(), min_length=1)
-    ...     ratings = ListField(IntegerField(), unique=True)
-    ...     comments = ListField(EmbeddedField(CommentModel))
+    >>> class Product(Model):
+    ...     tags = ListField(StringField(), unique=True)
+    ...     prices = ListField(DecimalField(max_digits=10, decimal_places=2))
+    ...     images = ListField(FileField(allowed_types=["image/*"]))
 """
 
-from typing import Any, Generic, List, Optional, Set, Type, TypeVar, Union, cast
+from typing import Any, Generic, Optional, Sequence, TypeVar, cast
 
-from earnorm.fields.base import Field, ValidationError
+from earnorm.exceptions import FieldValidationError
+from earnorm.fields.base import BaseField
+from earnorm.fields.types import DatabaseValue
 
-T = TypeVar("T")  # Type of list items
+# Type variable for list items
+T = TypeVar("T")
 
 
-class ListField(Field[List[T]], Generic[T]):
-    """Field for list values.
+class ListField(BaseField[list[T]], Generic[T]):
+    """Field for lists of values.
+
+    This field type handles lists of values, with support for:
+    - List validation
+    - Item validation
+    - Length validation
+    - Unique items
+    - Database type mapping
 
     Attributes:
-        value_field: Field type for list values
+        field: Field type for list items
         min_length: Minimum list length
         max_length: Maximum list length
-        unique: Whether values must be unique
+        unique: Whether items must be unique
+        backend_options: Database backend options
     """
+
+    min_length: Optional[int]
+    max_length: Optional[int]
+    unique: bool
+    backend_options: dict[str, Any]
 
     def __init__(
         self,
-        value_field: Field[T],
+        field: BaseField[T],
         *,
         min_length: Optional[int] = None,
         max_length: Optional[int] = None,
         unique: bool = False,
-        default: Optional[Union[List[T], Type[List[Any]]]] = None,
         **options: Any,
     ) -> None:
         """Initialize list field.
 
         Args:
-            value_field: Field type for list values
+            field: Field type for list items
             min_length: Minimum list length
             max_length: Maximum list length
-            unique: Whether values must be unique
-            default: Default value or list type
+            unique: Whether items must be unique
             **options: Additional field options
-        """
-        # Handle default value
-        processed_default: Optional[List[T]] = None
-        if default is not None:
-            if default is list:
-                processed_default = cast(List[T], [])
-            else:
-                processed_default = cast(List[T], default)
 
-        super().__init__(default=processed_default, **options)
-        self.value_field = value_field
+        Raises:
+            ValueError: If min_length or max_length are invalid
+        """
+        if min_length is not None and min_length < 0:
+            raise ValueError("min_length must be non-negative")
+        if max_length is not None and max_length < 0:
+            raise ValueError("max_length must be non-negative")
+        if (
+            min_length is not None
+            and max_length is not None
+            and min_length > max_length
+        ):
+            raise ValueError("min_length cannot be greater than max_length")
+
+        super().__init__(**options)
+
+        # Store field as protected attribute
+        object.__setattr__(self, "_field", field)
         self.min_length = min_length
         self.max_length = max_length
         self.unique = unique
 
-        # Update backend options
-        self.backend_options.update(
-            {
-                "mongodb": {
-                    "type": "array",
-                },
-                "postgres": {
-                    "type": "JSONB",
-                },
-                "mysql": {
-                    "type": "JSON",
-                },
-            }
-        )
+        # Initialize backend options
+        self.backend_options = {
+            "mongodb": {"type": "array"},
+            "postgres": {"type": "JSONB"},
+            "mysql": {"type": "JSON"},
+        }
 
-        # Set up value field
-        self.value_field.name = f"{self.name}[*]"
-        self.value_field.required = True  # List items can't be None
+    @property
+    def field(self) -> BaseField[T]:
+        """Get field instance."""
+        return cast(BaseField[T], object.__getattribute__(self, "_field"))
 
     async def validate(self, value: Any) -> None:
         """Validate list value.
+
+        This method validates:
+        - Value is list type
+        - List length is within limits
+        - Items are unique if required
+        - Each item is valid
 
         Args:
             value: Value to validate
 
         Raises:
-            ValidationError: If validation fails
+            FieldValidationError: If validation fails
         """
         await super().validate(value)
 
         if value is not None:
             if not isinstance(value, list):
-                raise ValidationError("Value must be a list", self.name)
+                raise FieldValidationError(
+                    message=f"Value must be a list, got {type(value).__name__}",
+                    field_name=self.name,
+                    code="invalid_type",
+                )
 
-            value_list = cast(List[Any], value)
+            value_list = cast(list[Any], value)
+
+            # Check length
             if self.min_length is not None and len(value_list) < self.min_length:
-                raise ValidationError(
-                    f"List must have at least {self.min_length} items",
-                    self.name,
+                raise FieldValidationError(
+                    message=f"List must have at least {self.min_length} items",
+                    field_name=self.name,
+                    code="min_length",
                 )
 
             if self.max_length is not None and len(value_list) > self.max_length:
-                raise ValidationError(
-                    f"List must have at most {self.max_length} items",
-                    self.name,
+                raise FieldValidationError(
+                    message=f"List cannot have more than {self.max_length} items",
+                    field_name=self.name,
+                    code="max_length",
                 )
 
-            # Validate each item
-            seen: Set[Any] = set()
-            for i, item in enumerate(value_list):
-                try:
-                    await self.value_field.validate(item)
-                except ValidationError as e:
-                    raise ValidationError(
-                        f"Invalid item at index {i}: {str(e)}",
-                        self.name,
-                    )
-
-                if self.unique:
+            # Check uniqueness
+            if self.unique:
+                seen: set[Any] = set()
+                for item in value_list:
                     if item in seen:
-                        raise ValidationError(
-                            f"Duplicate value at index {i}",
-                            self.name,
+                        raise FieldValidationError(
+                            message="List items must be unique",
+                            field_name=self.name,
+                            code="not_unique",
                         )
                     seen.add(item)
 
-    async def convert(self, value: Any) -> Optional[List[T]]:
+            # Validate each item
+            for i, item in enumerate(value_list):
+                try:
+                    await self.field.validate(item)
+                except FieldValidationError as e:
+                    raise FieldValidationError(
+                        message=f"Invalid item at index {i}: {str(e)}",
+                        field_name=self.name,
+                        code="invalid_item",
+                    ) from e
+
+    async def convert(self, value: Any) -> Optional[list[T]]:
         """Convert value to list.
+
+        Handles:
+        - None values
+        - List values
+        - Sequence values
 
         Args:
             value: Value to convert
 
         Returns:
-            List value
+            Converted list value or None
 
         Raises:
-            ValidationError: If conversion fails
+            FieldValidationError: If value cannot be converted
         """
         if value is None:
-            return self.default
+            return None
 
         try:
-            if isinstance(value, str):
-                # Try to parse as JSON array
-                import json
-
-                try:
-                    value = json.loads(value)
-                    if not isinstance(value, list):
-                        raise ValidationError(
-                            "JSON value must be an array",
-                            self.name,
-                        )
-                except json.JSONDecodeError as e:
-                    raise ValidationError(
-                        f"Invalid JSON array: {str(e)}",
-                        self.name,
-                    )
-            elif not isinstance(value, list):
-                raise ValidationError(
-                    f"Cannot convert {type(value).__name__} to list",
-                    self.name,
-                )
+            if isinstance(value, list):
+                items = cast(list[Any], value)
+            elif isinstance(value, Sequence):
+                items = list(cast(Sequence[Any], value))
+            else:
+                raise TypeError(f"Cannot convert {type(value).__name__} to list")
 
             # Convert each item
-            value_list = cast(List[Any], value)
-            result: List[T] = []
-            for i, item in enumerate(value_list):
+            result: list[T] = []
+            for i, item in enumerate(items):
                 try:
-                    converted = await self.value_field.convert(item)
-                    if converted is None:
-                        raise ValidationError(
-                            "List items cannot be None",
-                            self.name,
-                        )
-                    result.append(converted)
-                except ValidationError as e:
-                    raise ValidationError(
-                        f"Invalid item at index {i}: {str(e)}",
-                        self.name,
-                    )
+                    converted = await self.field.convert(item)
+                    if converted is not None:
+                        result.append(converted)
+                except FieldValidationError as e:
+                    raise FieldValidationError(
+                        message=f"Cannot convert item at index {i}: {str(e)}",
+                        field_name=self.name,
+                        code="conversion_error",
+                    ) from e
 
             return result
-        except Exception as e:
-            raise ValidationError(str(e), self.name)
+        except (TypeError, ValueError) as e:
+            raise FieldValidationError(
+                message=f"Cannot convert value to list: {str(e)}",
+                field_name=self.name,
+                code="conversion_error",
+            ) from e
 
-    async def to_db(
-        self, value: Optional[List[T]], backend: str
-    ) -> Optional[List[Any]]:
+    async def to_db(self, value: Optional[list[T]], backend: str) -> DatabaseValue:
         """Convert list to database format.
 
         Args:
-            value: List value
+            value: List value to convert
             backend: Database backend type
 
         Returns:
-            Database value
+            Converted list value or None
+
+        Raises:
+            FieldValidationError: If value cannot be converted
         """
         if value is None:
             return None
 
-        result: List[Any] = []
-        for item in value:
-            db_value = await self.value_field.to_db(item, backend)
-            result.append(db_value)
+        try:
+            # Convert each item
+            result: list[Any] = []
+            for i, item in enumerate(value):
+                try:
+                    converted = await self.field.to_db(item, backend)
+                    result.append(converted)
+                except FieldValidationError as e:
+                    raise FieldValidationError(
+                        message=f"Cannot convert item at index {i}: {str(e)}",
+                        field_name=self.name,
+                        code="conversion_error",
+                    ) from e
 
-        return result
+            return result
+        except Exception as e:
+            raise FieldValidationError(
+                message=f"Cannot convert list to database format: {str(e)}",
+                field_name=self.name,
+                code="conversion_error",
+            ) from e
 
-    async def from_db(self, value: Any, backend: str) -> Optional[List[T]]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[list[T]]:
         """Convert database value to list.
 
         Args:
-            value: Database value
+            value: Database value to convert
             backend: Database backend type
 
         Returns:
-            List value
+            Converted list value or None
+
+        Raises:
+            FieldValidationError: If value cannot be converted
         """
         if value is None:
             return None
 
-        if not isinstance(value, list):
-            raise ValidationError(
-                f"Expected list from database, got {type(value).__name__}",
-                self.name,
-            )
-
-        value_list = cast(List[Any], value)
-        result: List[T] = []
-        for item in value_list:
-            converted = await self.value_field.from_db(item, backend)
-            if converted is None:
-                raise ValidationError(
-                    "List items cannot be None",
-                    self.name,
+        try:
+            if not isinstance(value, list):
+                raise TypeError(
+                    f"Expected list from database, got {type(value).__name__}"
                 )
-            result.append(converted)
 
-        return result
+            value_list = cast(list[Any], value)
+
+            # Convert each item
+            result: list[T] = []
+            for i, item in enumerate(value_list):
+                try:
+                    converted = await self.field.from_db(item, backend)
+                    if converted is not None:
+                        result.append(converted)
+                except FieldValidationError as e:
+                    raise FieldValidationError(
+                        message=f"Cannot convert item at index {i}: {str(e)}",
+                        field_name=self.name,
+                        code="conversion_error",
+                    ) from e
+
+            return result
+        except Exception as e:
+            raise FieldValidationError(
+                message=f"Cannot convert database value to list: {str(e)}",
+                field_name=self.name,
+                code="conversion_error",
+            ) from e

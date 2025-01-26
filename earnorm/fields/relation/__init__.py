@@ -10,10 +10,8 @@ This module provides field types for database relationships:
 from earnorm.fields.relation.many_to_many import ManyToManyField
 from earnorm.fields.relation.many_to_one import ManyToOneField
 from earnorm.fields.relation.one_to_many import OneToManyField
-from earnorm.fields.relation.one_to_one import OneToOneField
 
 __all__ = [
-    "OneToOneField",
     "OneToManyField",
     "ManyToOneField",
     "ManyToManyField",

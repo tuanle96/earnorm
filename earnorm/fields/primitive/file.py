@@ -1,61 +1,23 @@
 """File field implementation.
 
-This field type provides support for storing and managing files with proper validation.
-It supports multiple storage backends:
-- Local filesystem storage
-- MongoDB GridFS storage
-- Extensible for cloud storage
-
-Features:
-- File upload/download with streaming support
-- Automatic content type detection
-- File size validation
+This module provides file field type for handling file uploads and storage.
+It supports:
+- File validation
+- Size limits
 - MIME type validation
-- Metadata management
-- Async operations
+- Storage backends
+- Database type mapping
 
 Examples:
-    Local storage:
     >>> class Document(Model):
-    ...     title = StringField()
     ...     file = FileField(
-    ...         storage="local",
-    ...         upload_to="uploads/%Y/%m/%d/",
-    ...         allowed_types=["application/pdf"],
-    ...         max_size=10 * 1024 * 1024  # 10MB
+    ...         max_size=10 * 1024 * 1024,  # 10MB
+    ...         allowed_types=["application/pdf", "image/*"],
     ...     )
-    ...
-    >>> # Upload file
-    >>> doc = Document(title="Report")
-    >>> await doc.file.save("report.pdf")
-    >>> # Get file info
-    >>> info = await doc.file.get_info()
-    >>> print(info.path)
-    'uploads/2024/03/21/report.pdf'
-
-    GridFS storage:
-    >>> class ImageDocument(Model):
-    ...     name = StringField()
     ...     image = FileField(
-    ...         storage="gridfs",
+    ...         max_size=5 * 1024 * 1024,  # 5MB
     ...         allowed_types=["image/jpeg", "image/png"],
-    ...         max_size=5 * 1024 * 1024  # 5MB
     ...     )
-    ...
-    >>> # Upload with metadata
-    >>> doc = ImageDocument(name="Profile")
-    >>> await doc.image.save(
-    ...     "profile.jpg",
-    ...     metadata={"author": "John", "tags": ["profile", "avatar"]}
-    ... )
-
-Best Practices:
-1. Always set appropriate max_size to prevent large file uploads
-2. Use allowed_types to restrict file types for security
-3. Handle storage-specific errors appropriately
-4. Use streaming for large files
-5. Clean up unused files by calling delete()
-6. Add relevant metadata during upload
 """
 
 import io
@@ -64,12 +26,15 @@ import os
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, BinaryIO, Dict, Optional, Set, Tuple, Union, cast
+from typing import Any, BinaryIO, Dict, Optional, Sequence, Union, cast
 
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorGridFSBucket
 
-from earnorm.fields.base import Field, ValidationError
+from earnorm.exceptions import FieldValidationError
+from earnorm.fields.base import BaseField
+from earnorm.fields.types import DatabaseValue
+from earnorm.fields.validators.base import TypeValidator, Validator
 
 
 class StorageType(str, Enum):
@@ -108,110 +73,260 @@ class FileInfo:
         self.metadata = metadata or {}
 
 
-class FileField(Field[Union[str, ObjectId]]):
-    """Field for file storage with multiple backend support.
+class FileField(BaseField[Union[Path, str, ObjectId]]):
+    """Field for file uploads.
 
-    This field handles:
-    - File validation and storage
-    - Multiple storage backends
-    - Size and type validation
-    - Metadata management
-    - Streaming support
+    This field type handles file uploads, with support for:
+    - File validation
+    - Size limits
+    - MIME type validation
+    - Storage backends
+    - Database type mapping
 
     Attributes:
-        storage: Storage backend type ('local' or 'gridfs')
-        upload_to: Upload directory template (for local storage)
-        allowed_types: Set of allowed MIME types
         max_size: Maximum file size in bytes
-        required: Whether field is required
-        unique: Whether field value must be unique
-        default: Default value
-
-    Raises:
-        ValidationError: With codes:
-            - invalid_type: Value is not a valid file type
-            - invalid_size: File exceeds maximum size
-            - invalid_content_type: File type not allowed
-            - file_not_found: File does not exist
-            - storage_error: Storage backend error
+        allowed_types: List of allowed MIME types (with wildcards)
+        upload_to: Upload directory path
+        backend_options: Database backend options
+        storage: Storage backend type
+        _value: Current file value
+        _fs: GridFS bucket instance
     """
+
+    max_size: int
+    allowed_types: tuple[str, ...]
+    upload_to: str
+    backend_options: dict[str, Any]
+    storage: StorageType
+    _value: Optional[Union[Path, str, ObjectId]]
+    _fs: Optional[AsyncIOMotorGridFSBucket]
 
     def __init__(
         self,
         *,
         storage: Union[str, StorageType] = StorageType.LOCAL,
-        upload_to: str = "",
-        allowed_types: Optional[Set[str]] = None,
-        max_size: Optional[int] = None,
-        required: bool = False,
-        unique: bool = False,
+        max_size: int = 100 * 1024 * 1024,  # 100MB
+        allowed_types: Optional[Sequence[str]] = None,
+        upload_to: str = "uploads",
         **options: Any,
     ) -> None:
         """Initialize file field.
 
         Args:
-            storage: Storage backend type ('local' or 'gridfs')
-            upload_to: Upload directory template (for local storage)
-            allowed_types: Set of allowed MIME types
+            storage: Storage backend type
             max_size: Maximum file size in bytes
-            required: Whether field is required
-            unique: Whether field value must be unique
+            allowed_types: List of allowed MIME types (with wildcards)
+            upload_to: Upload directory path
             **options: Additional field options
+
+        Raises:
+            ValueError: If max_size is negative or allowed_types is invalid
         """
-        super().__init__(
-            required=required,
-            unique=unique,
-            **options,
-        )
+        if max_size < 0:
+            raise ValueError("max_size must be non-negative")
+
+        field_validators: list[Validator[Any]] = [TypeValidator(Path)]
+        super().__init__(validators=field_validators, **options)
+
         self.storage = StorageType(storage)
-        self.upload_to = upload_to
-        self.allowed_types = allowed_types
         self.max_size = max_size
-        self._fs: Optional[AsyncIOMotorGridFSBucket] = None
-        self._value: Optional[Union[str, ObjectId]] = None
+        self.allowed_types = tuple(allowed_types or ("*/*",))
+        self.upload_to = upload_to
+        self._value = None
+        self._fs = None
+
+        # Create upload directory if it doesn't exist
+        if self.storage == StorageType.LOCAL:
+            os.makedirs(upload_to, exist_ok=True)
+
+        # Initialize backend options
+        self.backend_options = {
+            "mongodb": {"type": "string"},
+            "postgres": {"type": "VARCHAR"},
+            "mysql": {"type": "VARCHAR(255)"},
+        }
+
+    def _is_mime_type_allowed(self, mime_type: str) -> bool:
+        """Check if MIME type is allowed.
+
+        Supports wildcards in allowed types (e.g., "image/*").
+
+        Args:
+            mime_type: MIME type to check
+
+        Returns:
+            Whether MIME type is allowed
+        """
+        if "*/*" in self.allowed_types:
+            return True
+
+        mime_category, mime_subtype = mime_type.split("/", 1)
+        for allowed_type in self.allowed_types:
+            allowed_category, allowed_subtype = allowed_type.split("/", 1)
+            if allowed_category == "*" or (
+                allowed_category == mime_category
+                and (allowed_subtype == "*" or allowed_subtype == mime_subtype)
+            ):
+                return True
+        return False
 
     async def validate(self, value: Any) -> None:
         """Validate file value.
 
-        Validates:
-        - Value is valid file path or ID
-        - File exists in storage
-        - Not None if required
+        This method validates:
+        - Value is Path type
+        - File exists
+        - File size is within limit
+        - File type is allowed
 
         Args:
             value: Value to validate
 
         Raises:
-            ValidationError: With codes:
-                - invalid_type: Value is not a valid file type
-                - file_not_found: File does not exist
-                - required: Value is required but None
+            FieldValidationError: If validation fails
         """
         await super().validate(value)
 
         if value is not None:
-            if self.storage == StorageType.LOCAL:
-                if not isinstance(value, (str, Path)):
-                    raise ValidationError(
-                        message=f"Value must be string or Path, got {type(value).__name__}",
-                        field_name=self.name,
-                        code="invalid_type",
-                    )
-                path = Path(value)
-                if not path.exists():
-                    raise ValidationError(
-                        message=f"File {path} does not exist",
-                        field_name=self.name,
-                        code="file_not_found",
-                    )
-            else:  # GridFS
-                if not isinstance(value, (str, ObjectId)):
-                    raise ValidationError(
-                        message=f"Value must be string or ObjectId, got {type(value).__name__}",
-                        field_name=self.name,
-                        code="invalid_type",
-                    )
-                # GridFS existence check is done during operations
+            if not isinstance(value, Path):
+                raise FieldValidationError(
+                    message=f"Value must be a Path, got {type(value).__name__}",
+                    field_name=self.name,
+                    code="invalid_type",
+                )
+
+            # Check if file exists
+            if not value.is_file():
+                raise FieldValidationError(
+                    message=f"File does not exist: {value}",
+                    field_name=self.name,
+                    code="file_not_found",
+                )
+
+            # Check file size
+            file_size = value.stat().st_size
+            if file_size > self.max_size:
+                raise FieldValidationError(
+                    message=(
+                        f"File size {file_size} bytes exceeds maximum "
+                        f"size of {self.max_size} bytes"
+                    ),
+                    field_name=self.name,
+                    code="file_too_large",
+                )
+
+            # Check MIME type
+            mime_type, _ = mimetypes.guess_type(value)
+            if mime_type is None:
+                raise FieldValidationError(
+                    message=f"Cannot determine MIME type for file: {value}",
+                    field_name=self.name,
+                    code="unknown_mime_type",
+                )
+
+            if not self._is_mime_type_allowed(mime_type):
+                raise FieldValidationError(
+                    message=(
+                        f"File type {mime_type} is not allowed. "
+                        f"Allowed types: {self.allowed_types}"
+                    ),
+                    field_name=self.name,
+                    code="invalid_mime_type",
+                )
+
+    async def convert(self, value: Any) -> Optional[Path]:
+        """Convert value to Path.
+
+        Handles:
+        - None values
+        - Path instances
+        - String values (file paths)
+
+        Args:
+            value: Value to convert
+
+        Returns:
+            Converted Path value or None
+
+        Raises:
+            FieldValidationError: If value cannot be converted
+        """
+        if value is None:
+            return None
+
+        try:
+            if isinstance(value, Path):
+                return value
+            elif isinstance(value, str):
+                return Path(value)
+            else:
+                raise TypeError(f"Cannot convert {type(value).__name__} to Path")
+        except (TypeError, ValueError) as e:
+            raise FieldValidationError(
+                message=f"Cannot convert value to Path: {str(e)}",
+                field_name=self.name,
+                code="conversion_error",
+            ) from e
+
+    async def to_db(
+        self, value: Optional[Union[Path, str, ObjectId]], backend: str
+    ) -> DatabaseValue:
+        """Convert file path to database format.
+
+        Args:
+            value: Path/ID value to convert
+            backend: Database backend type
+
+        Returns:
+            Converted path/ID value or None
+        """
+        if value is None:
+            return None
+
+        if isinstance(value, (str, ObjectId)):
+            return value
+
+        # Store relative path from upload directory
+        try:
+            relative_path = value.relative_to(self.upload_to)
+            return str(relative_path)
+        except ValueError:
+            return str(value)
+
+    async def from_db(
+        self, value: DatabaseValue, backend: str
+    ) -> Optional[Union[Path, str, ObjectId]]:
+        """Convert database value to file path/ID.
+
+        Args:
+            value: Database value to convert
+            backend: Database backend type
+
+        Returns:
+            Converted Path/ID value or None
+
+        Raises:
+            FieldValidationError: If value cannot be converted
+        """
+        if value is None:
+            return None
+
+        try:
+            if isinstance(value, (str, ObjectId)):
+                if self.storage == StorageType.LOCAL:
+                    # Combine upload directory with stored path
+                    return Path(self.upload_to) / str(value)
+                return value
+            elif isinstance(value, Path):
+                return value
+            else:
+                raise TypeError(f"Cannot convert {type(value).__name__} to Path/ID")
+        except (TypeError, ValueError) as e:
+            raise FieldValidationError(
+                message=f"Cannot convert database value to Path/ID: {str(e)}",
+                field_name=self.name,
+                code="conversion_error",
+            ) from e
 
     async def save(
         self,
@@ -232,7 +347,7 @@ class FileField(Field[Union[str, ObjectId]]):
             File path (local) or ID (GridFS)
 
         Raises:
-            ValidationError: With codes:
+            FieldValidationError: With codes:
                 - invalid_size: File exceeds maximum size
                 - invalid_content_type: File type not allowed
                 - storage_error: Storage backend error
@@ -244,22 +359,22 @@ class FileField(Field[Union[str, ObjectId]]):
 
         # Validate size
         if self.max_size and len(data) > self.max_size:
-            raise ValidationError(
+            raise FieldValidationError(
                 message=f"File size {len(data)} bytes exceeds maximum {self.max_size} bytes",
                 field_name=self.name,
-                code="invalid_size",
             )
 
         # Validate content type
+        allowed = self.allowed_types
         if (
             content_type
-            and self.allowed_types
-            and content_type not in self.allowed_types
+            and allowed
+            and content_type
+            not in allowed  # pylint: disable=unsupported-membership-test
         ):
-            raise ValidationError(
-                message=f"Content type {content_type} not allowed. Allowed types: {', '.join(sorted(self.allowed_types))}",
+            raise FieldValidationError(
+                message=f"Content type {content_type} not allowed. Allowed types: {', '.join(sorted(allowed))}",
                 field_name=self.name,
-                code="invalid_content_type",
             )
 
         try:
@@ -283,26 +398,19 @@ class FileField(Field[Union[str, ObjectId]]):
                 )
                 return file_id
         except Exception as e:
-            raise ValidationError(
+            raise FieldValidationError(
                 message=f"Storage error: {str(e)}",
                 field_name=self.name,
-                code="storage_error",
-            )
+            ) from e
 
-    async def read(
-        self,
-        chunk_size: int = 256 * 1024,  # 256KB
-    ) -> Optional[bytes]:
+    async def read(self) -> Optional[bytes]:
         """Read file from storage.
-
-        Args:
-            chunk_size: Size of chunks to read
 
         Returns:
             File contents as bytes or None if file not found
 
         Raises:
-            ValidationError: With code "storage_error" if read fails
+            FieldValidationError: With code "storage_error" if read fails
         """
         if self._value is None:
             return None
@@ -314,20 +422,22 @@ class FileField(Field[Union[str, ObjectId]]):
             else:
                 fs = await self._get_fs()
                 buffer = io.BytesIO()
-                await fs.download_to_stream(ObjectId(self._value), buffer)
+                await fs.download_to_stream(
+                    cast(Union[str, ObjectId, bytes], self._value), buffer
+                )
                 return buffer.getvalue()
         except Exception as e:
-            raise ValidationError(
+            raise FieldValidationError(
                 message=f"Storage error: {str(e)}",
                 field_name=self.name,
                 code="storage_error",
-            )
+            ) from e
 
     async def delete(self) -> None:
         """Delete file from storage.
 
         Raises:
-            ValidationError: With code "storage_error" if deletion fails
+            FieldValidationError: With code "storage_error" if deletion fails
         """
         if self._value is None:
             return
@@ -337,13 +447,13 @@ class FileField(Field[Union[str, ObjectId]]):
                 os.unlink(str(self._value))
             else:
                 fs = await self._get_fs()
-                await fs.delete(ObjectId(self._value))
+                await fs.delete(cast(Union[str, ObjectId, bytes], self._value))
         except Exception as e:
-            raise ValidationError(
+            raise FieldValidationError(
                 message=f"Storage error: {str(e)}",
                 field_name=self.name,
                 code="storage_error",
-            )
+            ) from e
 
     async def get_info(self) -> Optional[FileInfo]:
         """Get file information.
@@ -352,7 +462,7 @@ class FileField(Field[Union[str, ObjectId]]):
             FileInfo object or None if file not found
 
         Raises:
-            ValidationError: With code "storage_error" if info retrieval fails
+            FieldValidationError: With code "storage_error" if info retrieval fails
         """
         if self._value is None:
             return None
@@ -360,26 +470,24 @@ class FileField(Field[Union[str, ObjectId]]):
         try:
             if self.storage == StorageType.LOCAL:
                 path = Path(str(self._value))
-                guess_result = cast(
-                    Tuple[Optional[str], Optional[str]],
-                    mimetypes.guess_type(str(path)),  # type: ignore
-                )
-                content_type = guess_result[0]
+                mime_type, _ = mimetypes.guess_type(str(path))
                 return FileInfo(
                     filename=path.name,
                     path=str(path),
-                    content_type=content_type,
+                    content_type=mime_type,
                     size=path.stat().st_size,
                     created_at=datetime.fromtimestamp(path.stat().st_ctime),
                 )
             else:
                 fs = await self._get_fs()
-                grid_out = await fs.open_download_stream(ObjectId(self._value))
+                grid_out = await fs.open_download_stream(
+                    cast(Union[str, ObjectId, bytes], self._value)
+                )
                 if grid_out.filename is None:
-                    raise ValidationError(
+                    raise FieldValidationError(
                         message="File has no filename",
                         field_name=self.name,
-                        code="invalid_file",
+                        code="missing_filename",
                     )
                 metadata = grid_out.metadata or {}
                 return FileInfo(
@@ -391,11 +499,11 @@ class FileField(Field[Union[str, ObjectId]]):
                     metadata=dict(metadata),
                 )
         except Exception as e:
-            raise ValidationError(
+            raise FieldValidationError(
                 message=f"Storage error: {str(e)}",
                 field_name=self.name,
                 code="storage_error",
-            )
+            ) from e
 
     async def _get_fs(self) -> AsyncIOMotorGridFSBucket:
         """Get GridFS bucket for MongoDB storage."""
@@ -411,10 +519,9 @@ class FileField(Field[Union[str, ObjectId]]):
         if isinstance(file, (str, Path)):
             path = Path(file)
             if not path.exists():
-                raise ValidationError(
+                raise FieldValidationError(
                     message=f"File {path} does not exist",
                     field_name=self.name,
-                    code="file_not_found",
                 )
             with open(path, "rb") as f:
                 return f.read()
@@ -444,10 +551,8 @@ class FileField(Field[Union[str, ObjectId]]):
         Returns:
             MIME type string or None if cannot be determined
         """
-        guess_result = cast(
-            Tuple[Optional[str], Optional[str]], mimetypes.guess_type(filename)  # type: ignore
-        )
-        return guess_result[0]
+        mime_type, _ = mimetypes.guess_type(filename)
+        return mime_type
 
     def _get_upload_path(self, filename: str) -> Path:
         """Get upload path for local storage."""
