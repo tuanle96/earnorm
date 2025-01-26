@@ -251,3 +251,11 @@ class CacheManager:
             CacheError: If failed to delete values
         """
         await self.backend.delete_many(keys)
+
+    async def close(self) -> None:
+        """Close cache backend."""
+        await self.backend.close()
+
+    async def cleanup(self) -> None:
+        """Cleanup cache backend."""
+        await self.backend.cleanup()

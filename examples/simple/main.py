@@ -1,6 +1,7 @@
 """Simple example usage with detailed logging."""
 
 import logging
+from typing import Self
 
 from earnorm import fields
 from earnorm.base.model import BaseModel
@@ -26,13 +27,13 @@ class User(BaseModel):
     email = fields.StringField(required=True, unique=True)
     age = fields.IntegerField(required=True)
 
-    async def get_all_users(self):
+    async def get_all_users(self) -> list[Self]:
         """Retrieve and return all users from the database.
 
         Returns:
             list: A list of User objects representing all users in the database.
         """
-        users = await User.search([])
+        users = await User.all(self)
 
         for user in users:
             print(user.name)

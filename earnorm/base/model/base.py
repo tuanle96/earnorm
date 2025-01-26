@@ -30,9 +30,79 @@ from earnorm.base.database.query.base.query import AsyncQuery
 from earnorm.base.domain.expression import DomainExpression, LogicalOp, Operator
 from earnorm.base.env import Environment
 from earnorm.base.model.meta import MetaModel
-from earnorm.config import SystemConfig
 from earnorm.fields import Field
 from earnorm.types import DatabaseModel, JsonDict, M, ValueType
+
+
+class FieldsDescriptor:
+    """Descriptor for accessing model fields.
+
+    This descriptor allows accessing fields through both class and instance:
+        >>> User.__fields__  # Access through class
+        >>> user.__fields__  # Access through instance
+    """
+
+    def __get__(
+        self, obj: Optional["BaseModel"], objtype: Type["BaseModel"]
+    ) -> Dict[str, Field[Any]]:
+        """Get fields dictionary.
+
+        Args:
+            obj: Model instance or None if accessed through class
+            objtype: Model class
+
+        Returns:
+            Dictionary mapping field names to Field instances
+        """
+        if obj is not None:
+            objtype = type(obj)
+        return getattr(objtype, "_fields", {})
+
+
+class EnvDescriptor:
+    """Descriptor for accessing model environment.
+
+    This descriptor allows accessing environment through both class and instance:
+        >>> User.env  # Access through class
+        >>> user.env  # Access through instance
+
+    The environment is shared between all instances of the same model class.
+    """
+
+    def __get__(
+        self, obj: Optional["BaseModel"], objtype: Type["BaseModel"]
+    ) -> Environment:
+        """Get model environment.
+
+        Args:
+            obj: Model instance or None if accessed through class
+            objtype: Model class
+
+        Returns:
+            Model environment instance
+
+        Raises:
+            RuntimeError: If environment is not set
+        """
+        if obj is not None:
+            objtype = type(obj)
+
+        env = getattr(objtype, "_env", None)
+        if env is None:
+            raise RuntimeError(
+                f"Environment not set for model {objtype.__name__}. "
+                "Make sure the model is created through the environment"
+            )
+        return env
+
+    def __set__(self, obj: "BaseModel", value: Environment) -> None:
+        """Set model environment.
+
+        Args:
+            obj: Model instance
+            value: Environment instance to set
+        """
+        setattr(type(obj), "_env", value)
 
 
 class BaseModel(DatabaseModel, metaclass=MetaModel):
@@ -69,8 +139,9 @@ class BaseModel(DatabaseModel, metaclass=MetaModel):
     _fields: Dict[str, Field[Any]]  # Set by metaclass
     id: int = 0  # Record ID with default value
 
-    # Environment descriptor with config from environment
-    env = Environment(config=SystemConfig.from_env())
+    # Use descriptors for fields and environment access
+    __fields__ = FieldsDescriptor()
+    env = EnvDescriptor()
 
     @property
     def adapter(self) -> DatabaseAdapter[DatabaseModel]:
@@ -82,9 +153,7 @@ class BaseModel(DatabaseModel, metaclass=MetaModel):
         Raises:
             RuntimeError: If adapter not initialized
         """
-        if not hasattr(self.env, "get_adapter"):
-            raise RuntimeError("Database adapter not initialized")
-        return cast(DatabaseAdapter[DatabaseModel], self.env.get_adapter())
+        return self.env.adapter
 
     def __init__(self, **kwargs: Any) -> None:
         """Initialize model instance.
@@ -92,9 +161,6 @@ class BaseModel(DatabaseModel, metaclass=MetaModel):
         Args:
             **kwargs: Initial field values
         """
-        # Initialize environment
-        self._env: Optional[Environment] = None
-
         # Initialize record data
         self._data: Dict[str, Any] = {}
         self._changed: Set[str] = set()
@@ -248,10 +314,10 @@ class BaseModel(DatabaseModel, metaclass=MetaModel):
         return self
 
     def group_by(self: M, *fields: str) -> M:
-        """Add grouping to record set.
+        """Set group by fields for record set.
 
         Args:
-            fields: Fields to group by
+            *fields: Field names to group by
 
         Returns:
             Self for chaining
@@ -344,6 +410,7 @@ class BaseModel(DatabaseModel, metaclass=MetaModel):
         """
         adapter = self.adapter
         query = await adapter.query(self.__class__)
+        query = cast(AsyncQuery[Self], query)
 
         query = query.filter(DomainExpression(self._domain_expr))
 
@@ -359,7 +426,7 @@ class BaseModel(DatabaseModel, metaclass=MetaModel):
                 query = query.sort(field, direction == "asc")
 
         result = await query.execute()
-        return cast(List[Self], result)
+        return result
 
     async def first(self) -> Optional[Self]:
         """Get first matching record.
@@ -514,6 +581,15 @@ class BaseModel(DatabaseModel, metaclass=MetaModel):
             values[name] = await field.to_db(value, self.adapter.backend_type)
 
         return values
+
+    @property
+    def fields(self) -> Dict[str, Field[Any]]:
+        """Get model fields.
+
+        Returns:
+            Dictionary mapping field names to Field instances
+        """
+        return self._fields
 
     def __str__(self) -> str:
         """Return string representation."""

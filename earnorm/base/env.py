@@ -1,142 +1,186 @@
-"""Environment module for managing database connections and caching.
+"""Environment module.
 
-This module provides the Environment class which manages:
-1. Database connections and transactions through Database Adapters
-2. Model registration
-3. Record caching and prefetching
-4. Configuration management
-
-Examples:
-    >>> env = Environment(config)
-    >>> await env.init()
-    >>> adapter = await env.get_adapter()
-    >>> await env.destroy()
+This module provides the environment class that manages the application state.
+It integrates with the DI container and provides access to all services.
 """
 
-from typing import Any, Dict, Optional, Set, Type, TypeVar, Union, cast
+import logging
+from typing import Any, Optional, Type, TypeVar
 
 from earnorm.base.database.adapter import DatabaseAdapter
-from earnorm.cache.core.manager import CacheManager
-from earnorm.config.model import SystemConfig
+from earnorm.base.model.meta import BaseModel
+from earnorm.cache import CacheManager
+from earnorm.config import SystemConfig
 from earnorm.di import container
+from earnorm.events.core.bus import EventBus
 from earnorm.types import DatabaseModel
 
-# Type aliases
-CacheKey = str
-CacheValue = Union[str, int, float, bool, Dict[str, Any], None]
+logger = logging.getLogger(__name__)
+
 T = TypeVar("T")
-
-ModelT = TypeVar("ModelT", bound=DatabaseModel)
-
-# Available database adapters - will be populated by specific backends
-ADAPTERS: Dict[str, Type[DatabaseAdapter[DatabaseModel]]] = {}
 
 
 class Environment:
-    """Environment class for managing database connections and caching.
+    """Application environment.
 
-    Attributes:
-        config: System configuration
-        _models: Dictionary mapping model names to model classes
-        _cache_manager: Cache manager for caching records
-        _prefetch: Dictionary mapping model names to prefetch record IDs
-        _adapter: Database adapter instance
-        _backend_type: Database backend type
+    This class manages:
+    - Configuration
+    - Database connections
+    - Model registry
+    - Cache manager
+    - Event bus
+
+    It integrates with the DI container and follows the singleton pattern.
+    All services are accessed through the DI container.
+
+    Examples:
+        >>> env = Environment.get_instance()
+        >>> await env.init(config)
+        >>> User = env.get_model('res.users')
+        >>> cache = env.cache_manager
+        >>> events = env.event_bus
     """
 
-    def __init__(self, config: SystemConfig) -> None:
-        """Initialize environment."""
-        self.config = config
-        self._models: Dict[str, Type[DatabaseModel]] = {}
-        self._cache_manager: Optional[CacheManager] = None
-        self._prefetch: Dict[str, Set[int]] = {}
-        self._backend_type: str = config.database.get("backend_type", "")  # type: ignore
-        self._adapter: Optional[DatabaseAdapter[DatabaseModel]] = None
+    # Singleton instance
+    _instance: Optional["Environment"] = None
 
-    async def init(self) -> None:
+    def __init__(self) -> None:
+        """Initialize environment."""
+        if Environment._instance is not None:
+            raise RuntimeError("Environment already initialized")
+
+        self._initialized = False
+        self._cache_manager: Optional[CacheManager] = None
+        self._adapter: Optional[DatabaseAdapter[DatabaseModel]] = None
+        self._event_bus: Optional[EventBus] = None
+        Environment._instance = self
+
+    @classmethod
+    def get_instance(cls) -> "Environment":
+        """Get singleton instance.
+
+        Returns:
+            Environment instance
+        """
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    async def init(self, config: SystemConfig) -> None:
         """Initialize environment.
 
+        Args:
+            config: System configuration
+
         This method:
-        1. Gets cache manager from container
-        2. Initializes database adapter
+        1. Registers config in DI container
+        2. Initializes services through DI container
+        3. Sets up service dependencies
         """
-        # Get cache manager
-        self._cache_manager = await container.get("cache_manager")
+        if self._initialized:
+            logger.warning("Environment already initialized")
+            return
 
-        # Initialize database adapter
-        adapter_class = ADAPTERS.get(self._backend_type)
-        if not adapter_class:
-            raise ValueError(f"Unsupported database backend: {self._backend_type}")
+        try:
+            # Register config
+            container.register("config", config)
 
-        self._adapter = adapter_class()
-        await self._adapter.init()
+            # Get services from DI container
+            self._cache_manager = await container.get("cache_manager")
+            self._adapter = await container.get("database_adapter")
+            self._event_bus = await container.get("event_bus")
+
+            # Register self in container
+            container.register("env", self)
+
+            self._initialized = True
+            logger.info("Environment initialized successfully")
+
+        except Exception as e:
+            logger.error("Failed to initialize environment: %s", str(e))
+            raise RuntimeError(f"Environment initialization failed: {e}") from e
 
     async def destroy(self) -> None:
-        """Destroy environment.
+        """Cleanup environment.
 
         This method:
-        1. Closes database adapter if exists
-        2. Cleans up resources
+        1. Closes database connections
+        2. Cleans up caches
+        3. Stops event bus
         """
-        if self._adapter:
-            await self._adapter.close()
-            self._adapter = None
+        if not self._initialized:
+            return
 
-        self._cache_manager = None
-        self._models.clear()
-        self._prefetch.clear()
+        try:
+            # Get services from DI container
+            adapter = await container.get("database_adapter")
+            cache = await container.get("cache_manager")
+            events = await container.get("event_bus")
 
-    async def get_adapter(self) -> DatabaseAdapter[DatabaseModel]:
-        """Get database adapter instance."""
-        if not self._adapter:
-            raise RuntimeError("Database adapter not initialized")
-        return self._adapter
+            # Cleanup services
+            if adapter:
+                await adapter.close()
+            if cache:
+                await cache.cleanup()
+                await cache.close()
+            if events:
+                await events.destroy()
 
-    async def get_connection(self) -> Any:
-        """Get database connection.
+            # Reset state
+            self._initialized = False
+
+            logger.info("Environment cleaned up successfully")
+
+        except Exception as e:
+            logger.error("Failed to cleanup environment: %s", str(e))
+            raise RuntimeError(f"Environment cleanup failed: {e}") from e
+
+    def get_service(self, name: str, required: bool = True) -> Any:
+        """Get service from DI container.
+
+        Args:
+            name: Service name
+            required: Whether service is required
 
         Returns:
-            Database connection from adapter
+            Service instance
 
         Raises:
-            RuntimeError: If adapter not initialized
+            RuntimeError: If service not found and required=True
         """
-        adapter = await self.get_adapter()
-        return await adapter.get_connection()
+        service = container.get(name)
+        if service is None and required:
+            raise RuntimeError(f"Service {name} not found in DI container")
+        return service
 
     @property
-    def backend_type(self) -> str:
-        """Get database backend type.
+    def cache_manager(self) -> CacheManager:
+        """Get cache manager.
 
         Returns:
-            Database backend type (e.g. "mongodb", "mysql", "postgres")
+            Cache manager instance
         """
-        return self._backend_type
+        return self.get_service("cache_manager")
 
-    async def register_model(self, name: str, model: Type[DatabaseModel]) -> None:
-        """Register model.
+    @property
+    def adapter(self) -> DatabaseAdapter[DatabaseModel]:
+        """Get database adapter.
 
-        Args:
-            name: Model name
-            model: Model class
-
-        Raises:
-            ValueError: If model already registered
+        Returns:
+            Database adapter instance
         """
-        if name in self._models:
-            raise ValueError(f"Model {name} already registered")
-        self._models[name] = model
+        return self.get_service("database_adapter")
 
-    async def unregister_model(self, name: str) -> None:
-        """Unregister model.
+    @property
+    def event_bus(self) -> EventBus:
+        """Get event bus.
 
-        Args:
-            name: Model name
+        Returns:
+            Event bus instance
         """
-        if name in self._models:
-            del self._models[name]
+        return self.get_service("event_bus")
 
-    def get_model(self, name: str) -> Type[DatabaseModel]:
+    def get_model(self, name: str) -> Type[BaseModel]:
         """Get model by name.
 
         Args:
@@ -146,87 +190,9 @@ class Environment:
             Model class
 
         Raises:
-            KeyError: If model not found
+            ValueError: If model not found
         """
-        if name not in self._models:
-            raise KeyError(f"Model {name} not found")
-        return self._models[name]
-
-    async def get_cached(self, model: str, record_id: int) -> Optional[Dict[str, Any]]:
-        """Get cached record.
-
-        Args:
-            model: Model name
-            record_id: Record ID
-
-        Returns:
-            Cached record data or None if not found
-        """
-        if not self._cache_manager:
-            return None
-
-        key = f"{model}:{record_id}"
-        try:
-            value = await self._cache_manager.get(key)
-            if value is None:
-                return None
-            return cast(Dict[str, Any], value)
-        except (AttributeError, NotImplementedError):
-            return None
-
-    async def set_cached(
-        self,
-        model: str,
-        record_id: int,
-        data: Dict[str, Any],
-        ttl: Optional[int] = None,
-    ) -> None:
-        """Cache record data.
-
-        Args:
-            model: Model name
-            record_id: Record ID
-            data: Record data to cache
-            ttl: Cache TTL in seconds
-        """
-        if not self._cache_manager:
-            return
-
-        key = f"{model}:{record_id}"
-        try:
-            await self._cache_manager.set(key, data, ttl=ttl)
-        except (AttributeError, NotImplementedError):
-            return
-
-    async def clear_caches(self) -> None:
-        """Clear all caches."""
-        if self._cache_manager:
-            # Get all keys from models
-            keys = [f"{model}:*" for model in self._models.keys()]
-            await self._cache_manager.delete_many(keys)
-
-    def clear_prefetch(self) -> None:
-        """Clear prefetch data."""
-        self._prefetch.clear()
-
-    async def prefetch_records(self, model: str, ids: Set[int]) -> None:
-        """Prefetch records.
-
-        Args:
-            model: Model name
-            ids: Record IDs to prefetch
-        """
-        if model not in self._prefetch:
-            self._prefetch[model] = set()
-        self._prefetch[model].update(ids)
-
-    def get_prefetch(self, model: str) -> Set[int]:
-        """Get prefetched record IDs.
-
-        Args:
-            model: Model name
-
-        Returns:
-            Set of prefetched record IDs
-        """
-        return self._prefetch.get(model, set())
+        model = self.get_service(f"model.{name}", required=False)
+        if model is None:
+            raise ValueError(f"Model {name} not found")
+        return model

@@ -1,8 +1,9 @@
 """Container interfaces."""
 
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Protocol, runtime_checkable
 
 
+@runtime_checkable
 class ContainerInterface(Protocol):
     """Container interface."""
 

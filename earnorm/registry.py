@@ -19,6 +19,7 @@ from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
 from redis.asyncio import Redis
 
 from earnorm.base.database.adapters.mongo import MongoAdapter
+from earnorm.base.env import Environment
 from earnorm.config import SystemConfig
 from earnorm.di import container
 from earnorm.pool import PoolRegistry, create_mongo_pool, create_redis_pool
@@ -53,6 +54,22 @@ async def register_core_services() -> None:
     container.register("factory_manager", FactoryManager())
     container.register("lifecycle_manager", LifecycleManager())
     container.register("dependency_resolver", DependencyResolver())
+
+
+async def register_environment_services(config: SystemConfig) -> None:
+    """Register environment and related services.
+
+    This includes:
+    - Environment singleton
+    - Model registry
+    - Transaction manager
+    """
+    # Create and initialize environment
+    env = Environment.get_instance()
+    await env.init(config)
+
+    # Register in container
+    container.register("environment", env)
 
 
 async def register_database_services(config: SystemConfig) -> None:
@@ -173,16 +190,17 @@ async def register_validator_services() -> None:
 async def register_all(config: SystemConfig) -> None:
     """Register all services in correct order.
 
-    Args:
+        Args:
         config: System configuration instance
 
     This function registers services in the following order:
     1. Core DI services
-    2. Database services
-    3. Pool services
-    4. Cache services
-    5. Event services
-    6. Validator services
+    2. Environment services
+    3. Database services
+    4. Pool services
+    5. Cache services
+    6. Event services
+    7. Validator services
 
     Examples:
         ```python
@@ -193,19 +211,22 @@ async def register_all(config: SystemConfig) -> None:
     # 1. Core DI services
     await register_core_services()
 
-    # 2. Database services
+    # 2. Environment services
+    await register_environment_services(config)
+
+    # 3. Database services
     await register_database_services(config)
 
-    # 3. Pool services
+    # 4. Pool services
     await register_pool_services(config)
 
-    # 4. Cache services
+    # 5. Cache services
     await register_cache_services(config)
 
-    # 5. Event services
+    # 6. Event services
     await register_event_services()
 
-    # 6. Validator services
+    # 7. Validator services
     await register_validator_services()
 
 

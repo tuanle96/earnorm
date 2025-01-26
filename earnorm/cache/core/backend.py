@@ -121,6 +121,12 @@ class CacheBackendProtocol(Protocol):
             keys: List of cache keys
         """
 
+    async def close(self) -> None:
+        """Close cache backend."""
+
+    async def cleanup(self) -> None:
+        """Cleanup cache backend."""
+
 
 class BaseCacheBackend(CacheBackendProtocol, abc.ABC):
     """Base class for cache backends.
