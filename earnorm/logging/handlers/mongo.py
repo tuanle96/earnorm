@@ -1,113 +1,75 @@
-"""MongoDB handler for storing logs in MongoDB."""
+"""MongoDB handler for logging.
 
-import asyncio
-from typing import Any, Dict, List, Optional
+This module provides a handler for storing logs in MongoDB with
+support for batching and automatic cleanup.
 
+Examples:
+    >>> handler = MongoHandler(batch_size=100)
+    >>> await handler.handle({
+    ...     'level': 'INFO',
+    ...     'message': 'Test message',
+    ...     'module': 'test_module'
+    ... })
+"""
+
+from typing import Any, Dict, Optional
+
+from earnorm.logging.handlers.base import BaseHandler
 from earnorm.logging.models.log import Log
-
-from .base import BaseHandler
 
 
 class MongoHandler(BaseHandler):
     """Handler for storing logs in MongoDB.
 
-    This handler stores log entries in MongoDB using the Log model.
-    It supports batching for better performance and includes retry logic
-    for handling connection issues.
+    This handler supports:
+    - Batch inserts for better performance
+    - Automatic cleanup of old logs
+    - Custom field mapping
 
-    Examples:
-        >>> # Basic usage
-        >>> handler = MongoHandler()
-        >>> log_entry = {
-        ...     'level': 'INFO',
-        ...     'message': 'test message',
-        ...     'module': 'test_module'
-        ... }
-        >>> await handler.emit(log_entry)  # Stores in MongoDB immediately
-
-        >>> # Batch storage
-        >>> handler = MongoHandler(batch_size=100)
-        >>> for i in range(50):
-        ...     await handler.handle({'message': f'message {i}'})
-        >>> # Logs are stored when batch size is reached
-        >>> await handler.close()  # Ensures remaining logs are stored
+    Attributes:
+        batch_size: Number of logs to batch before inserting
+        ttl_days: Number of days to keep logs (0 for no expiry)
     """
 
     def __init__(
         self,
-        batch_size: Optional[int] = None,
-        max_retries: int = 3,
-        retry_delay: float = 1.0,
-        collection: Optional[str] = None,
-    ):
+        batch_size: int = 100,
+        ttl_days: int = 30,
+        format_string: Optional[str] = None,
+    ) -> None:
         """Initialize the MongoDB handler.
 
         Args:
-            batch_size: Optional batch size for batching log entries.
-                If None, entries are stored immediately.
-            max_retries: Maximum number of retries for failed operations.
-            retry_delay: Delay in seconds between retries.
-            collection: Optional collection name. If not provided, uses
-                the default collection from the Log model.
+            batch_size: Number of logs to batch before inserting
+            ttl_days: Number of days to keep logs (0 for no expiry)
+            format_string: Format string for log messages
         """
-        super().__init__(batch_size)
-        self.max_retries = max_retries
-        self.retry_delay = retry_delay
-        self.collection = collection
+        super().__init__(batch_size, format_string)
+        self.ttl_days = ttl_days
 
-    async def _store_entries(self, entries: List[Dict[str, Any]]) -> None:
-        """Store log entries in MongoDB with retry logic.
+    async def handle(self, log_entry: Dict[str, Any]) -> None:
+        """Handle a log entry by storing it in MongoDB.
 
         Args:
-            entries: List of log entries to store.
-
-        Raises:
-            Exception: If storing fails after all retries.
+            log_entry: Log entry to store
         """
-        retries = 0
-        last_error = None
+        self._batch.append(log_entry)
+        if len(self._batch) >= self.batch_size:
+            await self.flush()
 
-        while retries < self.max_retries:
-            try:
-                # Create Log instances
-                logs = [Log(**entry) for entry in entries]
-
-                # Insert logs
-                await Log.insert_many(logs)
-                return
-
-            except Exception as e:
-                last_error = e
-                retries += 1
-
-                if retries < self.max_retries:
-                    # Wait before retrying
-                    await asyncio.sleep(self.retry_delay * (2 ** (retries - 1)))
-
-        # If we get here, all retries failed
-        if last_error:
-            raise last_error
-        raise Exception("Failed to store logs after all retries")
-
-    async def emit(self, log_entry: Dict[str, Any]) -> None:
-        """Store a log entry in MongoDB.
-
-        Args:
-            log_entry: The log entry to store.
-
-        Raises:
-            Exception: If storing fails after all retries.
-        """
-        await self._store_entries([log_entry])
-
-    async def flush(self) -> None:
-        """Flush buffered log entries to MongoDB."""
+    async def _flush_batch(self) -> None:
+        """Flush the current batch of log entries to MongoDB."""
         if not self._batch:
             return
 
-        await self._store_entries(self._batch)
-        self._batch.clear()
+        # Create log entries
+        for entry in self._batch:
+            await Log.create(entry)
+
+        # Clean up old logs if TTL is set
+        if self.ttl_days > 0:
+            await Log.cleanup_old_logs(days=self.ttl_days)
 
     async def close(self) -> None:
-        """Close the handler and flush any remaining entries."""
+        """Close the handler and flush any remaining logs."""
         await self.flush()

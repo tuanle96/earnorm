@@ -1,4 +1,27 @@
-"""Logging module for EarnORM."""
+"""Logging module for EarnORM.
+
+This module provides logging functionality for EarnORM applications.
+
+Examples:
+    >>> from earnorm.logging import Log
+    >>> 
+    >>> # Create a log entry
+    >>> log = await Log.create({
+    ...     'level': 'INFO',
+    ...     'module': 'auth',
+    ...     'message': 'User logged in',
+    ...     'user_id': '123'
+    ... })
+    >>> 
+    >>> # Query logs
+    >>> error_logs = await Log.search([
+    ...     ('level', '=', 'ERROR'),
+    ...     ('module', '=', 'auth')
+    ... ]).limit(10)
+    >>> 
+    >>> # Clean up old logs
+    >>> deleted = await Log.cleanup_old_logs(days=30)
+"""
 
 import os
 import socket
@@ -6,6 +29,8 @@ from typing import Any, Dict, List, Optional
 
 from earnorm.logging.analytics.queries import LogAnalytics
 from earnorm.logging.analytics.reports import LogReports
+from earnorm.logging.exceptions import LogError, LogLevelError, LogValidationError
+from earnorm.logging.fields import LogLevelField
 from earnorm.logging.handlers import BaseHandler, ConsoleHandler, MongoHandler
 from earnorm.logging.maintenance.archive import LogArchiver
 from earnorm.logging.maintenance.cleanup import LogMaintenance
@@ -317,4 +342,8 @@ __all__ = [
     "critical",
     # Global instance
     "logger",
+    "LogLevelField",
+    "LogError",
+    "LogLevelError",
+    "LogValidationError",
 ]

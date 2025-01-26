@@ -13,6 +13,7 @@ It includes:
 from datetime import UTC, datetime
 from typing import (
     Any,
+    AsyncContextManager,
     ClassVar,
     Dict,
     List,
@@ -31,7 +32,7 @@ from earnorm.base.domain.expression import DomainExpression, LogicalOp, Operator
 from earnorm.base.env import Environment
 from earnorm.base.model.meta import MetaModel
 from earnorm.fields import Field
-from earnorm.types import DatabaseModel, JsonDict, M, ValueType
+from earnorm.types import DatabaseModel, JsonDict, M, ModelName, ValueType
 
 
 class FieldsDescriptor:

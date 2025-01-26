@@ -1,107 +1,88 @@
-"""Base handler class for log handlers."""
+"""Base handler for logging.
 
-import logging
-from typing import Any, Dict, List, Optional
-
-logger = logging.getLogger(__name__)
-
-
-class BaseHandler:
-    """Base class for log handlers.
-
-    This class defines the interface that all log handlers must implement.
-    It provides basic functionality for batching log entries before sending
-    them to their destinations.
+This module provides the base handler class that all log handlers must inherit from.
+It defines the interface for handling log entries.
 
     Examples:
         >>> class CustomHandler(BaseHandler):
-        ...     async def emit(self, log_entry):
-        ...         print(log_entry)
-        ...     async def flush(self):
-        ...         pass
-        ...     async def close(self):
-        ...         pass
-        >>> handler = CustomHandler(batch_size=2)
-        >>> await handler.handle({'message': 'test'})
+    ...     async def handle(self, log_entry: Dict[str, Any]) -> None:
+    ...         # Custom handling logic
+    ...         print(f"[{log_entry['level']}] {log_entry['message']}")
+"""
+
+from abc import ABC, abstractmethod
+from typing import Any, Dict, Optional
+
+
+class BaseHandler(ABC):
+    """Base class for all log handlers.
+
+    This class defines the interface that all handlers must implement.
+    Handlers are responsible for processing and storing log entries.
+
+    Attributes:
+        batch_size: Number of logs to process in a batch
+        format_string: Format string for log messages
     """
 
-    def __init__(self, batch_size: Optional[int] = None) -> None:
+    def __init__(
+        self, batch_size: int = 1, format_string: Optional[str] = None
+    ) -> None:
         """Initialize the handler.
 
         Args:
-            batch_size: Optional batch size for batching log entries.
-                If None, entries are processed immediately.
-                If > 0, entries are batched until the batch size is reached.
-
-        Raises:
-            ValueError: If batch_size is less than 0.
+            batch_size: Number of logs to process in a batch
+            format_string: Format string for log messages
         """
-        if batch_size is not None and batch_size < 0:
-            raise ValueError("batch_size must be >= 0")
-
         self.batch_size = batch_size
-        self._batch: List[Dict[str, Any]] = []
+        self.format_string = format_string or "[{level}] {message}"
+        self._batch: list[Dict[str, Any]] = []
 
+    @abstractmethod
     async def handle(self, log_entry: Dict[str, Any]) -> None:
         """Handle a log entry.
 
-        If batching is enabled, the entry is added to the batch.
-        When the batch is full, all entries are flushed.
-        If batching is disabled, the entry is emitted immediately.
+        This method must be implemented by all handlers.
+        It should process and store the log entry.
 
         Args:
-            log_entry: The log entry to handle.
-
-        Raises:
-            Exception: If there is an error handling the log entry.
-        """
-        try:
-            if not self.batch_size:
-                await self.emit(log_entry)
-                return
-
-            self._batch.append(log_entry)
-            if len(self._batch) >= self.batch_size:
-                await self.flush()
-        except Exception as e:
-            logger.exception("Error handling log entry: %s", e)
-            raise
-
-    async def emit(self, log_entry: Dict[str, Any]) -> None:
-        """Emit a log entry.
-
-        This method must be implemented by subclasses to define how
-        log entries are emitted to their destination.
-
-        Args:
-            log_entry: The log entry to emit.
-
-        Raises:
-            NotImplementedError: If the method is not implemented.
-            Exception: If there is an error emitting the log entry.
+            log_entry: Log entry to handle
         """
         raise NotImplementedError
 
     async def flush(self) -> None:
         """Flush any buffered log entries.
 
-        This method must be implemented by subclasses to define how
-        buffered entries are flushed to their destination.
-
-        Raises:
-            NotImplementedError: If the method is not implemented.
-            Exception: If there is an error flushing the entries.
+        This method should be called to ensure all logs are processed.
         """
-        raise NotImplementedError
+        if self._batch:
+            await self._flush_batch()
+            self._batch.clear()
+
+    async def _flush_batch(self) -> None:
+        """Flush the current batch of log entries.
+
+        This method should be implemented by handlers that support batching.
+        """
+        pass
+
+    def format(self, log_entry: Dict[str, Any]) -> str:
+        """Format a log entry using the format string.
+
+        Args:
+            log_entry: Log entry to format
+
+        Returns:
+            Formatted log message
+        """
+        try:
+            return self.format_string.format(**log_entry)
+        except KeyError as e:
+            return f"[ERROR] Invalid format string: {e}"
 
     async def close(self) -> None:
-        """Close the handler and clean up any resources.
+        """Close the handler and clean up resources.
 
-        This method must be implemented by subclasses to define how
-        the handler is closed and resources are cleaned up.
-
-        Raises:
-            NotImplementedError: If the method is not implemented.
-            Exception: If there is an error closing the handler.
+        This method should be called when the handler is no longer needed.
         """
-        raise NotImplementedError
+        await self.flush()

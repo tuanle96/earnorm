@@ -62,7 +62,7 @@ class FileHandler(BaseHandler):
             OSError: If there is an error creating directories or setting permissions.
             ValueError: If the mode or encoding is invalid.
         """
-        super().__init__(batch_size)
+        super().__init__(batch_size=batch_size or 100)
         self.filename = filename
         self.mode = mode
         self.encoding = encoding

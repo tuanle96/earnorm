@@ -1,49 +1,57 @@
-"""Archive module for log maintenance."""
+"""Log archiver module.
+
+This module provides functionality for archiving logs to files or external storage.
+
+Examples:
+    >>> archiver = LogArchiver("/path/to/archives")
+    >>> # Archive old logs
+    >>> await archiver.archive_old_logs(days=30)
+    >>> # Archive specific logs
+    >>> await archiver.archive_logs([log1, log2], "custom_archive.zip")
+"""
 
 import gzip
 import json
 import os
+import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from earnorm.logging.models.log import Log
-from earnorm.utils import dumps
+
+try:
+    from earnorm.utils import dumps  # type: ignore
+except ImportError:
+    dumps = json.dumps
 
 
 class LogArchiver:
-    """
-    Archive logs to files and manage archived data.
+    """Class for archiving logs.
 
-    Examples:
-        >>> archiver = LogArchiver("/path/to/archives")
-        >>> # Archive logs to file
-        >>> archived = await archiver.archive_to_file(
-        ...     start_time=datetime.now(UTC) - timedelta(days=90),
-        ...     end_time=datetime.now(UTC) - timedelta(days=60)
-        ... )
-        >>> print(f"Archived {archived} logs")
+    This class provides methods for:
+    - Archiving old logs to files
+    - Compressing log archives
+    - Managing archive storage
 
-        >>> # List archive files
-        >>> files = archiver.list_archive_files()
-        >>> for file in files:
-        ...     print(file)
-
-        >>> # Read archived logs
-        >>> logs = await archiver.read_archive_file(
-        ...     "logs_2024_01.gz"
-        ... )
-        >>> print(f"Found {len(logs)} logs")
+    Attributes:
+        archive_dir: Directory to store archives
+        compress: Whether to compress archives
     """
 
-    def __init__(self, archive_dir: Union[str, Path]):
-        """
-        Initialize the log archiver.
+    def __init__(self, archive_dir: Union[str, Path], compress: bool = True) -> None:
+        """Initialize the archiver.
 
         Args:
-            archive_dir: Directory to store archive files
+            archive_dir: Directory to store archives
+            compress: Whether to compress archives
         """
         self.archive_dir = Path(archive_dir)
+        self.compress = compress
+        self._ensure_archive_dir()
+
+    def _ensure_archive_dir(self) -> None:
+        """Ensure archive directory exists."""
         self.archive_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_archive_filename(self, start_time: datetime, end_time: datetime) -> str:
@@ -118,11 +126,11 @@ class LogArchiver:
             List of archive file paths
         """
         files = sorted(self.archive_dir.glob("logs_*.gz"))
+        filtered: List[Path] = []
 
         if not (start_date or end_date):
             return files
 
-        filtered = []
         for file in files:
             # Extract date from filename
             try:
@@ -161,7 +169,7 @@ class LogArchiver:
         if not filepath.exists():
             raise FileNotFoundError(f"Archive file not found: {filename}")
 
-        logs = []
+        logs: List[Dict[str, Any]] = []
         with gzip.open(filepath, "rt", encoding="utf-8") as f:
             for line in f:
                 try:
@@ -181,6 +189,142 @@ class LogArchiver:
                     continue
 
         return logs
+
+    async def archive_logs(self, logs: List[Log], name: Optional[str] = None) -> Path:
+        """Archive specific logs.
+
+        Args:
+            logs: List of logs to archive
+            name: Custom name for archive file
+
+        Returns:
+            Path to archive file
+        """
+        archive_path = self._get_archive_path(name)
+
+        # Convert logs to JSON
+        log_data = [log.to_dict() for log in logs]
+
+        if self.compress:
+            # Write to ZIP file
+            with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("logs.json", str(log_data))
+        else:
+            # Write directly to JSON file
+            archive_path.write_text(str(log_data))
+
+        return archive_path
+
+    async def archive_old_logs(self, days: int = 30, delete_after: bool = True) -> Path:
+        """Archive logs older than specified days.
+
+        Args:
+            days: Number of days to archive
+            delete_after: Whether to delete logs after archiving
+
+        Returns:
+            Path to archive file
+
+        Raises:
+            ValueError: If days is negative
+        """
+        if days < 0:
+            raise ValueError("days must be >= 0")
+
+        # Get old logs
+        cutoff_date = datetime.now(UTC) - timedelta(days=days)
+        old_logs = await Log.search([("timestamp", "<", cutoff_date)]).all()
+
+        # Archive logs
+        archive_path = await self.archive_logs(old_logs, f"old_logs_{days}days")
+
+        # Delete logs if requested
+        if delete_after and old_logs:
+            await Log.cleanup_old_logs(days)
+
+        return archive_path
+
+    def cleanup_old_archives(self, days: int = 30) -> int:
+        """Clean up archives older than specified days.
+
+        Args:
+            days: Number of days to keep archives
+
+        Returns:
+            Number of archives deleted
+
+        Raises:
+            ValueError: If days is negative
+        """
+        if days < 0:
+            raise ValueError("days must be >= 0")
+
+        cutoff_date = datetime.now(UTC) - timedelta(days=days)
+        count = 0
+
+        for archive in self.archive_dir.glob("*.json*"):
+            if archive.stat().st_mtime < cutoff_date.timestamp():
+                archive.unlink()
+                count += 1
+
+        return count
+
+    def get_archive_info(self) -> Dict[str, Union[int, datetime, None]]:
+        """Get information about archives.
+
+        Returns:
+            Dictionary with archive information:
+            - total_size: Total size of archives in bytes
+            - count: Number of archives
+            - oldest: Timestamp of oldest archive
+            - newest: Timestamp of newest archive
+        """
+        total_size = 0
+        count = 0
+        oldest: Optional[datetime] = None
+        newest: Optional[datetime] = None
+
+        for archive in self.archive_dir.glob("*.json*"):
+            stat = archive.stat()
+            total_size += stat.st_size
+            count += 1
+
+            mtime = datetime.fromtimestamp(stat.st_mtime, UTC)
+            if oldest is None or mtime < oldest:
+                oldest = mtime
+            if newest is None or mtime > newest:
+                newest = mtime
+
+        return {
+            "total_size": total_size,
+            "count": count,
+            "oldest": oldest,
+            "newest": newest,
+        }
+
+    def _get_archive_path(
+        self, name: Optional[str] = None, timestamp: Optional[datetime] = None
+    ) -> Path:
+        """Get path for archive file.
+
+        Args:
+            name: Custom archive name
+            timestamp: Timestamp to use in filename
+
+        Returns:
+            Path to archive file
+        """
+        timestamp = timestamp or datetime.now(UTC)
+        if name:
+            filename = f"{name}.json"
+            if self.compress:
+                filename += ".zip"
+        else:
+            date_str = timestamp.strftime("%Y%m%d_%H%M%S")
+            filename = f"logs_{date_str}.json"
+            if self.compress:
+                filename += ".zip"
+        return self.archive_dir / filename
 
     async def restore_from_file(
         self,
@@ -215,26 +359,3 @@ class LogArchiver:
             total_restored += len(result.inserted_ids)
 
         return total_restored
-
-    def cleanup_old_archives(self, max_age_days: int = 365) -> int:
-        """
-        Delete archive files older than specified age.
-
-        Args:
-            max_age_days: Maximum age of archives to keep
-
-        Returns:
-            Number of files deleted
-        """
-        cutoff_date = datetime.now(UTC) - timedelta(days=max_age_days)
-        files = self.list_archive_files(end_date=cutoff_date)
-
-        deleted = 0
-        for file in files:
-            try:
-                file.unlink()
-                deleted += 1
-            except OSError:
-                continue
-
-        return deleted
