@@ -1,0 +1,225 @@
+"""Window operation implementation.
+
+This module provides base implementation for window operations.
+All database-specific window implementations should inherit from this class.
+
+Examples:
+    >>> class MongoWindow(BaseWindow[User]):
+    ...     def to_pipeline(self) -> list[JsonDict]:
+    ...         return [{
+    ...             "$setWindowFields": {
+    ...                 "partitionBy": {
+    ...                     field: f"${field}" for field in self._partition_by
+    ...                 } if self._partition_by else None,
+    ...                 "sortBy": {
+    ...                     field: 1 for field in self._order_by
+    ...                 } if self._order_by else None,
+    ...                 "output": self._window_expr
+    ...             }
+    ...         }]
+"""
+
+from typing import Any, List, Optional, TypeVar
+
+from earnorm.base.database.query.core.operations.base import BaseOperation
+from earnorm.base.database.query.interfaces.operations.window import WindowProtocol
+from earnorm.types import DatabaseModel, JsonDict
+
+ModelT = TypeVar("ModelT", bound=DatabaseModel)
+
+
+class BaseWindow(BaseOperation[ModelT], WindowProtocol[ModelT]):
+    """Base class for window operations.
+
+    This class provides common functionality for window operations.
+    Database-specific window implementations should inherit from this class.
+
+    Args:
+        ModelT: Type of model being queried
+    """
+
+    def __init__(self) -> None:
+        """Initialize window operation."""
+        super().__init__()
+        self._partition_by: List[str] = []
+        self._order_by: List[str] = []
+        self._window_expr: Optional[JsonDict] = None
+        self._alias: Optional[str] = None
+
+    def over(
+        self,
+        partition_by: Optional[List[str]] = None,
+        order_by: Optional[List[str]] = None,
+    ) -> "BaseWindow[ModelT]":
+        """Set window clause.
+
+        Args:
+            partition_by: Fields to partition by
+            order_by: Fields to order by
+
+        Returns:
+            Self for chaining
+        """
+        if partition_by:
+            self._partition_by = partition_by
+        if order_by:
+            self._order_by = order_by
+        return self
+
+    def as_(self, alias: str) -> str:
+        """Set alias for window expression.
+
+        Args:
+            alias: Alias name
+
+        Returns:
+            Window expression with alias
+        """
+        self._alias = alias
+        return f"{self._window_expr} AS {alias}" if self._window_expr else alias
+
+    def row_number(self) -> "BaseWindow[ModelT]":
+        """ROW_NUMBER() window function.
+
+        Returns:
+            Window expression
+        """
+        self._window_expr = {"$rowNumber": {}}
+        return self
+
+    def rank(self) -> "BaseWindow[ModelT]":
+        """RANK() window function.
+
+        Returns:
+            Window expression
+        """
+        self._window_expr = {"$rank": {}}
+        return self
+
+    def dense_rank(self) -> "BaseWindow[ModelT]":
+        """DENSE_RANK() window function.
+
+        Returns:
+            Window expression
+        """
+        self._window_expr = {"$denseRank": {}}
+        return self
+
+    def first_value(self, field: str) -> "BaseWindow[ModelT]":
+        """FIRST_VALUE() window function.
+
+        Args:
+            field: Field to get first value of
+
+        Returns:
+            Window expression
+        """
+        self._window_expr = {
+            "$first": {"$" + field},
+            "window": {"documents": ["unbounded", "current"]},
+        }
+        return self
+
+    def last_value(self, field: str) -> "BaseWindow[ModelT]":
+        """LAST_VALUE() window function.
+
+        Args:
+            field: Field to get last value of
+
+        Returns:
+            Window expression
+        """
+        self._window_expr = {
+            "$last": {"$" + field},
+            "window": {"documents": ["current", "unbounded"]},
+        }
+        return self
+
+    def lag(
+        self, field: str, offset: int = 1, default: Any = None
+    ) -> "BaseWindow[ModelT]":
+        """LAG() window function.
+
+        Args:
+            field: Field to lag
+            offset: Number of rows to lag
+            default: Default value if no row exists
+
+        Returns:
+            Window expression
+        """
+        self._window_expr = {
+            "$shift": {
+                "output": "$" + field,
+                "by": offset,
+                "default": default,
+            }
+        }
+        return self
+
+    def lead(
+        self, field: str, offset: int = 1, default: Any = None
+    ) -> "BaseWindow[ModelT]":
+        """LEAD() window function.
+
+        Args:
+            field: Field to lead
+            offset: Number of rows to lead
+            default: Default value if no row exists
+
+        Returns:
+            Window expression
+        """
+        self._window_expr = {
+            "$shift": {
+                "output": "$" + field,
+                "by": -offset,
+                "default": default,
+            }
+        }
+        return self
+
+    def validate(self) -> None:
+        """Validate window configuration.
+
+        Raises:
+            ValueError: If window configuration is invalid
+        """
+        if not self._window_expr:
+            raise ValueError("Window function not specified")
+
+    @property
+    def partition_by(self) -> List[str]:
+        """Get partition by fields.
+
+        Returns:
+            List of fields to partition by
+        """
+        return self._partition_by
+
+    @property
+    def order_by(self) -> List[str]:
+        """Get order by fields.
+
+        Returns:
+            List of fields to order by
+        """
+        return self._order_by
+
+    @property
+    def window_expr(self) -> Optional[JsonDict]:
+        """Get window expression.
+
+        Returns:
+            Window expression
+        """
+        return self._window_expr
+
+    @property
+    def alias(self) -> Optional[str]:
+        """Get alias.
+
+        Returns:
+            Alias name
+        """
+        return self._alias

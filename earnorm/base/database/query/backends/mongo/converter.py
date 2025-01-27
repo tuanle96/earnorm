@@ -1,42 +1,35 @@
-"""MongoDB domain expression converter.
+"""MongoDB domain converter implementation.
 
-This module provides a visitor for converting domain expressions to MongoDB queries.
+This module provides MongoDB-specific implementation for converting domain expressions
+to MongoDB query format.
 
 Examples:
-    >>> expr = DomainExpression([
-    ...     ("age", ">", 18),
-    ...     "&",
-    ...     ("status", "=", "active")
-    ... ])
     >>> converter = MongoConverter()
-    >>> mongo_query = converter.convert(expr)
-    >>> {"$and": [{"age": {"$gt": 18}}, {"status": "active"}]}
+    >>> domain = [("age", ">", 18), "&", ("status", "=", "active")]
+    >>> query = converter.convert(domain)
+    >>> # Result: {"$and": [{"age": {"$gt": 18}}, {"status": "active"}]}
 """
 
-from typing import Dict, Optional, TypeVar
+from typing import Any, List, Union
 
-from earnorm.base.domain.converter import JsonConverter
-from earnorm.base.domain.expression import DomainLeaf, DomainNode, DomainVisitor
+from earnorm.base.database.query.interfaces.domain import (
+    DomainExpression,
+    DomainLeaf,
+    DomainNode,
+)
 from earnorm.types import JsonDict
 
-T = TypeVar("T")
 
+class MongoConverter:
+    """MongoDB domain converter implementation.
 
-class MongoConverter(JsonConverter, DomainVisitor):
-    """MongoDB domain expression converter.
-
-    This class implements a visitor pattern to convert domain expressions
-    into MongoDB query dictionaries.
-
-    Attributes:
-        _OPERATOR_MAP: Dict mapping domain operators to MongoDB operators.
-            Keys are domain operator strings, values are MongoDB operator strings or None.
-        _LOGICAL_MAP: Dict mapping domain logical operators to MongoDB logical operators.
-            Keys are domain logical operator strings, values are MongoDB logical operator strings.
+    This class provides MongoDB-specific implementation for converting domain expressions
+    to MongoDB query format.
     """
 
-    _OPERATOR_MAP: Dict[str, Optional[str]] = {
-        "=": None,  # Direct value
+    # Mapping of domain operators to MongoDB operators
+    OPERATOR_MAP = {
+        "=": None,  # Direct value comparison
         "!=": "$ne",
         ">": "$gt",
         ">=": "$gte",
@@ -44,55 +37,112 @@ class MongoConverter(JsonConverter, DomainVisitor):
         "<=": "$lte",
         "in": "$in",
         "not in": "$nin",
+        "like": "$regex",
+        "ilike": "$regex",
+        "not like": "$not",
+        "not ilike": "$not",
+        "is null": "$exists",
+        "is not null": "$exists",
     }
 
-    _LOGICAL_MAP: Dict[str, str] = {
+    # Mapping of logical operators to MongoDB operators
+    LOGICAL_MAP = {
         "&": "$and",
         "|": "$or",
         "!": "$not",
     }
 
-    def visit_leaf(self, leaf: DomainLeaf[T]) -> JsonDict:
-        """Visit leaf node.
+    def convert(self, domain: Union[List[Any], JsonDict]) -> JsonDict:
+        """Convert domain to MongoDB query format.
 
         Args:
-            leaf: Leaf node to visit
+            domain: Domain expression or raw MongoDB query
 
         Returns:
-            MongoDB query dict
-
-        Raises:
-            ValueError: If leaf node is invalid
+            MongoDB query format
         """
-        leaf.validate()
-        mongo_op = self._OPERATOR_MAP[leaf.operator]
+        if isinstance(domain, dict):
+            # Raw MongoDB query
+            return domain
 
+        # Convert domain list to expression tree
+        expr = DomainExpression(domain)  # type: ignore
+        if expr.root is None:
+            return {}
+        return self.convert_node(expr.root)
+
+    def convert_node(self, node: Union[DomainNode, DomainLeaf]) -> JsonDict:
+        """Convert domain node to MongoDB query format.
+
+        Args:
+            node: Domain node
+
+        Returns:
+            MongoDB query format
+        """
+        if isinstance(node, DomainLeaf):
+            return self.convert_leaf(node)
+        return self.convert_logical(node)
+
+    def convert_leaf(self, leaf: DomainLeaf) -> JsonDict:
+        """Convert domain leaf to MongoDB query format.
+
+        Args:
+            leaf: Domain leaf
+
+        Returns:
+            MongoDB query format
+        """
+        field = leaf.field
+        operator = leaf.operator
+        value = leaf.value
+
+        # Handle special cases
+        if operator == "=":
+            return {field: value}
+        elif operator == "is null":
+            return {field: {"$exists": False}}
+        elif operator == "is not null":
+            return {field: {"$exists": True}}
+        elif operator in ("like", "ilike"):
+            flags = "i" if operator == "ilike" else ""
+            pattern = str(value).replace("%", ".*")
+            return {field: {"$regex": pattern, "$options": flags}}
+        elif operator in ("not like", "not ilike"):
+            flags = "i" if operator == "not ilike" else ""
+            pattern = str(value).replace("%", ".*")
+            return {field: {"$not": {"$regex": pattern, "$options": flags}}}
+
+        # Handle normal operators
+        mongo_op = self.OPERATOR_MAP.get(operator)
         if mongo_op is None:
-            # Direct value comparison
-            return {leaf.field: leaf.value}
+            raise ValueError(f"Unsupported operator: {operator}")
 
-        return {leaf.field: {mongo_op: leaf.value}}
+        return {field: {mongo_op: value}}
 
-    def visit_node(self, node: DomainNode[T]) -> JsonDict:
-        """Visit logical node.
+    def convert_logical(self, node: DomainNode) -> JsonDict:
+        """Convert logical node to MongoDB query format.
 
         Args:
-            node: Logical node to visit
+            node: Logical node
 
         Returns:
-            MongoDB query dict
-
-        Raises:
-            ValueError: If node is invalid or NOT operator has wrong number of operands
+            MongoDB query format
         """
-        node.validate()
-        mongo_op = self._LOGICAL_MAP[node.operator]
+        operator = node.operator
+        operands = node.operands
 
-        if mongo_op == "$not":
-            # NOT only takes one operand
-            if len(node.children) != 1:
+        # Get MongoDB operator
+        mongo_op = self.LOGICAL_MAP.get(operator)
+        if mongo_op is None:
+            raise ValueError(f"Unsupported logical operator: {operator}")
+
+        # Convert operands
+        if operator == "!":
+            # NOT operator takes single operand
+            if len(operands) != 1:
                 raise ValueError("NOT operator requires exactly one operand")
-            return {mongo_op: node.children[0].accept(self)}
+            return {mongo_op: self.convert_node(operands[0])}
 
-        # AND/OR take a list of operands
-        return {mongo_op: [child.accept(self) for child in node.children]}
+        # AND/OR operators take multiple operands
+        return {mongo_op: [self.convert_node(op) for op in operands]}

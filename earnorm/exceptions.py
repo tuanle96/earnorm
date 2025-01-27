@@ -19,6 +19,66 @@ class EarnORMError(Exception):
         super().__init__(message)
 
 
+class ValidationError(EarnORMError):
+    """Error raised when validation fails.
+
+    This error is raised when model validation fails,
+    typically when custom validation rules are not satisfied.
+
+    Attributes:
+        message: Error message
+        code: Error code for identifying validation error type
+    """
+
+    def __init__(self, message: str, *, code: Optional[str] = None) -> None:
+        """Initialize validation error.
+
+        Args:
+            message: Error message
+            code: Error code for identifying validation error type
+        """
+        self.code = code or "validation_error"
+        super().__init__(f"{message} (code={self.code})")
+
+
+class UniqueConstraintError(ValidationError):
+    """Error raised when unique constraint is violated.
+
+    This error is raised when a unique constraint is violated,
+    typically when trying to create or update a record with
+    a value that already exists in a unique field.
+
+    Attributes:
+        message: Error message
+        field_name: Name of field that caused the error
+        value: Value that violated the constraint
+        code: Error code for identifying validation error type
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        field_name: str,
+        value: Any,
+        code: Optional[str] = None,
+    ) -> None:
+        """Initialize unique constraint error.
+
+        Args:
+            message: Error message
+            field_name: Field name
+            value: Value that violated the constraint
+            code: Error code for identifying validation error type
+        """
+        self.field_name = field_name
+        self.value = value
+        super().__init__(
+            f"{field_name}: {message} (value={value})",
+            code=code or "unique_constraint_error",
+        )
+
+
 # Field-related exceptions
 class FieldError(EarnORMError):
     """Base class for field-related errors.

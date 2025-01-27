@@ -5,6 +5,7 @@ It provides methods for querying, inserting, updating, and deleting data asynchr
 
 Examples:
     >>> adapter = MongoAdapter(client)
+    >>> # Basic query
     >>> users = await adapter.query(User).filter(
     ...     DomainBuilder()
     ...     .field("age").greater_than(18)
@@ -12,6 +13,13 @@ Examples:
     ...     .field("status").equals("active")
     ...     .build()
     ... ).all()
+    >>> # Join query
+    >>> users = await adapter.query(User).join(Post).on(User.id == Post.user_id)
+    >>> # Aggregate query
+    >>> stats = await adapter.query(User).aggregate().group_by(User.age).count()
+    >>> # Window query
+    >>> ranked = await adapter.query(User).window().over(partition_by=[User.age]).row_number()
+    >>> # Transaction
     >>> async with adapter.transaction(User) as tx:
     ...     user = User(name="John", age=25)
     ...     await tx.insert(user)
@@ -21,14 +29,18 @@ Examples:
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Generic, List, Type, TypeVar
 
-from earnorm.base.database.query.base.operations.aggregate import AggregateQuery
-from earnorm.base.database.query.base.operations.group import GroupQuery
-from earnorm.base.database.query.base.operations.join import JoinQuery
-from earnorm.base.database.query.base.query import AsyncQuery
+from earnorm.base.database.query.core.query import BaseQuery
+from earnorm.base.database.query.interfaces.operations.aggregate import (
+    AggregateProtocol as AggregateQuery,
+)
+from earnorm.base.database.query.interfaces.operations.join import (
+    JoinProtocol as JoinQuery,
+)
 from earnorm.base.database.transaction.base import TransactionManager
 from earnorm.types import DatabaseModel
 
 ModelT = TypeVar("ModelT", bound=DatabaseModel)
+JoinT = TypeVar("JoinT", bound=DatabaseModel)
 
 
 class DatabaseAdapter(Generic[ModelT], ABC):
@@ -83,14 +95,52 @@ class DatabaseAdapter(Generic[ModelT], ABC):
         pass
 
     @abstractmethod
-    async def query(self, model_type: Type[ModelT]) -> AsyncQuery[ModelT]:
+    async def query(self, model_type: Type[ModelT]) -> BaseQuery[ModelT]:
         """Create query for model type.
 
         Args:
             model_type: Type of model to query
 
         Returns:
-            Async query builder
+            Query builder instance
+        """
+        pass
+
+    @abstractmethod
+    async def get_aggregate_query(
+        self, model_type: Type[ModelT]
+    ) -> AggregateQuery[ModelT]:
+        """Create aggregate query for model type.
+
+        Args:
+            model_type: Type of model to query
+
+        Returns:
+            Aggregate query builder instance
+        """
+        pass
+
+    @abstractmethod
+    async def get_join_query(self, model_type: Type[ModelT]) -> JoinQuery[ModelT, Any]:
+        """Create join query for model type.
+
+        Args:
+            model_type: Type of model to query
+
+        Returns:
+            Join query builder instance
+        """
+        pass
+
+    @abstractmethod
+    async def get_group_query(self, model_type: Type[ModelT]) -> AggregateQuery[ModelT]:
+        """Create group query for model type.
+
+        Args:
+            model_type: Type of model to query
+
+        Returns:
+            Group query builder instance
         """
         pass
 
@@ -235,41 +285,5 @@ class DatabaseAdapter(Generic[ModelT], ABC):
 
         Returns:
             Number of documents deleted
-        """
-        pass
-
-    @abstractmethod
-    def get_aggregate_query(self, model_cls: Type[ModelT]) -> AggregateQuery[ModelT]:
-        """Get aggregate query builder.
-
-        Args:
-            model_cls: Model class
-
-        Returns:
-            Aggregate query builder
-        """
-        pass
-
-    @abstractmethod
-    def get_join_query(self, model_cls: Type[ModelT]) -> JoinQuery[ModelT]:
-        """Get join query builder.
-
-        Args:
-            model_cls: Model class
-
-        Returns:
-            Join query builder
-        """
-        pass
-
-    @abstractmethod
-    def get_group_query(self, model_cls: Type[ModelT]) -> GroupQuery[ModelT]:
-        """Get group query builder.
-
-        Args:
-            model_cls: Model class
-
-        Returns:
-            Group query builder
         """
         pass

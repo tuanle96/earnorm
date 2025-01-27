@@ -7,7 +7,7 @@ Examples:
     >>> adapter = MongoAdapter(uri="mongodb://localhost:27017", database="test")
     >>> await adapter.init()
     >>>
-    >>> # Query using domain expressions
+    >>> # Basic query
     >>> users = await adapter.query(User).filter(
     ...     DomainBuilder()
     ...     .field("age").greater_than(18)
@@ -15,32 +15,20 @@ Examples:
     ...     .field("status").equals("active")
     ...     .build()
     ... ).all()
-    >>>
-    >>> # Using transactions
+    >>> # Join query
+    >>> users = await adapter.query(User).join(Post).on(User.id == Post.user_id)
+    >>> # Aggregate query
+    >>> stats = await adapter.query(User).aggregate().group_by(User.age).count()
+    >>> # Window query
+    >>> ranked = await adapter.query(User).window().over(partition_by=[User.age]).row_number()
+    >>> # Transaction
     >>> async with adapter.transaction(User) as tx:
     ...     user = User(name="John", age=25)
     ...     await tx.insert(user)
     ...     await tx.commit()
-    >>>
-    >>> # Using aggregations
-    >>> stats = await adapter.get_aggregate_query(User)\\
-    ...     .group("status")\\
-    ...     .count()\\
-    ...     .execute()
-    >>>
-    >>> # Using joins
-    >>> users = await adapter.get_join_query(User)\\
-    ...     .join("posts", on={"id": "user_id"})\\
-    ...     .execute()
-    >>>
-    >>> # Using group by
-    >>> stats = await adapter.get_group_query(Order)\\
-    ...     .by("status")\\
-    ...     .count()\\
-    ...     .execute()
 """
 
-from typing import Any, Dict, List, Optional, Type, TypeVar, cast
+from typing import Any, Dict, List, Optional, Sequence, Type, TypeVar
 
 from motor.motor_asyncio import (
     AsyncIOMotorClient,
@@ -49,14 +37,10 @@ from motor.motor_asyncio import (
 )
 from pymongo.collection import Collection
 from pymongo.database import Database
+from pymongo.operations import UpdateOne
+from pymongo.results import DeleteResult, InsertOneResult, UpdateResult
 
 from earnorm.base.database.adapter import DatabaseAdapter
-from earnorm.base.database.query.backends.mongo.builder import MongoQueryBuilder
-from earnorm.base.database.query.backends.mongo.operations.aggregate import (
-    MongoAggregateQuery,
-)
-from earnorm.base.database.query.backends.mongo.operations.group import MongoGroupQuery
-from earnorm.base.database.query.backends.mongo.operations.join import MongoJoinQuery
 from earnorm.base.database.query.backends.mongo.query import MongoQuery
 from earnorm.base.database.transaction.backends.mongo import MongoTransactionManager
 from earnorm.di import container
@@ -178,7 +162,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         conn = await self._pool.acquire()
         try:
             # Get collection from connection
-            collection = conn.get_collection(name)
+            collection: AsyncIOMotorCollection[JsonDict] = conn.get_collection(name)
             return collection
         finally:
             # Release connection back to pool
@@ -219,29 +203,6 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             raise RuntimeError("Not connected to MongoDB")
         return self._sync_db[self._get_collection_name(model_type)]
 
-    async def query_builder(
-        self, model_type: Type[ModelT], collection: Optional[str] = None
-    ) -> MongoQueryBuilder[ModelT]:
-        """Create query builder.
-
-        Args:
-            model_type: Model type to query
-            collection: Optional collection name (defaults to model name)
-
-        Returns:
-            MongoDB query builder
-
-        Raises:
-            ValueError: If collection name is empty
-            RuntimeError: If not connected
-        """
-        if not collection:
-            collection = self._get_collection_name(model_type)
-        return MongoQueryBuilder(
-            collection=await self.get_collection(collection),
-            model_type=model_type,
-        )
-
     async def query(self, model_type: Type[ModelT]) -> MongoQuery[ModelT]:
         """Create query for model type.
 
@@ -249,11 +210,22 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             model_type: Type of model to query
 
         Returns:
-            Query builder
+            MongoDB query builder
+
+        Examples:
+            >>> # Basic query
+            >>> users = await adapter.query(User).filter({"age": {"$gt": 18}})
+            >>> # Join query
+            >>> users = await adapter.query(User).join(Post).on(User.id == Post.user_id)
+            >>> # Aggregate query
+            >>> stats = await adapter.query(User).aggregate().group_by(User.age).count()
+            >>> # Window query
+            >>> ranked = await adapter.query(User).window().over(partition_by=[User.age]).row_number()
         """
+        collection = await self.get_collection(self._get_collection_name(model_type))
         return MongoQuery[ModelT](
-            collection=await self.get_collection(self._get_collection_name(model_type)),
-            model_cls=model_type,
+            collection=collection,
+            model_type=model_type,
         )
 
     async def transaction(
@@ -266,14 +238,13 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
 
         Returns:
             Transaction context manager
-
-        Raises:
-            RuntimeError: If not connected
         """
         if self._sync_db is None:
             raise RuntimeError("Not connected to MongoDB")
+
+        # Create transaction manager with type hints
         manager: MongoTransactionManager[ModelT] = MongoTransactionManager(
-            self._sync_db
+            db=self._sync_db
         )
         manager.set_model_type(model_type)
         return manager
@@ -286,13 +257,11 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
 
         Returns:
             Inserted model with ID
-
-        Raises:
-            ValueError: If model has no table or name
-            RuntimeError: If not connected to MongoDB
         """
-        collection = await self.get_collection(self._get_collection_name(type(model)))
-        result = await collection.insert_one(model.to_dict())
+        collection: AsyncIOMotorCollection[JsonDict] = await self.get_collection(
+            self._get_collection_name(type(model))
+        )
+        result: InsertOneResult = await collection.insert_one(model.to_dict())
         model.id = result.inserted_id
         return model
 
@@ -308,25 +277,29 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         if not models:
             return []
 
-        # Get collection
-        collection = await self.get_collection(
+        collection: AsyncIOMotorCollection[JsonDict] = await self.get_collection(
             self._get_collection_name(type(models[0]))
         )
-
-        # Convert models to documents
-        documents: List[JsonDict] = []
-        for model in models:
-            doc = model.to_dict()
-            documents.append(doc)
-
-        # Insert documents
-        result = await collection.insert_many(documents)
-
-        # Update model IDs
+        result = await collection.insert_many([model.to_dict() for model in models])
         for model, _id in zip(models, result.inserted_ids):
             model.id = _id
-
         return models
+
+    async def insert_one(self, table_name: str, values: Dict[str, Any]) -> Any:
+        """Insert one document into table.
+
+        Args:
+            table_name: Table name
+            values: Document values
+
+        Returns:
+            Document ID
+        """
+        collection: AsyncIOMotorCollection[JsonDict] = await self.get_collection(
+            table_name
+        )
+        result: InsertOneResult = await collection.insert_one(values)
+        return result.inserted_id
 
     async def update(self, model: ModelT) -> ModelT:
         """Update model in database.
@@ -338,13 +311,14 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             Updated model
 
         Raises:
-            ValueError: If model has no ID or no table/name
-            RuntimeError: If not connected to MongoDB
+            ValueError: If model has no ID
         """
         if not model.id:
             raise ValueError("Model has no ID")
 
-        collection = await self.get_collection(self._get_collection_name(type(model)))
+        collection: AsyncIOMotorCollection[JsonDict] = await self.get_collection(
+            self._get_collection_name(type(model))
+        )
         await collection.update_one({"_id": model.id}, {"$set": model.to_dict()})
         return model
 
@@ -363,21 +337,24 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         if not models:
             return []
 
-        # Check IDs
+        # Check if all models have IDs
         for model in models:
             if not model.id:
                 raise ValueError("Model has no ID")
 
-        # Get collection
-        collection = await self.get_collection(
+        collection: AsyncIOMotorCollection[JsonDict] = await self.get_collection(
             self._get_collection_name(type(models[0]))
         )
-
-        # Update documents
-        for model in models:
-            doc = model.to_dict()
-            await collection.update_one({"_id": model.id}, {"$set": doc})
-
+        # Create operations with type hints
+        operations: Sequence[UpdateOne] = [
+            UpdateOne(
+                filter={"_id": model.id},
+                update={"$set": model.to_dict()},
+            )
+            for model in models
+        ]
+        # Execute bulk write with type ignore
+        await collection.bulk_write(operations)  # type: ignore
         return models
 
     async def delete(self, model: ModelT) -> None:
@@ -387,13 +364,14 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             model: Model to delete
 
         Raises:
-            ValueError: If model has no ID or no table/name
-            RuntimeError: If not connected to MongoDB
+            ValueError: If model has no ID
         """
         if not model.id:
             raise ValueError("Model has no ID")
 
-        collection = await self.get_collection(self._get_collection_name(type(model)))
+        collection: AsyncIOMotorCollection[JsonDict] = await self.get_collection(
+            self._get_collection_name(type(model))
+        )
         await collection.delete_one({"_id": model.id})
 
     async def delete_many(self, models: List[ModelT]) -> None:
@@ -408,39 +386,24 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         if not models:
             return
 
-        # Check IDs
+        # Check if all models have IDs
         for model in models:
             if not model.id:
                 raise ValueError("Model has no ID")
 
-        # Get collection
-        collection = await self.get_collection(
+        collection: AsyncIOMotorCollection[JsonDict] = await self.get_collection(
             self._get_collection_name(type(models[0]))
         )
+        await collection.delete_many({"_id": {"$in": [model.id for model in models]}})
 
-        # Delete documents
-        ids = [model.id for model in models]
-        await collection.delete_many({"_id": {"$in": ids}})
-
-    async def insert_one(self, table_name: str, values: Dict[str, Any]) -> Any:
-        """Insert one document into collection.
-
-        Args:
-            table_name: Table/Collection name
-            values: Document values
+    @property
+    def backend_type(self) -> str:
+        """Get backend type.
 
         Returns:
-            Document ID
-
-        Raises:
-            RuntimeError: If not connected to MongoDB
+            Backend type (e.g. 'mongodb', 'postgresql', etc.)
         """
-        if not table_name:
-            raise ValueError("Table/Collection name cannot be empty")
-
-        mongo_collection = await self.get_collection(table_name)
-        result = await mongo_collection.insert_one(values)
-        return result.inserted_id
+        return "mongodb"
 
     async def update_many_by_filter(
         self, table_name: str, domain_filter: Dict[str, Any], values: Dict[str, Any]
@@ -455,8 +418,12 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         Returns:
             Number of documents updated
         """
-        collection = await self.get_collection(table_name)
-        result = await collection.update_many(domain_filter, {"$set": values})
+        collection: AsyncIOMotorCollection[JsonDict] = await self.get_collection(
+            table_name
+        )
+        result: UpdateResult = await collection.update_many(
+            domain_filter, {"$set": values}
+        )
         return result.modified_count
 
     async def delete_many_by_filter(
@@ -471,50 +438,8 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         Returns:
             Number of documents deleted
         """
-        collection = await self.get_collection(table_name)
-        result = await collection.delete_many(domain_filter)
+        collection: AsyncIOMotorCollection[JsonDict] = await self.get_collection(
+            table_name
+        )
+        result: DeleteResult = await collection.delete_many(domain_filter)
         return result.deleted_count
-
-    def get_aggregate_query(
-        self, model_cls: Type[ModelT]
-    ) -> MongoAggregateQuery[ModelT]:
-        """Get MongoDB aggregate query builder.
-
-        Args:
-            model_cls: Model class
-
-        Returns:
-            MongoDB aggregate query builder
-        """
-        collection = cast(
-            AsyncIOMotorCollection[Dict[str, Any]], self._get_collection(model_cls)
-        )
-        return MongoAggregateQuery(collection, model_cls)
-
-    def get_join_query(self, model_cls: Type[ModelT]) -> MongoJoinQuery[ModelT]:
-        """Get MongoDB join query builder.
-
-        Args:
-            model_cls: Model class
-
-        Returns:
-            MongoDB join query builder
-        """
-        collection = cast(
-            AsyncIOMotorCollection[Dict[str, Any]], self._get_collection(model_cls)
-        )
-        return MongoJoinQuery(collection, model_cls)
-
-    def get_group_query(self, model_cls: Type[ModelT]) -> MongoGroupQuery[ModelT]:
-        """Get MongoDB group query builder.
-
-        Args:
-            model_cls: Model class
-
-        Returns:
-            MongoDB group query builder
-        """
-        collection = cast(
-            AsyncIOMotorCollection[Dict[str, Any]], self._get_collection(model_cls)
-        )
-        return MongoGroupQuery(collection, model_cls)

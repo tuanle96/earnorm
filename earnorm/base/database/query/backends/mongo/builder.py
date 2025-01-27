@@ -18,17 +18,10 @@ Examples:
     ```
 """
 
-from typing import Any, Dict, List, Literal, Optional, Tuple, Type, TypeVar, Union, cast
+from typing import Any, List, Literal, Protocol, Tuple, Type, TypeVar, Union
 
 from motor.motor_asyncio import AsyncIOMotorCollection
 
-from earnorm.base.database.query.base.query import QueryBuilder
-from earnorm.base.domain.expression import (
-    DomainExpression,
-    DomainLeaf,
-    DomainNode,
-    Operator,
-)
 from earnorm.types import DatabaseModel, JsonDict, ValueType
 
 from .converter import MongoConverter
@@ -38,6 +31,14 @@ SortSpec = List[Tuple[str, int]]
 ModelT = TypeVar("ModelT", bound=DatabaseModel)
 
 Operation = Literal["insert_one", "update", "delete", None]
+
+
+class QueryBuilder(Protocol[ModelT]):
+    """Query builder protocol."""
+
+    async def build(self) -> MongoQuery[ModelT]:
+        """Build query."""
+        ...
 
 
 class MongoQueryBuilder(QueryBuilder[ModelT]):
@@ -70,19 +71,19 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         """
         self.collection = collection
         self.model_type = model_type
-        self._filter: Optional[JsonDict] = None
-        self._projection: Optional[JsonDict] = None
-        self._sort: Optional[SortSpec] = None
-        self._skip: Optional[int] = None
-        self._limit: Optional[int] = None
-        self._pipeline: Optional[List[JsonDict]] = None
+        self._filter: JsonDict = {}
+        self._projection: JsonDict = {}
+        self._sort: SortSpec = []
+        self._skip: int = 0
+        self._limit: int = 0
+        self._pipeline: List[JsonDict] = []
         self._allow_disk_use = False
-        self._hint: Optional[Union[str, List[Tuple[str, int]]]] = None
-        self._operation: Optional[Operation] = None
-        self._document: Optional[JsonDict] = None
-        self._update: Optional[JsonDict] = None
-        self._options: Dict[str, Any] = {}
-        self._current_field: Optional[str] = None
+        self._hint: Union[str, List[Tuple[str, int]], None] = None
+        self._operation: Operation = None
+        self._document: JsonDict = {}
+        self._update: JsonDict = {}
+        self._options: dict[str, Any] = {}
+        self._current_field: str = ""
         self._converter = MongoConverter()
 
     def where(self, field: str) -> "MongoQueryBuilder[ModelT]":
@@ -103,8 +104,8 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         return self
 
     def _create_expression(
-        self, operator: Operator, value: ValueType
-    ) -> DomainExpression[ValueType]:
+        self, operator: str, value: Union[ValueType, List[ValueType]]
+    ) -> JsonDict:
         """Create domain expression from current field and value.
 
         Args:
@@ -112,16 +113,14 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
             value: Value to compare
 
         Returns:
-            Domain expression
+            MongoDB query format
 
         Raises:
             ValueError: If no field is selected
         """
         if not self._current_field:
             raise ValueError("No field selected")
-        expr = DomainExpression[ValueType]([])
-        expr.root = DomainLeaf[ValueType](self._current_field, operator, value)
-        return expr
+        return {self._current_field: {operator: value}}
 
     def equals(self, value: ValueType) -> "MongoQueryBuilder[ModelT]":
         """Field equals value.
@@ -135,8 +134,7 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         Raises:
             ValueError: If no field is selected
         """
-        expr = self._create_expression("=", value)
-        self._filter = self._converter.convert(expr.root)
+        self._filter = self._create_expression("$eq", value)
         return self
 
     def not_equals(self, value: ValueType) -> "MongoQueryBuilder[ModelT]":
@@ -151,8 +149,7 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         Raises:
             ValueError: If no field is selected
         """
-        expr = self._create_expression("!=", value)
-        self._filter = self._converter.convert(expr.root)
+        self._filter = self._create_expression("$ne", value)
         return self
 
     def greater_than(self, value: ValueType) -> "MongoQueryBuilder[ModelT]":
@@ -167,8 +164,7 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         Raises:
             ValueError: If no field is selected
         """
-        expr = self._create_expression(">", value)
-        self._filter = self._converter.convert(expr.root)
+        self._filter = self._create_expression("$gt", value)
         return self
 
     def greater_than_or_equal(self, value: ValueType) -> "MongoQueryBuilder[ModelT]":
@@ -183,8 +179,7 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         Raises:
             ValueError: If no field is selected
         """
-        expr = self._create_expression(">=", value)
-        self._filter = self._converter.convert(expr.root)
+        self._filter = self._create_expression("$gte", value)
         return self
 
     def less_than(self, value: ValueType) -> "MongoQueryBuilder[ModelT]":
@@ -199,8 +194,7 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         Raises:
             ValueError: If no field is selected
         """
-        expr = self._create_expression("<", value)
-        self._filter = self._converter.convert(expr.root)
+        self._filter = self._create_expression("$lt", value)
         return self
 
     def less_than_or_equal(self, value: ValueType) -> "MongoQueryBuilder[ModelT]":
@@ -215,8 +209,7 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         Raises:
             ValueError: If no field is selected
         """
-        expr = self._create_expression("<=", value)
-        self._filter = self._converter.convert(expr.root)
+        self._filter = self._create_expression("$lte", value)
         return self
 
     def in_list(self, values: List[ValueType]) -> "MongoQueryBuilder[ModelT]":
@@ -231,8 +224,7 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         Raises:
             ValueError: If no field is selected
         """
-        expr = self._create_expression("in", cast(ValueType, values))
-        self._filter = self._converter.convert(expr.root)
+        self._filter = self._create_expression("$in", values)
         return self
 
     def not_in_list(self, values: List[ValueType]) -> "MongoQueryBuilder[ModelT]":
@@ -247,8 +239,7 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         Raises:
             ValueError: If no field is selected
         """
-        expr = self._create_expression("not in", cast(ValueType, values))
-        self._filter = self._converter.convert(expr.root)
+        self._filter = self._create_expression("$nin", values)
         return self
 
     def and_(self) -> "MongoQueryBuilder[ModelT]":
@@ -259,9 +250,9 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         """
         if not self._filter:
             return self
-        expr = DomainExpression[ValueType]([])
-        expr.root = DomainNode[ValueType]("&", [])
-        self._filter = self._converter.convert(expr.root)
+        expr = {}
+        expr["$and"] = [self._filter]
+        self._filter = expr
         return self
 
     def or_(self) -> "MongoQueryBuilder[ModelT]":
@@ -272,9 +263,9 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         """
         if not self._filter:
             return self
-        expr = DomainExpression[ValueType]([])
-        expr.root = DomainNode[ValueType]("|", [])
-        self._filter = self._converter.convert(expr.root)
+        expr = {}
+        expr["$or"] = [self._filter]
+        self._filter = expr
         return self
 
     def not_(self) -> "MongoQueryBuilder[ModelT]":
@@ -285,9 +276,9 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         """
         if not self._filter:
             return self
-        expr = DomainExpression[ValueType]([])
-        expr.root = DomainNode[ValueType]("!", [])
-        self._filter = self._converter.convert(expr.root)
+        expr = {}
+        expr["$not"] = self._filter
+        self._filter = expr
         return self
 
     def filter(self, **conditions: Any) -> "MongoQueryBuilder[ModelT]":
@@ -460,9 +451,7 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         self._options.update(kwargs)
         return self
 
-    def from_domain(
-        self, domain: DomainExpression[ValueType]
-    ) -> "MongoQueryBuilder[ModelT]":
+    def from_domain(self, domain: JsonDict) -> "MongoQueryBuilder[ModelT]":
         """Build query from domain expression.
 
         Args:
@@ -471,25 +460,28 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         Returns:
             Self for chaining
         """
-        self._filter = self._converter.convert(domain.root)
+        self._filter = self._converter.convert(domain)
         return self
 
-    def build(self) -> MongoQuery[ModelT]:
+    async def build(self) -> MongoQuery[ModelT]:
         """Build MongoDB query.
 
         Returns:
             MongoDB query
         """
-        query = MongoQuery(self.collection, self.model_type)
-
-        if self._filter:
-            query.filter(self._filter)
-
-        if self._sort:
-            for field, direction in self._sort:
-                query.sort(field, direction == 1)
-        if self._skip is not None:
-            query.offset(self._skip)
-        if self._limit is not None:
-            query.limit(self._limit)
-        return query
+        return MongoQuery[ModelT](
+            collection=self.collection,
+            model_type=self.model_type,
+            filter=self._filter,
+            projection=self._projection,
+            sort=self._sort,
+            skip=self._skip,
+            limit=self._limit,
+            pipeline=self._pipeline,
+            allow_disk_use=self._allow_disk_use,
+            hint=self._hint,
+            operation=self._operation,
+            document=self._document,
+            update=self._update,
+            options=self._options,
+        )
