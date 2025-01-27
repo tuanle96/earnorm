@@ -21,6 +21,9 @@ Examples:
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Generic, List, Type, TypeVar
 
+from earnorm.base.database.query.base.operations.aggregate import AggregateQuery
+from earnorm.base.database.query.base.operations.group import GroupQuery
+from earnorm.base.database.query.base.operations.join import JoinQuery
 from earnorm.base.database.query.base.query import AsyncQuery
 from earnorm.base.database.transaction.base import TransactionManager
 from earnorm.types import DatabaseModel
@@ -206,7 +209,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
 
     @abstractmethod
     async def update_many_by_filter(
-        self, table_name: str, filter: Dict[str, Any], values: Dict[str, Any]
+        self, table_name: str, domain_filter: Dict[str, Any], values: Dict[str, Any]
     ) -> int:
         """Update multiple documents in table by filter.
 
@@ -222,7 +225,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
 
     @abstractmethod
     async def delete_many_by_filter(
-        self, table_name: str, filter: Dict[str, Any]
+        self, table_name: str, domain_filter: Dict[str, Any]
     ) -> int:
         """Delete multiple documents in table by filter.
 
@@ -232,5 +235,41 @@ class DatabaseAdapter(Generic[ModelT], ABC):
 
         Returns:
             Number of documents deleted
+        """
+        pass
+
+    @abstractmethod
+    def get_aggregate_query(self, model_cls: Type[ModelT]) -> AggregateQuery[ModelT]:
+        """Get aggregate query builder.
+
+        Args:
+            model_cls: Model class
+
+        Returns:
+            Aggregate query builder
+        """
+        pass
+
+    @abstractmethod
+    def get_join_query(self, model_cls: Type[ModelT]) -> JoinQuery[ModelT]:
+        """Get join query builder.
+
+        Args:
+            model_cls: Model class
+
+        Returns:
+            Join query builder
+        """
+        pass
+
+    @abstractmethod
+    def get_group_query(self, model_cls: Type[ModelT]) -> GroupQuery[ModelT]:
+        """Get group query builder.
+
+        Args:
+            model_cls: Model class
+
+        Returns:
+            Group query builder
         """
         pass

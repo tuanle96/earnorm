@@ -25,6 +25,9 @@ from typing import (
     cast,
 )
 
+from earnorm.base.database.query.base.operations.aggregate import AggregateQuery
+from earnorm.base.database.query.base.operations.group import GroupQuery
+from earnorm.base.database.query.base.operations.join import JoinQuery
 from earnorm.base.database.query.base.query import AsyncQuery
 from earnorm.base.domain.expression import DomainExpression, LogicalOp, Operator
 from earnorm.base.env import Environment
@@ -503,7 +506,7 @@ class BaseModel(DatabaseModel, metaclass=MetaModel):
             return field.__get__(
                 self, type(self)
             )  # pylint: disable=unnecessary-dunder-call
-        return [func(rec) for rec in self]
+        return [func(rec) for rec in self]  # type: ignore
 
     def _sort_key(self, rec: Self, field: BaseField[Any]) -> Any:
         """Sort key function for sorted method."""
@@ -538,3 +541,90 @@ class BaseModel(DatabaseModel, metaclass=MetaModel):
         else:
             records.sort(reverse=reverse)  # type: ignore[call-overload]
         return self._browse(self._env, [rec.id for rec in records], self._prefetch_ids)
+
+    @classmethod
+    def aggregate(cls) -> AggregateQuery[DatabaseModel]:
+        """Create aggregate query.
+
+        Returns:
+            Aggregate query builder
+
+        Examples:
+            >>> # Count by status
+            >>> stats = await User.aggregate()\\
+            ...     .group("status")\\
+            ...     .count()\\
+            ...     .execute()
+
+            >>> # Average age by country
+            >>> avg_age = await User.aggregate()\\
+            ...     .group("country")\\
+            ...     .avg("age")\\
+            ...     .having(count__gt=100)\\
+            ...     .execute()
+        """
+        return cls._env.adapter.get_aggregate_query(cls)
+
+    @classmethod
+    def join(
+        cls, model: str, on: Dict[str, str], join_type: str = "inner"
+    ) -> JoinQuery[DatabaseModel]:
+        """Create join query.
+
+        Args:
+            model: Model to join with
+            on: Join conditions {local_field: foreign_field}
+            type: Join type (inner, left, right)
+
+        Returns:
+            Join query builder
+
+        Examples:
+            >>> # Simple join
+            >>> users = await User.join(
+            ...     "posts",
+            ...     on={"id": "user_id"},
+            ...     type="left"
+            ... ).execute()
+
+            >>> # Multiple joins with conditions
+            >>> users = await User.join(
+            ...     "posts",
+            ...     on={"id": "user_id"}
+            ... ).join(
+            ...     "comments",
+            ...     on={"id": "user_id"}
+            ... ).filter(
+            ...     posts__likes__gt=10
+            ... ).execute()
+        """
+        query = cls._env.adapter.get_join_query(cls)
+        return query.join(model, on, join_type)
+
+    @classmethod
+    def group(cls) -> GroupQuery[DatabaseModel]:
+        """Create group query.
+
+        Returns:
+            Group query builder
+
+        Examples:
+            >>> # Simple group by
+            >>> stats = await Order.group().by(
+            ...     "status"
+            ... ).count().execute()
+
+            >>> # Complex grouping
+            >>> stats = await Order.group().by(
+            ...     "status",
+            ...     "category"
+            ... ).count(
+            ...     alias="total_orders"
+            ... ).sum(
+            ...     "amount",
+            ...     alias="total_amount"
+            ... ).having(
+            ...     total_orders__gt=10
+            ... ).execute()
+        """
+        return cls._env.adapter.get_group_query(cls)

@@ -7,7 +7,18 @@ It handles:
 - Type checking and constraints
 """
 
-from typing import Any, Dict, Generic, Optional, Tuple, TypeVar, Union, cast
+from typing import (
+    Any,
+    Callable,
+    Coroutine,
+    Dict,
+    Generic,
+    Optional,
+    Tuple,
+    TypeVar,
+    Union,
+    cast,
+)
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.adapters.base import DatabaseAdapter
@@ -17,7 +28,7 @@ T = TypeVar("T")  # Field value type
 
 # Type aliases for validation
 ValidatorResult = Union[bool, Tuple[bool, str]]
-ValidatorCallable = Any  # TODO: Fix this when mypy supports async callable with TypeVar
+ValidatorCallable = Callable[[Any], Coroutine[Any, Any, ValidatorResult]]
 
 
 class BaseField(Generic[T]):
