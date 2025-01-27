@@ -62,6 +62,15 @@ class BaseField(Generic[T]):
         self.validators = kwargs.get("validators", [])
         self.adapters: Dict[str, DatabaseAdapter[T]] = {}
 
+    @property
+    def default(self) -> Optional[Any]:
+        """Get field default value.
+
+        Returns:
+            Optional[Any]: Default value or None if not set
+        """
+        return self._options.get("default")
+
     async def setup(self, name: str, model_name: str) -> None:
         """Set up the field.
 

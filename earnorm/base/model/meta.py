@@ -13,7 +13,7 @@ It handles:
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Dict, List, Optional, Set, Type, TypeVar, cast
+from typing import Any, Dict, List, Set, Type, TypeVar, cast
 
 from earnorm.fields import BaseField
 from earnorm.fields.primitive import DateTimeField, StringField
@@ -66,52 +66,12 @@ class BaseModel:
     # Abstract flag - not in slots because it's a class variable
     _abstract: bool = False
 
-    # Recordset attributes
-    _domain: List[Any]
-    _limit: Optional[int]
-    _offset: Optional[int]
-    _order: Optional[str]
-    _group_by: Optional[List[str]]
-    _having: Optional[List[Any]]
-    _distinct: bool
-    _data: Dict[str, Any]
-    _changed: Set[str]
-
-    # Define slots for memory efficiency
-    __slots__ = (
-        "_name",
-        "fields",
-        "_domain",
-        "_limit",
-        "_offset",
-        "_order",
-        "_group_by",
-        "_having",
-        "_distinct",
-        "_data",
-        "_changed",
-    )
-
-    def __init__(self, **data: Any) -> None:
-        """Initialize model instance.
-
-        Args:
-            **data: Initial values for fields
-        """
-        # Initialize recordset attributes
-        self._domain = []
-        self._limit = None
-        self._offset = None
-        self._order = None
-        self._group_by = None
-        self._having = None
-        self._distinct = False
-        self._data = {}
-        self._changed = set()
-
-        # Set initial data
-        for key, value in data.items():
-            setattr(self, key, value)
+    # # Define slots for memory efficiency
+    # __slots__ = (
+    #     "env",
+    #     "_ids",
+    #     "_prefetch_ids",
+    # )
 
 
 ValueT = TypeVar("ValueT")

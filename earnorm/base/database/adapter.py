@@ -19,7 +19,7 @@ Examples:
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Generic, List, Type, TypeVar
+from typing import Any, Dict, Generic, List, Type, TypeVar
 
 from earnorm.base.database.query.base.query import AsyncQuery
 from earnorm.base.database.transaction.base import TransactionManager
@@ -128,6 +128,19 @@ class DatabaseAdapter(Generic[ModelT], ABC):
         pass
 
     @abstractmethod
+    async def insert_one(self, table_name: str, values: Dict[str, Any]) -> Any:
+        """Insert one document into table.
+
+        Args:
+            table_name: Table name
+            values: Document values
+
+        Returns:
+            Document ID
+        """
+        pass
+
+    @abstractmethod
     async def update(self, model: ModelT) -> ModelT:
         """Update model in database.
 
@@ -188,5 +201,36 @@ class DatabaseAdapter(Generic[ModelT], ABC):
 
         Returns:
             Backend type (e.g. 'mongodb', 'postgresql', etc.)
+        """
+        pass
+
+    @abstractmethod
+    async def update_many_by_filter(
+        self, table_name: str, filter: Dict[str, Any], values: Dict[str, Any]
+    ) -> int:
+        """Update multiple documents in table by filter.
+
+        Args:
+            table_name: Table name
+            filter: Filter to match documents
+            values: Values to update
+
+        Returns:
+            Number of documents updated
+        """
+        pass
+
+    @abstractmethod
+    async def delete_many_by_filter(
+        self, table_name: str, filter: Dict[str, Any]
+    ) -> int:
+        """Delete multiple documents in table by filter.
+
+        Args:
+            table_name: Table name
+            filter: Filter to match documents
+
+        Returns:
+            Number of documents deleted
         """
         pass

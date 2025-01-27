@@ -391,3 +391,70 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         # Bulk delete
         ids = [model.id for model in models]
         await collection.delete_many({"_id": {"$in": ids}})
+
+    async def insert_one(self, table_name: str, values: Dict[str, Any]) -> Any:
+        """Insert one document into collection.
+
+        Args:
+            table_name: Table/Collection name
+            values: Document values
+
+        Returns:
+            Document ID
+
+        Raises:
+            RuntimeError: If not connected to MongoDB
+        """
+        if not table_name:
+            raise ValueError("Table/Collection name cannot be empty")
+
+        mongo_collection = await self.get_collection(table_name)
+        result = await mongo_collection.insert_one(values)
+        return result.inserted_id
+
+    async def update_many_by_filter(
+        self, table_name: str, filter: Dict[str, Any], values: Dict[str, Any]
+    ) -> int:
+        """Update multiple documents in collection by filter.
+
+        Args:
+            table_name: Table/Collection name
+            filter: Filter to match documents
+            values: Values to update
+
+        Returns:
+            Number of documents updated
+
+        Raises:
+            RuntimeError: If not connected to MongoDB
+        """
+        if not table_name:
+            raise ValueError("Table/Collection name cannot be empty")
+
+        mongo_collection = await self.get_collection(table_name)
+        result = await mongo_collection.update_many(
+            filter=filter, update={"$set": values}
+        )
+        return result.modified_count
+
+    async def delete_many_by_filter(
+        self, table_name: str, filter: Dict[str, Any]
+    ) -> int:
+        """Delete multiple documents in collection by filter.
+
+        Args:
+            table_name: Table/Collection name
+            filter: Filter to match documents
+
+        Returns:
+            Number of documents deleted
+
+        Raises:
+            RuntimeError: If not connected to MongoDB
+        """
+        if not table_name:
+            raise ValueError("Table/Collection name cannot be empty")
+
+        mongo_collection = await self.get_collection(table_name)
+        result = await mongo_collection.delete_many(filter)
+        return result.deleted_count

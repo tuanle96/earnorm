@@ -13,96 +13,25 @@ It includes:
 from datetime import UTC, datetime
 from typing import (
     Any,
+    Callable,
     ClassVar,
     Dict,
     List,
     Optional,
     Self,
-    Set,
+    Sequence,
     Tuple,
-    Type,
     Union,
     cast,
 )
 
-from earnorm.base.database.adapter import DatabaseAdapter
 from earnorm.base.database.query.base.query import AsyncQuery
 from earnorm.base.domain.expression import DomainExpression, LogicalOp, Operator
 from earnorm.base.env import Environment
 from earnorm.base.model.meta import MetaModel
+from earnorm.exceptions import DatabaseError, FieldValidationError
 from earnorm.fields import BaseField
-from earnorm.types import DatabaseModel, JsonDict, M, ValueType
-
-
-class FieldsDescriptor:
-    """Descriptor for accessing model fields.
-
-    This descriptor allows accessing fields through both class and instance:
-        >>> User.__fields__  # Access through class
-        >>> user.__fields__  # Access through instance
-    """
-
-    def __get__(
-        self, obj: Optional["BaseModel"], objtype: Type["BaseModel"]
-    ) -> Dict[str, BaseField[Any]]:
-        """Get fields dictionary.
-
-        Args:
-            obj: Model instance or None if accessed through class
-            objtype: Model class
-
-        Returns:
-            Dictionary mapping field names to Field instances
-        """
-        if obj is not None:
-            objtype = type(obj)
-        return getattr(objtype, "_fields", {})
-
-
-class EnvDescriptor:
-    """Descriptor for accessing model environment.
-
-    This descriptor allows accessing environment through both class and instance:
-        >>> User.env  # Access through class
-        >>> user.env  # Access through instance
-
-    The environment is shared between all instances of the same model class.
-    """
-
-    def __get__(
-        self, obj: Optional["BaseModel"], objtype: Type["BaseModel"]
-    ) -> Environment:
-        """Get model environment.
-
-        Args:
-            obj: Model instance or None if accessed through class
-            objtype: Model class
-
-        Returns:
-            Model environment instance
-
-        Raises:
-            RuntimeError: If environment is not set
-        """
-        if obj is not None:
-            objtype = type(obj)
-
-        env = getattr(objtype, "_env", None)
-        if env is None:
-            raise RuntimeError(
-                f"Environment not set for model {objtype.__name__}. "
-                "Make sure the model is created through the environment"
-            )
-        return env
-
-    def __set__(self, obj: "BaseModel", value: Environment) -> None:
-        """Set model environment.
-
-        Args:
-            obj: Model instance
-            value: Environment instance to set
-        """
-        setattr(type(obj), "_env", value)
+from earnorm.types import DatabaseModel, ValueType
 
 
 class BaseModel(DatabaseModel, metaclass=MetaModel):
@@ -126,7 +55,7 @@ class BaseModel(DatabaseModel, metaclass=MetaModel):
         >>> users = await User.filter([('name', 'like', 'J%')]).all()
     """
 
-    __slots__ = ()  # Defined by metaclass
+    __slots__ = ("_env", "_ids", "_prefetch_ids")
 
     # Class variables from ModelProtocol
     _store: ClassVar[bool] = True
@@ -139,467 +68,473 @@ class BaseModel(DatabaseModel, metaclass=MetaModel):
     _fields: Dict[str, BaseField[Any]]  # Set by metaclass
     id: int = 0  # Record ID with default value
 
-    # Use descriptors for fields and environment access
-    __fields__ = FieldsDescriptor()
-    env = EnvDescriptor()
+    # Environment instance
+    _env: Environment
+
+    def __init__(
+        self,
+        env: Environment,
+        ids: Optional[Sequence[int]] = None,
+        prefetch_ids: Optional[Sequence[int]] = None,
+    ) -> None:
+        """Initialize recordset.
+
+        Args:
+            env: Environment instance
+            ids: Record IDs
+            prefetch_ids: IDs to prefetch
+        """
+        self._env = env
+        self._ids = tuple(ids or ())  # Store as immutable tuple
+        self._prefetch_ids = tuple(
+            prefetch_ids or ids or ()
+        )  # Store as immutable tuple
 
     @property
-    def adapter(self) -> DatabaseAdapter[DatabaseModel]:
-        """Get database adapter.
-
-        Returns:
-            Database adapter for this model
-
-        Raises:
-            RuntimeError: If adapter not initialized
-        """
-        return self.env.adapter
-
-    def __init__(self, **kwargs: Any) -> None:
-        """Initialize model instance.
-
-        Args:
-            **kwargs: Initial field values
-        """
-        # Initialize record data
-        self._data: Dict[str, Any] = {}
-        self._changed: Set[str] = set()
-
-        # Initialize recordset data
-        self._domain: List[Union[Tuple[str, Operator, ValueType], LogicalOp]] = []
-        self._limit: Optional[int] = None
-        self._offset: Optional[int] = None
-        self._order: List[tuple[str, str]] = []
-        self._group_by: List[str] = []
-        self._having: List[Union[Tuple[str, Operator, ValueType], LogicalOp]] = []
-        self._distinct: bool = False
-
-        # Set initial values
-        for key, value in kwargs.items():
-            setattr(self, key, value)
-
-    def to_dict(self) -> JsonDict:
-        """Convert model to dictionary.
-
-        Returns:
-            Dictionary representation of model
-        """
-        return {"id": self.id, **{name: getattr(self, name) for name in self._fields}}
-
-    def from_dict(self, data: JsonDict) -> None:
-        """Update model from dictionary.
-
-        Args:
-            data: Dictionary data to update from
-        """
-        for name, value in data.items():
-            if name in self._fields:
-                setattr(self, name, value)
+    def env(self) -> Environment:
+        """Get environment."""
+        return self._env
 
     @classmethod
-    async def browse(cls: Type[M], ids: Union[int, List[int]]) -> Union[M, List[M]]:
+    def _browse(
+        cls,
+        env: Environment,
+        ids: Sequence[int],
+        prefetch_ids: Optional[Sequence[int]] = None,
+    ) -> Self:
+        """Create recordset instance.
+
+        Args:
+            env: Environment instance
+            ids: Record IDs
+            prefetch_ids: IDs to prefetch
+
+        Returns:
+            New recordset instance
+        """
+        records = object.__new__(cls)
+        records._env = env
+        records._ids = tuple(ids)
+        records._prefetch_ids = tuple(prefetch_ids or ids)  # Store as immutable tuple
+        return records
+
+    @classmethod
+    async def browse(cls, ids: Optional[Union[int, Sequence[int]]] = None) -> Self:
         """Browse records by IDs.
 
         Args:
             ids: Record ID or list of record IDs
 
         Returns:
-            Single record or list of records
+            Recordset containing records
         """
-        if isinstance(ids, int):
-            instance = cls()
-            instance.id = ids
-            return instance
-
-        instances: List[M] = []
-        for _id in ids:
-            instance = cls()
-            instance.id = _id
-            instances.append(instance)
-        return instances
+        if ids is None:
+            ids = []
+        elif isinstance(ids, (int, str)):
+            ids = [ids]
+        return cls._browse(cls._env, cast(Sequence[int], ids), cast(Sequence[int], ids))
 
     @classmethod
-    async def create(cls: Type[M], values: Dict[str, Any]) -> M:
-        """Create a new record.
+    async def _where_calc(
+        cls, domain: List[Union[Tuple[str, Operator, ValueType], LogicalOp]]
+    ) -> AsyncQuery[DatabaseModel]:
+        """Build query from domain.
 
         Args:
-            values: Field values
+            domain: Search domain
 
         Returns:
-            Created record
+            Query instance
         """
-        instance = cls(**values)
-        await cast(BaseModel, instance).save()
-        return instance
+        query = await cls._env.adapter.query(cls)
+        if domain:
+            query = query.filter(DomainExpression(domain))
+        return query
 
-    def __getattr__(self, name: str) -> Any:
-        """Get field value.
-
-        Args:
-            name: Field name
-
-        Returns:
-            Field value
-
-        Raises:
-            AttributeError: If field not found
-        """
-        if name in self._fields:
-            return self._fields[name].__get__(self, type(self))
-        raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        """Set field value.
-
-        Args:
-            name: Field name
-            value: Field value
-
-        Raises:
-            AttributeError: If field not found
-            ValidationError: If validation fails
-        """
-        if name in getattr(self, "_fields", {}):
-            field = self._fields[name]
-            field.__set__(self, value)
-            self._changed.add(name)
-        else:
-            super().__setattr__(name, value)
-
-    # Recordset methods
     @classmethod
-    def filter(
-        cls: Type[M],
-        domain: List[Union[Tuple[str, Operator, ValueType], LogicalOp]],
-    ) -> M:
-        """Add filter to record set.
+    async def _apply_ir_rules(cls, query: AsyncQuery[DatabaseModel], mode: str) -> None:
+        """Apply access rules to query.
 
         Args:
-            domain: Filter domain
-
-        Returns:
-            Self for chaining
+            query: Query to modify
+            mode: Access mode (read/write/create/unlink)
         """
-        instance = cls()
-        base_instance = cast(BaseModel, instance)
-        if base_instance._domain:
-            base_instance._domain.extend(["&"])
-            base_instance._domain.extend(domain)
-        else:
-            base_instance._domain = domain
-        return instance
+        # TODO: Implement access rules
+        pass
 
-    def limit(self: M, limit: int) -> M:
-        """Set limit for record set.
-
-        Args:
-            limit: Maximum number of records
-
-        Returns:
-            Self for chaining
-        """
-        self._limit = limit
-        return self
-
-    def offset(self: M, offset: int) -> M:
-        """Set offset for record set.
+    @classmethod
+    async def search(
+        cls,
+        domain: Optional[
+            List[Union[Tuple[str, Operator, ValueType], LogicalOp]]
+        ] = None,
+        offset: int = 0,
+        limit: Optional[int] = None,
+        order: Optional[str] = None,
+    ) -> Self:
+        """Search records matching domain.
 
         Args:
+            domain: Search domain
             offset: Number of records to skip
+            limit: Maximum number of records to return
+            order: Sort order
 
         Returns:
-            Self for chaining
+            Recordset containing matching records
         """
-        self._offset = offset
-        return self
+        query = await cls._where_calc(domain or [])
+        await cls._apply_ir_rules(query, "read")
 
-    def group_by(self: M, *fields: str) -> M:
-        """Set group by fields for record set.
+        # Build query
+        if order:
+            query = query.sort(order)
+        if limit:
+            query = query.limit(limit)
+        if offset:
+            query = query.offset(offset)
+
+        # Execute query
+        ids = await query.execute()
+        return cls._browse(cls._env, cast(Sequence[int], ids), cast(Sequence[int], ids))
+
+    async def _validate_create(self, vals: Dict[str, Any]) -> None:
+        """Validate values for create.
 
         Args:
-            *fields: Field names to group by
-
-        Returns:
-            Self for chaining
-        """
-        self._group_by.extend(fields)
-        return self
-
-    def having(
-        self: M, domain: List[Union[Tuple[str, Operator, ValueType], LogicalOp]]
-    ) -> M:
-        """Add having clause to record set.
-
-        Args:
-            domain: Having domain
-
-        Returns:
-            Self for chaining
-        """
-        if self._having:
-            self._having.extend(["&"])
-            self._having.extend(domain)
-        else:
-            self._having = domain
-        return self
-
-    def distinct(self: M) -> M:
-        """Make record set distinct.
-
-        Returns:
-            Self for chaining
-        """
-        self._distinct = True
-        return self
-
-    @property
-    def _domain_expr(self) -> List[Union[Tuple[str, Operator, ValueType], LogicalOp]]:
-        """Get domain expression.
-
-        Returns:
-            Domain expression
-        """
-        return self._domain
-
-    @property
-    def _limit_value(self) -> Optional[int]:
-        """Get limit value.
-
-        Returns:
-            Limit value
-        """
-        return self._limit
-
-    @property
-    def _offset_value(self) -> Optional[int]:
-        """Get offset value.
-
-        Returns:
-            Offset value
-        """
-        return self._offset
-
-    @property
-    def _order_by(self) -> List[Tuple[str, str]]:
-        """Get order by expression.
-
-        Returns:
-            Order by expression
-        """
-        return self._order
-
-    def order_by(self: M, field: str, direction: str = "asc") -> M:
-        """Add ordering to record set.
-
-        Args:
-            field: Field to order by
-            direction: Sort direction ('asc' or 'desc')
-
-        Returns:
-            Self for chaining
-        """
-        self._order.append((field, direction))
-        return self
-
-    # Query execution methods
-    async def all(self) -> List[Self]:
-        """Get all matching records.
-
-        Returns:
-            List of records
-        """
-        adapter = self.adapter
-        query = await adapter.query(self.__class__)
-        query = cast(AsyncQuery[Self], query)
-
-        query = query.filter(DomainExpression(self._domain_expr))
-
-        if self._limit_value is not None:
-            query = query.limit(self._limit_value)
-
-        if self._offset_value is not None:
-            query = query.offset(self._offset_value)
-
-        if self._order_by:
-            query = query.sort(self._order_by[0][0], self._order_by[0][1] == "asc")
-            for field, direction in self._order_by[1:]:
-                query = query.sort(field, direction == "asc")
-
-        result = await query.execute()
-        return result
-
-    async def first(self) -> Optional[Self]:
-        """Get first matching record.
-
-        Returns:
-            First record or None
-        """
-        adapter = self.adapter
-        query = await adapter.query(self.__class__)
-        query = cast(AsyncQuery[Self], query)
-        query = query.filter(DomainExpression(self._domain_expr))
-        return await query.first()
-
-    async def count(self) -> int:
-        """Get number of matching records.
-
-        Returns:
-            Record count
-        """
-        adapter = self.adapter
-        query = await adapter.query(self.__class__)
-        query = cast(AsyncQuery[Self], query)
-        query = query.filter(DomainExpression(self._domain_expr))
-        return await query.count()
-
-    # Batch operations
-    async def update_all(self, values: Dict[str, Any]) -> int:
-        """Update all matching records.
-
-        Args:
-            values: Values to update
-
-        Returns:
-            Number of updated records
-        """
-        # Update updated_at
-        values["updated_at"] = datetime.now(UTC)
-
-        adapter = self.adapter
-        query = await adapter.query(self.__class__)
-        query = cast(AsyncQuery[Self], query)
-        query = query.filter(DomainExpression(self._domain_expr))
-        return await query.update(values)
-
-    async def delete_all(self) -> int:
-        """Delete all matching records.
-
-        Returns:
-            Number of deleted records
-        """
-        adapter = self.adapter
-        query = await adapter.query(self.__class__)
-        query = cast(AsyncQuery[Self], query)
-        query = query.filter(DomainExpression(self._domain_expr))
-        return await query.delete()
-
-    # Individual record operations
-    async def save(self) -> None:
-        """Save record to database."""
-        # Validate all fields
-        await self._validate()
-
-        if self.id == 0:
-            await self._create()
-        else:
-            await self._update()
-
-    async def delete(self) -> None:
-        """Delete record from database."""
-        if self.id == 0:
-            raise ValueError("Cannot delete unsaved record")
-
-        await self.adapter.delete(self)
-        self.id = 0
-
-    async def _create(self) -> None:
-        """Create new record."""
-        # Set created_at and updated_at
-        now = datetime.now(UTC)
-        setattr(self, "created_at", now)
-        setattr(self, "updated_at", now)
-
-        # Convert values to database format and update instance
-        db_values = await self._to_db()
-        self.from_dict(db_values)
-
-        # Insert into database
-        result = await self.adapter.insert(self)
-
-        # Update ID from result
-        if isinstance(result, dict):
-            result_dict: Dict[str, Any] = result
-            id_value: Optional[int] = result_dict.get("_id", None)  # type: ignore
-            if id_value is None:
-                id_value = result_dict.get("id", None)  # type: ignore
-            self.id = id_value if id_value is not None else 0
-        else:
-            self.id = 0
-
-        # Clear changes
-        self._changed.clear()
-
-    async def _update(self) -> None:
-        """Update existing record."""
-        if not self._changed:
-            return
-
-        # Update updated_at
-        setattr(self, "updated_at", datetime.now(UTC))
-
-        # Convert changed values to database format
-        db_values = await self._to_db(self._changed)
-        self.from_dict(db_values)
-
-        # Update database
-        await self.adapter.update(self)
-
-        # Clear changes
-        self._changed.clear()
-
-    async def _validate(self, fields: Optional[Set[str]] = None) -> None:
-        """Validate fields.
-
-        Args:
-            fields: Fields to validate, or None for all fields
+            vals: Field values to validate
 
         Raises:
-            ValidationError: If validation fails
+            FieldValidationError: If validation fails
         """
-        fields_to_validate = fields or self._fields.keys()
+        # Check field types and constraints
+        for name, value in vals.items():
+            if name not in self._fields:
+                raise FieldValidationError(
+                    message=f"Unknown field {name}", field_name=name
+                )
 
-        for name in fields_to_validate:
             field = self._fields[name]
-            value = getattr(self, name)
-            await field.validate(value)
+            try:
+                await field.validate(value)
+            except ValueError as e:
+                raise FieldValidationError(message=str(e), field_name=name) from e
 
-    async def _to_db(self, fields: Optional[Set[str]] = None) -> Dict[str, Any]:
-        """Convert fields to database format.
+        # Check required fields
+        for name, field in self._fields.items():
+            if name not in vals and field.required and field.default is None:
+                raise FieldValidationError(message="Field is required", field_name=name)
+
+    async def _validate_write(self, vals: Dict[str, Any]) -> None:
+        """Validate values for write.
 
         Args:
-            fields: Fields to convert, or None for all fields
+            vals: Field values to validate
+
+        Raises:
+            FieldValidationError: If validation fails
+        """
+        # Check field types and constraints
+        for name, value in vals.items():
+            if name not in self._fields:
+                raise FieldValidationError(
+                    message=f"Unknown field {name}", field_name=name
+                )
+
+            field = self._fields[name]
+            try:
+                await field.validate(value)
+            except ValueError as e:
+                raise FieldValidationError(message=str(e), field_name=name) from e
+
+    async def _validate_unlink(self) -> None:
+        """Validate record deletion.
+
+        This method performs the following validations:
+        1. Check if records exist
+        2. Check if records can be deleted (not readonly)
+        3. Check if records have no dependent records
+        4. Apply custom validation rules
+
+        Raises:
+            FieldValidationError: If deletion is not allowed
+            ValueError: If records don't exist
+        """
+        if not self._ids:
+            raise ValueError("No records to delete")
+
+        # Check if records exist in database
+        domain_tuple = cast(
+            Tuple[str, Operator, ValueType], ("id", "in", list(self._ids))
+        )
+        query = await self._where_calc([domain_tuple])
+        count = await query.count()
+        if count != len(self._ids):
+            raise ValueError("Some records do not exist")
+
+        # Check if model allows deletion
+        if getattr(self, "_allow_unlink", None) is False:
+            raise FieldValidationError(
+                message="Deletion is not allowed for this model", field_name="id"
+            )
+
+        # Check for dependent records (to be implemented)
+        # This should check if there are any records in other models
+        # that depend on the records being deleted
+        # await self._check_dependencies()
+
+        # Apply custom validation rules
+        # This can be overridden by subclasses to add custom validation
+        await self._validate_unlink_rules()
+
+    async def _validate_unlink_rules(self) -> None:
+        """Apply custom validation rules for deletion.
+
+        This method can be overridden by subclasses to add custom validation rules.
+        By default, it does nothing.
+
+        Raises:
+            FieldValidationError: If validation fails
+        """
+        pass
+
+    async def _create(self, vals: Dict[str, Any]) -> None:
+        """Create record in database.
+
+        Args:
+            vals: Field values to create
+
+        Raises:
+            FieldValidationError: If validation fails
+            DatabaseError: If database operation fails
+        """
+        # Validate values
+        await self._validate_create(vals)
+
+        # Convert values to database format
+        db_vals: Dict[str, Any] = {}
+        backend = self._env.adapter.backend_type
+
+        # Convert user-provided values
+        for name, value in vals.items():
+            field = self._fields[name]
+            if not field.readonly:  # Skip readonly fields
+                db_vals[name] = await field.to_db(value, backend)
+
+        # Add default values for missing required fields
+        for name, field in self._fields.items():
+            if name not in vals and field.required and not field.readonly:
+                if field.default is not None:
+                    default_value = (
+                        field.default() if callable(field.default) else field.default
+                    )
+                    db_vals[name] = await field.to_db(default_value, backend)
+
+        # Add system fields
+        now = datetime.now(UTC)
+        db_vals["created_at"] = now
+        db_vals["updated_at"] = now
+
+        # Insert record
+        try:
+            record_id = await self._env.adapter.insert_one(
+                self._name, db_vals  # Collection name from model
+            )
+        except Exception as e:
+            raise DatabaseError(
+                message=f"Failed to create record: {e}", backend=backend
+            ) from e
+
+        # Update record ID
+        self._ids = (record_id,)
+
+    async def _write(self, vals: Dict[str, Any]) -> None:
+        """Update record in database.
+
+        Args:
+            vals: Field values to update
+
+        Raises:
+            FieldValidationError: If validation fails
+            DatabaseError: If database operation fails
+        """
+        # Validate values
+        await self._validate_write(vals)
+
+        # Convert values to database format
+        db_vals: Dict[str, Any] = {}
+        backend = self._env.adapter.backend_type
+
+        # Convert user-provided values
+        for name, value in vals.items():
+            field = self._fields[name]
+            if not field.readonly:  # Skip readonly fields
+                db_vals[name] = await field.to_db(value, backend)
+
+        # Add system fields
+        now = datetime.now(UTC)
+        db_vals["updated_at"] = now
+
+        # Update records
+        try:
+            # Convert to model objects
+            models = [
+                self._browse(self._env, [id], self._prefetch_ids) for id in self._ids
+            ]
+
+            # Update each model
+            for model in models:
+                for field, value in db_vals.items():
+                    setattr(model, field, value)
+
+            # Bulk update
+            await self._env.adapter.update_many(cast(List[DatabaseModel], models))
+
+        except Exception as e:
+            raise DatabaseError(
+                message=f"Failed to update records: {e}", backend=backend
+            ) from e
+
+    async def _unlink(self) -> None:
+        """Delete record from database.
+
+        Raises:
+            FieldValidationError: If deletion is not allowed
+            DatabaseError: If database operation fails
+        """
+        # Validate deletion
+        await self._validate_unlink()
+
+        try:
+            # Convert to model objects
+            models = [
+                self._browse(self._env, [id], self._prefetch_ids) for id in self._ids
+            ]
+
+            # Bulk delete
+            await self._env.adapter.delete_many(cast(List[DatabaseModel], models))
+
+        except Exception as e:
+            raise DatabaseError(
+                message=f"Failed to delete records: {e}",
+                backend=self._env.adapter.backend_type,
+            ) from e
+
+    async def write(self, values: Dict[str, Any]) -> Self:
+        """Update records in recordset.
+
+        Args:
+            values: Field values to update
 
         Returns:
-            Database values
+            Same recordset
         """
-        fields_to_convert = fields or self._fields.keys()
-        values: Dict[str, Any] = {}
+        await self._write(values)
+        return self
 
-        for name in fields_to_convert:
-            field = self._fields[name]
-            value = getattr(self, name)
-            values[name] = await field.to_db(value, self.adapter.backend_type)
+    async def unlink(self) -> bool:
+        """Delete records in recordset.
 
-        return values
+        Returns:
+            True if records were deleted
+        """
+        await self._unlink()
+        return True
+
+    def __iter__(self):
+        """Iterate through records in recordset."""
+        for _id in self._ids:
+            yield self._browse(self._env, [_id], self._prefetch_ids)
+
+    def __len__(self):
+        """Return number of records in recordset."""
+        return len(self._ids)
+
+    def __getitem__(self, key: Union[int, slice]) -> Self:
+        """Get record(s) by index/slice."""
+        if isinstance(key, slice):
+            ids = self._ids[key]
+        else:
+            ids = [self._ids[key]]
+        return self._browse(self._env, ids, self._prefetch_ids)
 
     @property
-    def fields(self) -> Dict[str, BaseField[Any]]:
-        """Get model fields.
+    def ids(self):
+        """Return record IDs."""
+        return self._ids
+
+    def _filter_func(self, rec: Self, name: str) -> bool:
+        """Filter function for filtered method."""
+        return any(rec.mapped(name))
+
+    def filtered(self, func: Union[str, Callable[[Self], bool]]) -> Self:
+        """Filter records in recordset.
+
+        Args:
+            func: Filter function or field name
 
         Returns:
-            Dictionary mapping field names to Field instances
+            Filtered recordset
         """
-        return self._fields
+        if isinstance(func, str):
+            name = func
 
-    def __str__(self) -> str:
-        """Return string representation."""
-        return f"{self.__class__.__name__}(id={self.id})"
+            def filter_func(rec: Self) -> bool:
+                return self._filter_func(rec, name)
 
-    def __repr__(self) -> str:
-        """Return detailed string representation."""
-        fields = [f"id={self.id!r}"]
-        for name in self._fields:
-            if name != "id":
-                value = getattr(self, name)
-                fields.append(f"{name}={value!r}")
-        return f"{self.__class__.__name__}({', '.join(fields)})"
+            func = filter_func
+
+        return self._browse(
+            self._env, [rec.id for rec in self if func(rec)], self._prefetch_ids  # type: ignore
+        )
+
+    def mapped(self, func: Union[str, Callable[[Self], Any]]) -> Any:
+        """Apply function to records in recordset.
+
+        Args:
+            func: Mapping function or field name
+
+        Returns:
+            Result of mapping
+        """
+        if isinstance(func, str):
+            field = self._fields[func]
+            # pylint: disable=unnecessary-dunder-call
+            return field.__get__(
+                self, type(self)
+            )  # pylint: disable=unnecessary-dunder-call
+        return [func(rec) for rec in self]
+
+    def _sort_key(self, rec: Self, field: BaseField[Any]) -> Any:
+        """Sort key function for sorted method."""
+        # pylint: disable=unnecessary-dunder-call
+        return cast(Any, field.__get__(rec, type(rec)))
+
+    def sorted(
+        self,
+        key: Optional[Union[str, Callable[[Self], Any]]] = None,
+        reverse: bool = False,
+    ) -> Self:
+        """Sort records in recordset.
+
+        Args:
+            key: Sort key function or field name
+            reverse: Reverse sort order
+
+        Returns:
+            Sorted recordset
+        """
+        records = list(self)
+        if key is not None:
+            if isinstance(key, str):
+                name = key
+                field = self._fields[name]
+
+                def sort_key(rec: Self) -> Any:
+                    return self._sort_key(rec, field)
+
+                key = sort_key
+            records.sort(key=cast(Callable[[Self], Any], key), reverse=reverse)
+        else:
+            records.sort(reverse=reverse)  # type: ignore[call-overload]
+        return self._browse(self._env, [rec.id for rec in records], self._prefetch_ids)
