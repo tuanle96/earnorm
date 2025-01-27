@@ -7,20 +7,26 @@ It supports:
 - Range validation (min/max)
 - Rounding control
 - Database type mapping
+- Decimal comparison operations
 
 Examples:
     >>> class Product(Model):
     ...     price = DecimalField(max_digits=10, decimal_places=2)
     ...     weight = DecimalField(max_digits=5, decimal_places=3)
     ...     rating = DecimalField(max_digits=3, decimal_places=1, min_value=0, max_value=5)
+    ...
+    ...     # Query examples
+    ...     affordable = Product.find(Product.price.less_than(100))
+    ...     heavy = Product.find(Product.weight.greater_than(10))
+    ...     top_rated = Product.find(Product.rating.greater_than_or_equal(4.5))
 """
 
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
-from typing import Any, Final, Optional, Union
+from typing import Any, Final, List, Optional, Union
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.fields.types import DatabaseValue
+from earnorm.fields.types import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 from earnorm.fields.validators.base import RangeValidator, TypeValidator, Validator
 
 # Constants
@@ -29,7 +35,7 @@ DEFAULT_DECIMAL_PLACES: Final[int] = 30
 DEFAULT_ROUNDING: Final[str] = ROUND_HALF_EVEN
 
 
-class DecimalField(BaseField[Decimal]):
+class DecimalField(BaseField[Decimal], FieldComparisonMixin):
     """Field for decimal numbers.
 
     This field type handles decimal numbers, with support for:
@@ -38,6 +44,7 @@ class DecimalField(BaseField[Decimal]):
     - Range validation (min/max)
     - Rounding control
     - Database type mapping
+    - Decimal comparison operations
 
     Attributes:
         max_digits: Maximum number of digits (precision)
@@ -80,8 +87,8 @@ class DecimalField(BaseField[Decimal]):
         """
         if max_digits < 1:
             raise ValueError("max_digits must be positive")
-            if decimal_places < 0:
-                raise ValueError("decimal_places must be non-negative")
+        if decimal_places < 0:
+            raise ValueError("decimal_places must be non-negative")
         if decimal_places > max_digits:
             raise ValueError("decimal_places cannot be greater than max_digits")
 
@@ -215,6 +222,184 @@ class DecimalField(BaseField[Decimal]):
                 code="conversion_error",
             ) from e
 
+    def _prepare_value(self, value: Any) -> DatabaseValue:
+        """Prepare decimal value for comparison.
+
+        Converts value to decimal and handles precision/scale.
+
+        Args:
+            value: Value to prepare
+
+        Returns:
+            Prepared decimal value as string
+        """
+        if value is None:
+            return None
+
+        try:
+            if isinstance(value, Decimal):
+                decimal_value = value
+            elif isinstance(value, (float, str, int)):
+                decimal_value = Decimal(str(value))
+            else:
+                raise TypeError(f"Cannot convert {type(value).__name__} to decimal")
+
+            if self.decimal_places > 0:
+                decimal_value = decimal_value.quantize(
+                    Decimal(f"0.{'0' * self.decimal_places}"),
+                    rounding=self.rounding,
+                )
+
+            return str(decimal_value)
+        except (TypeError, ValueError, InvalidOperation):
+            return None
+
+    def less_than(self, value: Union[Decimal, float, str, int]) -> ComparisonOperator:
+        """Check if value is less than other value.
+
+        Args:
+            value: Value to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "lt", self._prepare_value(value))
+
+    def less_than_or_equal(
+        self, value: Union[Decimal, float, str, int]
+    ) -> ComparisonOperator:
+        """Check if value is less than or equal to other value.
+
+        Args:
+            value: Value to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "lte", self._prepare_value(value))
+
+    def greater_than(
+        self, value: Union[Decimal, float, str, int]
+    ) -> ComparisonOperator:
+        """Check if value is greater than other value.
+
+        Args:
+            value: Value to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "gt", self._prepare_value(value))
+
+    def greater_than_or_equal(
+        self, value: Union[Decimal, float, str, int]
+    ) -> ComparisonOperator:
+        """Check if value is greater than or equal to other value.
+
+        Args:
+            value: Value to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "gte", self._prepare_value(value))
+
+    def between(
+        self,
+        min_value: Union[Decimal, float, str, int],
+        max_value: Union[Decimal, float, str, int],
+    ) -> ComparisonOperator:
+        """Check if value is between min and max values.
+
+        Args:
+            min_value: Minimum value
+            max_value: Maximum value
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and values
+        """
+        return ComparisonOperator(
+            self.name,
+            "between",
+            [self._prepare_value(min_value), self._prepare_value(max_value)],
+        )
+
+    def in_range(
+        self,
+        min_value: Union[Decimal, float, str, int],
+        max_value: Union[Decimal, float, str, int],
+    ) -> ComparisonOperator:
+        """Alias for between().
+
+        Args:
+            min_value: Minimum value
+            max_value: Maximum value
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and values
+        """
+        return self.between(min_value, max_value)
+
+    def in_list(
+        self, values: List[Union[Decimal, float, str, int]]
+    ) -> ComparisonOperator:
+        """Check if value is in list of values.
+
+        Args:
+            values: List of values to check against
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and values
+        """
+        prepared_values = [self._prepare_value(value) for value in values]
+        return ComparisonOperator(self.name, "in", prepared_values)
+
+    def not_in_list(
+        self, values: List[Union[Decimal, float, str, int]]
+    ) -> ComparisonOperator:
+        """Check if value is not in list of values.
+
+        Args:
+            values: List of values to check against
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and values
+        """
+        prepared_values = [self._prepare_value(value) for value in values]
+        return ComparisonOperator(self.name, "not_in", prepared_values)
+
+    def is_integer(self) -> ComparisonOperator:
+        """Check if value is an integer (no decimal places).
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "is_integer", None)
+
+    def is_positive(self) -> ComparisonOperator:
+        """Check if value is positive (> 0).
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "is_positive", None)
+
+    def is_negative(self) -> ComparisonOperator:
+        """Check if value is negative (< 0).
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "is_negative", None)
+
+    def is_zero(self) -> ComparisonOperator:
+        """Check if value is zero.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "is_zero", None)
+
     async def to_db(self, value: Optional[Decimal], backend: str) -> DatabaseValue:
         """Convert decimal to database format.
 
@@ -235,7 +420,7 @@ class DecimalField(BaseField[Decimal]):
                 rounding=self.rounding,
             )
 
-            return value
+        return str(value)  # Convert to string for database storage
 
     async def from_db(self, value: DatabaseValue, backend: str) -> Optional[Decimal]:
         """Convert database value to decimal.

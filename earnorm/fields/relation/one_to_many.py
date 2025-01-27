@@ -7,6 +7,8 @@ It supports:
 - Cascade deletion
 - Database foreign key constraints
 - Validation of related models
+- Domain filtering and context
+- Comparison operations
 
 Examples:
     >>> class Department(Model):
@@ -14,31 +16,29 @@ Examples:
     ...     employees = OneToManyField(
     ...         "User",
     ...         back_populates="department",
-    ...         cascade=True
-    ...     )
-    ...
-    >>> class User(Model):
-    ...     name = StringField(required=True)
-    ...     department = ManyToOneField(
-    ...         Department,
-    ...         back_populates="employees"
+    ...         domain=[("active", "=", True)],
+    ...         context={"show_archived": False}
     ...     )
 """
 
-from typing import Any, Final, List, Optional, Type, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Final, List, Optional, Type, TypeVar, Union, cast
 
 from earnorm.base.env import Environment
 from earnorm.base.model.meta import BaseModel
 from earnorm.exceptions import FieldValidationError
-from earnorm.fields.relation.base import Domain, ModelList, OneToManyRelationField
+from earnorm.fields.relation.base import Context, Domain, ModelList, RelationField
+from earnorm.fields.types import ComparisonOperator
 
-M = TypeVar("M", bound=BaseModel)
+if TYPE_CHECKING:
+    from earnorm.fields.relation.many_to_one import ManyToOneField
+
+M = TypeVar("M", bound=BaseModel)  # Model type
 
 # Constants
 DEFAULT_CASCADE: Final[bool] = True
 
 
-class OneToManyField(OneToManyRelationField[M]):
+class OneToManyField(RelationField[ModelList[M]]):
     """Field for one-to-many relationships.
 
     This field type handles one-to-many relationships, with support for:
@@ -46,13 +46,17 @@ class OneToManyField(OneToManyRelationField[M]):
     - Cascade operations
     - Lazy loading
     - Validation
-    - Bulk operations
+    - Domain filtering
+    - Context
+    - Comparison operations
 
     Attributes:
         model_ref: Referenced model class or name
         back_populates: Name of back reference field
         cascade: Whether to cascade operations
         lazy_load: Whether to load related models lazily
+        domain: Domain for filtering related records
+        context: Context for related records
     """
 
     model: Any  # Parent model instance
@@ -65,6 +69,7 @@ class OneToManyField(OneToManyRelationField[M]):
         cascade: bool = DEFAULT_CASCADE,
         lazy_load: bool = True,
         domain: Optional[Domain] = None,
+        context: Optional[Context] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize one-to-many field.
@@ -75,6 +80,7 @@ class OneToManyField(OneToManyRelationField[M]):
             cascade: Whether to cascade operations
             lazy_load: Whether to load related models lazily
             domain: Domain for filtering related records
+            context: Context for related records
             **kwargs: Additional field options
         """
         super().__init__(
@@ -83,8 +89,81 @@ class OneToManyField(OneToManyRelationField[M]):
             cascade=cascade,
             lazy_load=lazy_load,
             domain=domain,
+            context=context,
             **kwargs,
         )
+
+    def is_empty(self) -> ComparisonOperator:
+        """Check if relation is empty (no related records).
+
+        Returns:
+            ComparisonOperator: Comparison operator for empty check
+        """
+        return ComparisonOperator(self.name, "size_=", 0)
+
+    def is_not_empty(self) -> ComparisonOperator:
+        """Check if relation is not empty (has related records).
+
+        Returns:
+            ComparisonOperator: Comparison operator for non-empty check
+        """
+        return ComparisonOperator(self.name, "size_>", 0)
+
+    def contains(self, value: Union[str, BaseModel]) -> ComparisonOperator:
+        """Check if relation contains a specific value.
+
+        Args:
+            value: Value to check for (model instance or ID)
+
+        Returns:
+            ComparisonOperator: Comparison operator for contains check
+        """
+        if isinstance(value, BaseModel):
+            value = str(value.id)  # type: ignore
+        return ComparisonOperator(self.name, "contains", value)
+
+    def size(self, operator: str, value: int) -> ComparisonOperator:
+        """Compare the size of the relation.
+
+        Args:
+            operator: Comparison operator (=, !=, >, >=, <, <=)
+            value: Size to compare against
+
+        Returns:
+            ComparisonOperator: Comparison operator for size check
+
+        Raises:
+            ValueError: If operator is not valid for size comparison
+        """
+        if operator not in {"=", "!=", ">", ">=", "<", "<="}:
+            raise ValueError(f"Invalid operator for size comparison: {operator}")
+        return ComparisonOperator(self.name, f"size_{operator}", value)
+
+    def any(self, field: str, operator: str, value: Any) -> ComparisonOperator:
+        """Check if any related record matches a condition.
+
+        Args:
+            field: Field name to check
+            operator: Comparison operator
+            value: Value to compare against
+
+        Returns:
+            ComparisonOperator: Comparison operator for any check
+        """
+        return ComparisonOperator(self.name, "any", (field, operator, value))
+
+    def all(self, field: str, operator: str, value: Any) -> ComparisonOperator:
+        """Check if all related records match a condition.
+
+        Args:
+            field: Field name to check
+            operator: Comparison operator
+            value: Value to compare against
+
+        Returns:
+            ComparisonOperator: Comparison operator for all check
+        """
+        return ComparisonOperator(self.name, "all", (field, operator, value))
 
     async def convert(self, value: Any) -> Optional[ModelList[M]]:
         """Convert value to list of model instances.
@@ -215,3 +294,20 @@ class OneToManyField(OneToManyRelationField[M]):
             ) from e
 
         return ModelList(items=result)
+
+    def _create_back_reference(self) -> "ManyToOneField[M]":
+        """Create back reference field.
+
+        Returns:
+            ManyToOneField: Back reference field instance
+        """
+        from earnorm.fields.relation.many_to_one import ManyToOneField
+
+        return ManyToOneField(
+            self.model_name,  # type: ignore
+            back_populates=self.name,
+            cascade=self.cascade,
+            lazy_load=self.lazy_load,
+            domain=self.domain,
+            context=self.context,
+        )

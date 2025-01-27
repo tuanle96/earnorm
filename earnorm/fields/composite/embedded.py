@@ -6,6 +6,7 @@ It supports:
 - Dictionary conversion
 - Lazy loading
 - Database type mapping
+- Embedded model comparison operations
 
 Examples:
     >>> class Address(Model):
@@ -17,20 +18,25 @@ Examples:
     ...     name = StringField(required=True)
     ...     home_address = EmbeddedField(Address)
     ...     work_address = EmbeddedField(Address, nullable=True)
+    ...
+    ...     # Query examples
+    ...     us_users = User.find(User.home_address.matches({"country": "US"}))
+    ...     same_city = User.find(User.home_address.equals(User.work_address, ["city"]))
+    ...     has_address = User.find(User.home_address.is_not_null())
 """
 
-from typing import Any, Generic, Optional, Type, TypeVar
+from typing import Any, Dict, Generic, List, Optional, Type, TypeVar
 
 from earnorm.base.model.base import BaseModel
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.fields.types import DatabaseValue
+from earnorm.fields.types import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 
 # Type variable for embedded model
 M = TypeVar("M", bound=BaseModel)
 
 
-class EmbeddedField(BaseField[M], Generic[M]):
+class EmbeddedField(BaseField[M], FieldComparisonMixin, Generic[M]):
     """Field for embedded model instances.
 
     This field type handles embedded model instances, with support for:
@@ -38,6 +44,7 @@ class EmbeddedField(BaseField[M], Generic[M]):
     - Dictionary conversion
     - Lazy loading
     - Database type mapping
+    - Embedded model comparison operations
 
     Attributes:
         model_class: Model class for embedded instances
@@ -333,3 +340,98 @@ class EmbeddedField(BaseField[M], Generic[M]):
                 field_name=self.name,
                 code="conversion_error",
             ) from e
+
+    def _prepare_value(self, value: Any) -> DatabaseValue:
+        """Prepare embedded value for comparison.
+
+        Converts value to dictionary for database comparison.
+
+        Args:
+            value: Value to prepare
+
+        Returns:
+            Prepared dictionary value or None
+        """
+        if value is None:
+            return None
+
+        try:
+            if isinstance(value, self.model_class):
+                return value.to_dict()
+            elif isinstance(value, dict):
+                return value  # type: ignore
+            return None
+        except (TypeError, ValueError):
+            return None
+
+    def matches(self, criteria: Dict[str, Any]) -> ComparisonOperator:
+        """Check if embedded model matches criteria.
+
+        Args:
+            criteria: Dictionary of field values to match
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and criteria
+        """
+        return ComparisonOperator(self.name, "matches", self._prepare_value(criteria))
+
+    def equals(
+        self, other: Any, fields: Optional[List[str]] = None
+    ) -> ComparisonOperator:
+        """Check if embedded model equals another model or dictionary.
+
+        Args:
+            other: Model instance or dictionary to compare with
+            fields: Optional list of fields to compare, if None compares all fields
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(
+            self.name, "equals", {"value": self._prepare_value(other), "fields": fields}
+        )
+
+    def not_equals(
+        self, other: Any, fields: Optional[List[str]] = None
+    ) -> ComparisonOperator:
+        """Check if embedded model does not equal another model or dictionary.
+
+        Args:
+            other: Model instance or dictionary to compare with
+            fields: Optional list of fields to compare, if None compares all fields
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(
+            self.name,
+            "not_equals",
+            {"value": self._prepare_value(other), "fields": fields},
+        )
+
+    def has_fields(self, fields: List[str]) -> ComparisonOperator:
+        """Check if embedded model has all specified fields with non-null values.
+
+        Args:
+            fields: List of field names to check
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and fields
+        """
+        return ComparisonOperator(self.name, "has_fields", fields)
+
+    def is_null(self) -> ComparisonOperator:
+        """Check if embedded model is null.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name
+        """
+        return ComparisonOperator(self.name, "is_null", None)
+
+    def is_not_null(self) -> ComparisonOperator:
+        """Check if embedded model is not null.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name
+        """
+        return ComparisonOperator(self.name, "is_not_null", None)

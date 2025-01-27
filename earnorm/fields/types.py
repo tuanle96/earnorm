@@ -7,6 +7,7 @@ It includes:
 - Generic type variables for type safety
 """
 
+from datetime import datetime
 from typing import (
     Any,
     Awaitable,
@@ -20,6 +21,9 @@ from typing import (
     runtime_checkable,
 )
 
+from bson import ObjectId
+from bson.decimal128 import Decimal128
+
 from earnorm.base.model.base import BaseModel
 
 # Type variables
@@ -30,8 +34,72 @@ M = TypeVar("M", bound=BaseModel)  # Model type
 ValidatorResult = Union[bool, Tuple[bool, str]]
 ValidatorCallable = Callable[[Any], Awaitable[ValidatorResult]]
 FieldValue = Union[None, bool, int, float, str, Dict[str, Any], List[Any], Any]
-DatabaseValue = Any
+DatabaseValue = Union[
+    None,
+    bool,
+    int,
+    float,
+    str,
+    Dict[str, Any],
+    List[Any],
+    datetime,
+    Decimal128,
+    ObjectId,
+]
 BackendOptions = Dict[str, Dict[str, Any]]
+
+
+@runtime_checkable
+class FieldComparisonMixin(Protocol):
+    """Mixin class for field-specific comparison operations.
+
+    This class provides default implementations for comparison operations.
+    Fields can override these methods to provide type-specific comparison behavior.
+    """
+
+    name: str  # Field name for error messages
+
+    def _prepare_value(self, value: Any) -> DatabaseValue:
+        """Prepare value for comparison.
+
+        This method should be overridden by fields to handle type-specific
+        value preparation (e.g. string case conversion, number formatting).
+
+        Args:
+            value: Value to prepare
+
+        Returns:
+            DatabaseValue: Prepared value
+        """
+        return value
+
+    def _prepare_pattern(self, pattern: str) -> str:
+        """Prepare pattern for string matching.
+
+        This method should be overridden by string fields to handle
+        case sensitivity and other string matching options.
+
+        Args:
+            pattern: Pattern to prepare
+
+        Returns:
+            str: Prepared pattern
+        """
+        return pattern
+
+    def _prepare_list(self, values: List[Any]) -> List[Any]:
+        """Prepare list values for comparison.
+
+        This method should be overridden by list fields to handle
+        item type conversion and validation.
+
+        Args:
+            values: List values to prepare
+
+        Returns:
+            List[Any]: Prepared list values
+        """
+        return values
 
 
 @runtime_checkable
@@ -214,3 +282,48 @@ class FieldProtocol(Protocol[T]):
             T: Field value
         """
         ...
+
+
+class ComparisonOperator:
+    """Class representing a comparison operation between a field and a value.
+
+    This class is used to build comparison expressions for filtering queries.
+    It stores the field name, operator and comparison value.
+
+    Args:
+        field_name: Name of the field being compared
+        operator: Comparison operator (=, !=, >, >=, <, <=)
+        value: Value to compare against
+    """
+
+    def __init__(self, field_name: str, operator: str, value: Any) -> None:
+        """Initialize comparison operator.
+
+        Args:
+            field_name: Name of the field being compared
+            operator: Comparison operator (=, !=, >, >=, <, <=)
+            value: Value to compare against
+        """
+        self.field_name = field_name
+        self.operator = operator
+        self.value = value
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary format.
+
+        Returns:
+            Dict[str, Any]: Dictionary with field name, operator and value
+        """
+        return {
+            "field": self.field_name,
+            "operator": self.operator,
+            "value": self.value,
+        }
+
+    def __str__(self) -> str:
+        """String representation.
+
+        Returns:
+            str: String representation of comparison
+        """
+        return f"{self.field_name} {self.operator} {self.value}"

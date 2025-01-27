@@ -7,6 +7,7 @@ It supports:
 - MIME type validation
 - Storage backends
 - Database type mapping
+- File comparison operations
 
 Examples:
     >>> class Document(Model):
@@ -18,12 +19,17 @@ Examples:
     ...         max_size=5 * 1024 * 1024,  # 5MB
     ...         allowed_types=["image/jpeg", "image/png"],
     ...     )
+    ...
+    ...     # Query examples
+    ...     large_files = Document.find(Document.file.size_greater_than(5 * 1024 * 1024))
+    ...     pdfs = Document.find(Document.file.has_type("application/pdf"))
+    ...     recent = Document.find(Document.file.created_after(datetime(2024, 1, 1)))
 """
 
 import io
 import mimetypes
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any, BinaryIO, Dict, Optional, Sequence, Union, cast
@@ -33,7 +39,7 @@ from motor.motor_asyncio import AsyncIOMotorGridFSBucket
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.fields.types import DatabaseValue
+from earnorm.fields.types import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 from earnorm.fields.validators.base import TypeValidator, Validator
 
 
@@ -73,7 +79,7 @@ class FileInfo:
         self.metadata = metadata or {}
 
 
-class FileField(BaseField[Union[Path, str, ObjectId]]):
+class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
     """Field for file uploads.
 
     This field type handles file uploads, with support for:
@@ -82,6 +88,7 @@ class FileField(BaseField[Union[Path, str, ObjectId]]):
     - MIME type validation
     - Storage backends
     - Database type mapping
+    - File comparison operations
 
     Attributes:
         max_size: Maximum file size in bytes
@@ -284,7 +291,7 @@ class FileField(BaseField[Union[Path, str, ObjectId]]):
             return None
 
         if isinstance(value, (str, ObjectId)):
-            return value
+            return value  # type: ignore
 
         # Store relative path from upload directory
         try:
@@ -563,3 +570,158 @@ class FileField(BaseField[Union[Path, str, ObjectId]]):
         # Format upload path with date placeholders
         upload_path = datetime.now().strftime(self.upload_to)
         return Path(upload_path) / filename
+
+    def _prepare_value(self, value: Any) -> DatabaseValue:
+        """Prepare file value for comparison.
+
+        Converts file path/ID to string for database comparison.
+
+        Args:
+            value: Value to prepare
+
+        Returns:
+            Prepared file value or None
+        """
+        if value is None:
+            return None
+
+        try:
+            if isinstance(value, (str, ObjectId)):
+                return str(value)
+            elif isinstance(value, Path):
+                return str(value)
+            return None
+        except (TypeError, ValueError):
+            return None
+
+    def size_equals(self, size: int) -> ComparisonOperator:
+        """Check if file size equals value.
+
+        Args:
+            size: Size in bytes to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "size_eq", size)
+
+    def size_greater_than(self, size: int) -> ComparisonOperator:
+        """Check if file size is greater than value.
+
+        Args:
+            size: Size in bytes to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "size_gt", size)
+
+    def size_less_than(self, size: int) -> ComparisonOperator:
+        """Check if file size is less than value.
+
+        Args:
+            size: Size in bytes to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "size_lt", size)
+
+    def has_type(self, mime_type: str) -> ComparisonOperator:
+        """Check if file has specific MIME type.
+
+        Supports wildcards (e.g., "image/*").
+
+        Args:
+            mime_type: MIME type to check
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "mime_type", mime_type)
+
+    def created_before(self, date: datetime) -> ComparisonOperator:
+        """Check if file was created before date.
+
+        Args:
+            date: Date to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "created_before", date.isoformat())
+
+    def created_after(self, date: datetime) -> ComparisonOperator:
+        """Check if file was created after date.
+
+        Args:
+            date: Date to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "created_after", date.isoformat())
+
+    def created_between(self, start: datetime, end: datetime) -> ComparisonOperator:
+        """Check if file was created between dates.
+
+        Args:
+            start: Start date
+            end: End date
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and values
+        """
+        return ComparisonOperator(
+            self.name, "created_between", [start.isoformat(), end.isoformat()]
+        )
+
+    def created_days_ago(self, days: int) -> ComparisonOperator:
+        """Check if file was created within last N days.
+
+        Args:
+            days: Number of days to look back
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        date = datetime.now() - timedelta(days=days)
+        return self.created_after(date)
+
+    def has_extension(self, extension: str) -> ComparisonOperator:
+        """Check if file has specific extension.
+
+        Args:
+            extension: File extension to check (without dot)
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "extension", extension.lower())
+
+    def in_directory(self, directory: str) -> ComparisonOperator:
+        """Check if file is in specific directory.
+
+        Args:
+            directory: Directory path to check
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "directory", directory)
+
+    def exists(self) -> ComparisonOperator:
+        """Check if file exists in storage.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name
+        """
+        return ComparisonOperator(self.name, "exists", None)
+
+    def not_exists(self) -> ComparisonOperator:
+        """Check if file does not exist in storage.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name
+        """
+        return ComparisonOperator(self.name, "not_exists", None)

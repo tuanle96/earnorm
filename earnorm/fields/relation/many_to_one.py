@@ -8,6 +8,7 @@ It supports:
 - Database foreign key constraints
 - Validation of related models
 - Domain filtering and context
+- Comparison operations
 
 Examples:
     >>> class User(Model):
@@ -31,6 +32,7 @@ from earnorm.base.model.meta import BaseModel
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.relation.base import Context, Domain, RelationField
 from earnorm.fields.relation.one_to_many import OneToManyField
+from earnorm.fields.types import ComparisonOperator
 
 M = TypeVar("M", bound=BaseModel)
 
@@ -51,6 +53,7 @@ class ManyToOneField(RelationField[M]):
     - On delete actions
     - Domain filtering
     - Context
+    - Comparison operations
 
     Attributes:
         model_ref: Referenced model class or name
@@ -98,6 +101,65 @@ class ManyToOneField(RelationField[M]):
             **kwargs,
         )
         self.ondelete = ondelete
+
+    def is_empty(self) -> ComparisonOperator:
+        """Check if relation is empty (no related record).
+
+        Returns:
+            ComparisonOperator: Comparison operator for empty check
+        """
+        return ComparisonOperator(self.name, "is_null", None)
+
+    def is_not_empty(self) -> ComparisonOperator:
+        """Check if relation is not empty (has related record).
+
+        Returns:
+            ComparisonOperator: Comparison operator for non-empty check
+        """
+        return ComparisonOperator(self.name, "is_not_null", None)
+
+    def contains(self, value: Union[str, BaseModel]) -> ComparisonOperator:
+        """Check if relation points to a specific value.
+
+        Args:
+            value: Value to check for (model instance or ID)
+
+        Returns:
+            ComparisonOperator: Comparison operator for equality check
+        """
+        if isinstance(value, BaseModel):
+            value = str(value.id)  # type: ignore
+        return ComparisonOperator(self.name, "=", value)
+
+    def size(self, operator: str, value: int) -> ComparisonOperator:
+        """Not supported for many-to-one relations.
+
+        Raises:
+            NotImplementedError: Always raised as size comparison is not supported
+        """
+        raise NotImplementedError(
+            "Size comparison not supported for many-to-one relations"
+        )
+
+    def any(self, field: str, operator: str, value: Any) -> ComparisonOperator:
+        """Not supported for many-to-one relations.
+
+        Raises:
+            NotImplementedError: Always raised as any comparison is not supported
+        """
+        raise NotImplementedError(
+            "Any comparison not supported for many-to-one relations"
+        )
+
+    def all(self, field: str, operator: str, value: Any) -> ComparisonOperator:
+        """Not supported for many-to-one relations.
+
+        Raises:
+            NotImplementedError: Always raised as all comparison is not supported
+        """
+        raise NotImplementedError(
+            "All comparison not supported for many-to-one relations"
+        )
 
     def _create_back_reference(self) -> OneToManyField[M]:
         """Create back reference field.

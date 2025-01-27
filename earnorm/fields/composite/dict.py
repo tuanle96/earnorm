@@ -6,6 +6,7 @@ It supports:
 - Key/value validation
 - Schema validation
 - Database type mapping
+- Dictionary comparison operations
 
 Examples:
     >>> class Product(Model):
@@ -24,6 +25,11 @@ Examples:
     ...             },
     ...         },
     ...     )
+    ...
+    ...     # Query examples
+    ...     has_tags = Product.find(Product.metadata.has_key("tags"))
+    ...     dark_theme = Product.find(Product.settings.has_value("dark", path="theme"))
+    ...     configured = Product.find(Product.settings.length_greater_than(0))
 """
 
 from typing import Any, Generic, Optional, TypeVar, cast
@@ -32,14 +38,14 @@ from jsonschema import Draft202012Validator, ValidationError, validate
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.fields.types import DatabaseValue
+from earnorm.fields.types import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 
 # Type variables for key and value types
 K = TypeVar("K")
 V = TypeVar("V")
 
 
-class DictField(BaseField[dict[K, V]], Generic[K, V]):
+class DictField(BaseField[dict[K, V]], FieldComparisonMixin, Generic[K, V]):
     """Field for dictionary values.
 
     This field type handles key-value pairs, with support for:
@@ -47,6 +53,7 @@ class DictField(BaseField[dict[K, V]], Generic[K, V]):
     - Key/value validation
     - Schema validation
     - Database type mapping
+    - Dictionary comparison operations
 
     Attributes:
         key_field: Field type for dictionary keys
@@ -366,3 +373,155 @@ class DictField(BaseField[dict[K, V]], Generic[K, V]):
                 field_name=self.name,
                 code="conversion_error",
             ) from e
+
+    def _prepare_value(self, value: Any) -> DatabaseValue:
+        """Prepare dictionary value for comparison.
+
+        Converts value to dictionary for database comparison.
+
+        Args:
+            value: Value to prepare
+
+        Returns:
+            Prepared dictionary value or None
+        """
+        if value is None:
+            return None
+
+        try:
+            if isinstance(value, dict):
+                return value  # type: ignore
+            return None
+        except (TypeError, ValueError):
+            return None
+
+    def has_key(self, key: K) -> ComparisonOperator:
+        """Check if dictionary has specific key.
+
+        Args:
+            key: Key to check for
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "has_key", self._prepare_value(key))
+
+    def has_value(self, value: V, path: Optional[str] = None) -> ComparisonOperator:
+        """Check if dictionary has specific value.
+
+        Args:
+            value: Value to check for
+            path: Optional path to nested value (dot notation)
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(
+            self.name, "has_value", {"value": self._prepare_value(value), "path": path}
+        )
+
+    def has_all_keys(self, keys: list[K]) -> ComparisonOperator:
+        """Check if dictionary has all specified keys.
+
+        Args:
+            keys: List of keys to check for
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and values
+        """
+        prepared_values = [self._prepare_value(key) for key in keys]
+        return ComparisonOperator(self.name, "has_all_keys", prepared_values)
+
+    def has_any_keys(self, keys: list[K]) -> ComparisonOperator:
+        """Check if dictionary has any of specified keys.
+
+        Args:
+            keys: List of keys to check for
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and values
+        """
+        prepared_values = [self._prepare_value(key) for key in keys]
+        return ComparisonOperator(self.name, "has_any_keys", prepared_values)
+
+    def length_equals(self, length: int) -> ComparisonOperator:
+        """Check if dictionary length equals value.
+
+        Args:
+            length: Length to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "length_eq", length)
+
+    def length_greater_than(self, length: int) -> ComparisonOperator:
+        """Check if dictionary length is greater than value.
+
+        Args:
+            length: Length to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "length_gt", length)
+
+    def length_less_than(self, length: int) -> ComparisonOperator:
+        """Check if dictionary length is less than value.
+
+        Args:
+            length: Length to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "length_lt", length)
+
+    def matches_schema(self, schema: dict[str, Any]) -> ComparisonOperator:
+        """Check if dictionary matches JSON schema.
+
+        Args:
+            schema: JSON schema to validate against
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "matches_schema", schema)
+
+    def is_subset(self, other: dict[K, V]) -> ComparisonOperator:
+        """Check if dictionary is subset of another dictionary.
+
+        Args:
+            other: Dictionary to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "is_subset", self._prepare_value(other))
+
+    def is_superset(self, other: dict[K, V]) -> ComparisonOperator:
+        """Check if dictionary is superset of another dictionary.
+
+        Args:
+            other: Dictionary to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "is_superset", self._prepare_value(other))
+
+    def is_empty(self) -> ComparisonOperator:
+        """Check if dictionary is empty.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name
+        """
+        return ComparisonOperator(self.name, "is_empty", None)
+
+    def is_not_empty(self) -> ComparisonOperator:
+        """Check if dictionary is not empty.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name
+        """
+        return ComparisonOperator(self.name, "is_not_empty", None)

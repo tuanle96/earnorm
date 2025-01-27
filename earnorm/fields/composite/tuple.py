@@ -6,6 +6,7 @@ It supports:
 - Length validation
 - Database type mapping
 - Custom validation rules
+- Tuple comparison operations
 
 Examples:
     >>> class Product(Model):
@@ -26,19 +27,24 @@ Examples:
     ...         ),
     ...         nullable=True,
     ...     )
+    ...
+    ...     # Query examples
+    ...     large_products = Product.find(Product.dimensions.element_greater_than(0, 100))  # width > 100cm
+    ...     us_products = Product.find(Product.location.equals((37.7749, -122.4194)))  # San Francisco
+    ...     nearby = Product.find(Product.location.in_radius((37.7749, -122.4194), 10))  # Within 10km
 """
 
-from typing import Any, Generic, List, Optional, Sequence, Tuple, TypeVar
+from typing import Any, Generic, List, Optional, Sequence, Tuple, TypeVar, Union
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.fields.types import DatabaseValue
+from earnorm.fields.types import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 
 # Type variable for tuple elements
 T = TypeVar("T")
 
 
-class TupleField(BaseField[Tuple[T, ...]], Generic[T]):
+class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
     """Field for fixed-length sequences of values.
 
     This field type handles tuples of values, with support for:
@@ -46,6 +52,7 @@ class TupleField(BaseField[Tuple[T, ...]], Generic[T]):
     - Length validation
     - Database type mapping
     - Custom validation rules
+    - Tuple comparison operations
 
     Attributes:
         fields: Sequence of fields for validating tuple elements
@@ -326,3 +333,234 @@ class TupleField(BaseField[Tuple[T, ...]], Generic[T]):
                 field_name=self.name,
                 code="conversion_error",
             ) from e
+
+    def _prepare_value(self, value: Any) -> DatabaseValue:
+        """Prepare tuple value for comparison.
+
+        Converts value to list for database comparison.
+
+        Args:
+            value: Value to prepare
+
+        Returns:
+            Prepared list value or None
+        """
+        if value is None:
+            return None
+
+        try:
+            if isinstance(value, (tuple, list)):
+                return list(value)  # type: ignore
+            return None
+        except (TypeError, ValueError):
+            return None
+
+    def equals(self, value: Union[Tuple[T, ...], List[T]]) -> ComparisonOperator:
+        """Check if tuple equals value.
+
+        Args:
+            value: Value to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "equals", self._prepare_value(value))
+
+    def not_equals(self, value: Union[Tuple[T, ...], List[T]]) -> ComparisonOperator:
+        """Check if tuple does not equal value.
+
+        Args:
+            value: Value to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "not_equals", self._prepare_value(value))
+
+    def element_equals(self, index: int, value: T) -> ComparisonOperator:
+        """Check if tuple element at index equals value.
+
+        Args:
+            index: Element index
+            value: Value to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+
+        Raises:
+            ValueError: If index is out of range
+        """
+        if not 0 <= index < len(self.fields):
+            raise ValueError(f"Index {index} out of range [0, {len(self.fields)})")
+
+        return ComparisonOperator(
+            self.name,
+            "element_eq",
+            {"index": index, "value": self._prepare_value(value)},
+        )
+
+    def element_not_equals(self, index: int, value: T) -> ComparisonOperator:
+        """Check if tuple element at index does not equal value.
+
+        Args:
+            index: Element index
+            value: Value to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+
+        Raises:
+            ValueError: If index is out of range
+        """
+        if not 0 <= index < len(self.fields):
+            raise ValueError(f"Index {index} out of range [0, {len(self.fields)})")
+
+        return ComparisonOperator(
+            self.name,
+            "element_ne",
+            {"index": index, "value": self._prepare_value(value)},
+        )
+
+    def element_greater_than(self, index: int, value: T) -> ComparisonOperator:
+        """Check if tuple element at index is greater than value.
+
+        Args:
+            index: Element index
+            value: Value to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+
+        Raises:
+            ValueError: If index is out of range
+        """
+        if not 0 <= index < len(self.fields):
+            raise ValueError(f"Index {index} out of range [0, {len(self.fields)})")
+
+        return ComparisonOperator(
+            self.name,
+            "element_gt",
+            {"index": index, "value": self._prepare_value(value)},
+        )
+
+    def element_less_than(self, index: int, value: T) -> ComparisonOperator:
+        """Check if tuple element at index is less than value.
+
+        Args:
+            index: Element index
+            value: Value to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+
+        Raises:
+            ValueError: If index is out of range
+        """
+        if not 0 <= index < len(self.fields):
+            raise ValueError(f"Index {index} out of range [0, {len(self.fields)})")
+
+        return ComparisonOperator(
+            self.name,
+            "element_lt",
+            {"index": index, "value": self._prepare_value(value)},
+        )
+
+    def element_in_list(self, index: int, values: List[T]) -> ComparisonOperator:
+        """Check if tuple element at index is in list.
+
+        Args:
+            index: Element index
+            values: List of values to check
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and values
+
+        Raises:
+            ValueError: If index is out of range
+        """
+        if not 0 <= index < len(self.fields):
+            raise ValueError(f"Index {index} out of range [0, {len(self.fields)})")
+
+        prepared_values = [self._prepare_value(value) for value in values]
+        return ComparisonOperator(
+            self.name,
+            "element_in",
+            {"index": index, "values": prepared_values},
+        )
+
+    def element_not_in_list(self, index: int, values: List[T]) -> ComparisonOperator:
+        """Check if tuple element at index is not in list.
+
+        Args:
+            index: Element index
+            values: List of values to check
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and values
+
+        Raises:
+            ValueError: If index is out of range
+        """
+        if not 0 <= index < len(self.fields):
+            raise ValueError(f"Index {index} out of range [0, {len(self.fields)})")
+
+        prepared_values = [self._prepare_value(value) for value in values]
+        return ComparisonOperator(
+            self.name,
+            "element_not_in",
+            {"index": index, "values": prepared_values},
+        )
+
+    def in_radius(
+        self, center: Union[Tuple[float, float], List[float]], radius: float
+    ) -> ComparisonOperator:
+        """Check if tuple of (latitude, longitude) is within radius of center.
+
+        This method is specifically for geographic coordinates.
+        The radius is in kilometers.
+
+        Args:
+            center: Center point as (latitude, longitude)
+            radius: Radius in kilometers
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and values
+
+        Raises:
+            ValueError: If tuple length is not 2
+        """
+        if len(self.fields) != 2:
+            raise ValueError("in_radius requires a tuple of (latitude, longitude)")
+
+        return ComparisonOperator(
+            self.name,
+            "in_radius",
+            {"center": self._prepare_value(center), "radius": radius},
+        )
+
+    def not_in_radius(
+        self, center: Union[Tuple[float, float], List[float]], radius: float
+    ) -> ComparisonOperator:
+        """Check if tuple of (latitude, longitude) is not within radius of center.
+
+        This method is specifically for geographic coordinates.
+        The radius is in kilometers.
+
+        Args:
+            center: Center point as (latitude, longitude)
+            radius: Radius in kilometers
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and values
+
+        Raises:
+            ValueError: If tuple length is not 2
+        """
+        if len(self.fields) != 2:
+            raise ValueError("not_in_radius requires a tuple of (latitude, longitude)")
+
+        return ComparisonOperator(
+            self.name,
+            "not_in_radius",
+            {"center": self._prepare_value(center), "radius": radius},
+        )

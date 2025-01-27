@@ -27,13 +27,17 @@ class User(BaseModel):
     email = fields.StringField(required=True, unique=True)
     age = fields.IntegerField(required=True)
 
-    async def get_all_users(self) -> list[Self]:
+    async def get_all_users(self) -> Self:
         """Retrieve and return all users from the database.
 
         Returns:
             list: A list of User objects representing all users in the database.
         """
-        users = await User.all(self)
+        users = await self.search(
+            domain=[("age", ">", 18)],
+            limit=10,
+        )
+        users.filtered(lambda user: user.age > 18)
 
         for user in users:
             print(user.name)

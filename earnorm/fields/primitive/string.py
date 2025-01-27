@@ -1,193 +1,149 @@
 """String field implementation.
 
-This module provides string field types for handling text values.
+This module provides string field type for handling text data.
 It supports:
-- Minimum and maximum length validation
-- Regular expression pattern matching
-- Case sensitivity options
+- String validation
+- Length validation
+- Pattern matching
+- Case sensitivity
 - String transformations
-- Whitespace handling
-- Email validation
-- URL validation
-- Password validation
-- Text field with unlimited length
+- String comparison operations
 
 Examples:
     >>> class User(Model):
-    ...     name = StringField(min_length=2, max_length=50)
-    ...     username = StringField(pattern=r'^[a-z0-9_]+$')
-    ...     email = EmailField(required=True)
-    ...     password = PasswordField(min_length=8)
-    ...     bio = TextField()
+    ...     username = StringField(min_length=3, max_length=30, pattern=r'^[a-zA-Z0-9_]+$')
+    ...     email = StringField(pattern=r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+[.][a-zA-Z0-9-]+$')
+    ...     bio = StringField(max_length=500, nullable=True)
+    ...
+    ...     # Query examples
+    ...     admins = User.find(User.username.starts_with("admin_"))
+    ...     gmail = User.find(User.email.ends_with("@gmail.com"))
+    ...     has_bio = User.find(User.bio.length_greater_than(0))
 """
 
 import re
-from typing import Any, Final, Literal, Optional, Pattern, Union
+from typing import Any, Final, Optional
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.fields.types import DatabaseValue
-from earnorm.fields.validators.base import (
-    RangeValidator,
-    RegexValidator,
-    TypeValidator,
-    Validator,
-)
+from earnorm.fields.types import ComparisonOperator, DatabaseValue, FieldComparisonMixin
+from earnorm.fields.validators.base import TypeValidator, Validator
 
 # Constants
-DEFAULT_MIN_LENGTH: Final[Optional[int]] = None
+DEFAULT_MIN_LENGTH: Final[int] = 0
 DEFAULT_MAX_LENGTH: Final[Optional[int]] = None
+DEFAULT_PATTERN: Final[Optional[str]] = None
 DEFAULT_CASE_SENSITIVE: Final[bool] = True
-DEFAULT_STRIP: Final[bool] = True
-DEFAULT_TRANSFORM: Final[Optional[Literal["lower", "upper", "title", "capitalize"]]] = (
-    None
-)
-
-# Password constants
-DEFAULT_PASSWORD_MIN_LENGTH: Final[int] = 8
-DEFAULT_REQUIRE_UPPER: Final[bool] = True
-DEFAULT_REQUIRE_LOWER: Final[bool] = True
-DEFAULT_REQUIRE_DIGIT: Final[bool] = True
-DEFAULT_REQUIRE_SPECIAL: Final[bool] = True
-
-# URL constants
-DEFAULT_REQUIRE_TLD: Final[bool] = True
-
-# Validation patterns
-EMAIL_PATTERN: Final[Pattern[str]] = re.compile(
-    r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
-)
-URL_PATTERN: Final[Pattern[str]] = re.compile(
-    r"^https?://(?:[\w-]+\.)+[\w-]+(?:/[\w-./?%&=]*)?$"
-)
-PASSWORD_PATTERNS: Final[dict[str, Pattern[str]]] = {
-    "upper": re.compile(r"[A-Z]"),
-    "lower": re.compile(r"[a-z]"),
-    "digit": re.compile(r"\d"),
-    "special": re.compile(r"[!@#$%^&*(),.?\":{}|<>]"),
-}
+DEFAULT_STRIP: Final[bool] = False
+DEFAULT_LOWER: Final[bool] = False
+DEFAULT_UPPER: Final[bool] = False
 
 
-class StringField(BaseField[str]):
+class StringField(BaseField[str], FieldComparisonMixin):
     """Field for string values.
 
-    This field type handles text values, with support for:
-    - Minimum and maximum length validation
-    - Regular expression pattern matching
-    - Case sensitivity options
+    This field type handles string values, with support for:
+    - String validation
+    - Length validation
+    - Pattern matching
+    - Case sensitivity
     - String transformations
-    - Whitespace handling
+    - String comparison operations
 
     Attributes:
         min_length: Minimum string length
         max_length: Maximum string length
-        pattern: Regular expression pattern for validation
-        case_sensitive: Whether string matching is case sensitive
-        strip: Whether to strip whitespace from input
-        transform: String transformation ('lower', 'upper', 'title', 'capitalize')
+        pattern: Regular expression pattern
+        case_sensitive: Whether string comparison is case sensitive
+        strip: Whether to strip whitespace
+        lower: Whether to convert to lowercase
+        upper: Whether to convert to uppercase
+        backend_options: Database backend options
     """
 
-    min_length: Optional[int]
+    min_length: int
     max_length: Optional[int]
-    pattern: Optional[Pattern[str]]
+    pattern: Optional[str]
     case_sensitive: bool
     strip: bool
-    transform: Optional[Literal["lower", "upper", "title", "capitalize"]]
-    backend_options: dict[str, Any]  # Add type hint for backend_options
+    lower: bool
+    upper: bool
+    backend_options: dict[str, Any]
 
     def __init__(
         self,
         *,
-        min_length: Optional[int] = DEFAULT_MIN_LENGTH,
+        min_length: int = DEFAULT_MIN_LENGTH,
         max_length: Optional[int] = DEFAULT_MAX_LENGTH,
-        pattern: Optional[Union[str, Pattern[str]]] = None,
+        pattern: Optional[str] = DEFAULT_PATTERN,
         case_sensitive: bool = DEFAULT_CASE_SENSITIVE,
         strip: bool = DEFAULT_STRIP,
-        transform: Optional[
-            Literal["lower", "upper", "title", "capitalize"]
-        ] = DEFAULT_TRANSFORM,
+        lower: bool = DEFAULT_LOWER,
+        upper: bool = DEFAULT_UPPER,
         **options: Any,
     ) -> None:
         """Initialize string field.
 
         Args:
-            min_length: Minimum string length (inclusive)
-            max_length: Maximum string length (inclusive)
-            pattern: Regular expression pattern for validation
-            case_sensitive: Whether string matching is case sensitive
-            strip: Whether to strip whitespace from input
-            transform: String transformation ('lower', 'upper', 'title', 'capitalize')
+            min_length: Minimum string length
+            max_length: Maximum string length
+            pattern: Regular expression pattern
+            case_sensitive: Whether string comparison is case sensitive
+            strip: Whether to strip whitespace
+            lower: Whether to convert to lowercase
+            upper: Whether to convert to uppercase
             **options: Additional field options
-        """
-        # Create validators
-        field_validators: list[Validator[Any]] = [TypeValidator(str)]
-        if min_length is not None or max_length is not None:
-            field_validators.append(
-                RangeValidator(
-                    min_value=min_length,
-                    max_value=max_length,
-                    message=(
-                        f"String length must be between {min_length or 0} "
-                        f"and {max_length or 'unlimited'}"
-                    ),
-                )
-            )
-        if pattern is not None:
-            field_validators.append(
-                RegexValidator(
-                    str(pattern) if isinstance(pattern, Pattern) else pattern
-                )
-            )
 
+        Raises:
+            ValueError: If length or pattern validation is invalid
+        """
+        if min_length < 0:
+            raise ValueError("min_length must be non-negative")
+        if max_length is not None and max_length < min_length:
+            raise ValueError("max_length cannot be less than min_length")
+        if pattern is not None:
+            try:
+                re.compile(pattern)
+            except re.error as e:
+                raise ValueError(f"Invalid pattern: {str(e)}") from e
+        if lower and upper:
+            raise ValueError("Cannot set both lower and upper to True")
+
+        field_validators: list[Validator[Any]] = [TypeValidator(str)]
         super().__init__(validators=field_validators, **options)
 
         self.min_length = min_length
         self.max_length = max_length
-        self.pattern = re.compile(pattern) if isinstance(pattern, str) else pattern
+        self.pattern = pattern
         self.case_sensitive = case_sensitive
         self.strip = strip
-        self.transform = transform
+        self.lower = lower
+        self.upper = upper
 
         # Initialize backend options
         self.backend_options = {
-            "mongodb": {
-                "type": "string",
-                "maxLength": max_length,
-            },
+            "mongodb": {"type": "string"},
             "postgres": {
-                "type": "VARCHAR",
-                "length": max_length,
+                "type": f"VARCHAR({max_length})" if max_length is not None else "TEXT"
             },
             "mysql": {
-                "type": "VARCHAR",
-                "length": max_length,
+                "type": f"VARCHAR({max_length})" if max_length is not None else "TEXT"
             },
         }
 
     async def validate(self, value: Any) -> None:
         """Validate string value.
 
-        Validates:
-        - Type is string
-        - Length constraints
-        - Pattern matching
-        - Required/optional
+        This method validates:
+        - Value is string type
+        - String length is within limits
+        - String matches pattern if provided
 
         Args:
             value: Value to validate
 
         Raises:
-            FieldValidationError: With codes:
-                - invalid_type: Value is not a string
-                - min_length: String length is less than min_length
-                - max_length: String length exceeds max_length
-                - invalid_pattern: String does not match pattern
-
-        Examples:
-            >>> field = StringField(min_length=2, pattern=r'^[a-z]+$')
-            >>> await field.validate("A")  # Raises FieldValidationError(code="min_length")
-            >>> await field.validate("Ab")  # Raises FieldValidationError(code="invalid_pattern")
-            >>> await field.validate("ab")  # Valid
+            FieldValidationError: If validation fails
         """
         await super().validate(value)
 
@@ -199,29 +155,30 @@ class StringField(BaseField[str]):
                     code="invalid_type",
                 )
 
-            if self.strip:
-                value = value.strip()
-
-            if self.min_length is not None and len(value) < self.min_length:
+            # Validate length
+            length = len(value)
+            if length < self.min_length:
                 raise FieldValidationError(
-                    message=f"String length must be at least {self.min_length}, got {len(value)}",
+                    message=f"String length {length} is less than minimum {self.min_length}",
                     field_name=self.name,
                     code="min_length",
                 )
-
-            if self.max_length is not None and len(value) > self.max_length:
+            if self.max_length is not None and length > self.max_length:
                 raise FieldValidationError(
-                    message=f"String length must be at most {self.max_length}, got {len(value)}",
+                    message=(
+                        f"String length {length} exceeds maximum {self.max_length}"
+                    ),
                     field_name=self.name,
                     code="max_length",
                 )
 
+            # Validate pattern
             if self.pattern is not None:
-                if not self.pattern.match(value):
+                if not re.match(self.pattern, value):
                     raise FieldValidationError(
-                        message=f"String must match pattern {self.pattern.pattern}",
+                        message=f"String does not match pattern: {self.pattern}",
                         field_name=self.name,
-                        code="invalid_pattern",
+                        code="pattern",
                     )
 
     async def convert(self, value: Any) -> Optional[str]:
@@ -229,9 +186,8 @@ class StringField(BaseField[str]):
 
         Handles:
         - None values
-        - String conversion
-        - Whitespace stripping
-        - String transformation
+        - String values
+        - Values with __str__ method
 
         Args:
             value: Value to convert
@@ -246,29 +202,23 @@ class StringField(BaseField[str]):
             return None
 
         try:
-            value = str(value)
+            result = str(value)
+
+            # Apply transformations
+            if self.strip:
+                result = result.strip()
+            if self.lower:
+                result = result.lower()
+            if self.upper:
+                result = result.upper()
+
+            return result
         except (TypeError, ValueError) as e:
             raise FieldValidationError(
-                message=f"Cannot convert {type(value).__name__} to string: {str(e)}",
+                message=f"Cannot convert value to string: {str(e)}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
-
-        if self.strip:
-            value = value.strip()
-
-        if self.transform:
-            match self.transform:
-                case "lower":
-                    value = value.lower()
-                case "upper":
-                    value = value.upper()
-                case "title":
-                    value = value.title()
-                case "capitalize":
-                    value = value.capitalize()
-
-        return value
 
     async def to_db(self, value: Optional[str], backend: str) -> DatabaseValue:
         """Convert string to database format.
@@ -280,12 +230,6 @@ class StringField(BaseField[str]):
         Returns:
             Converted string value or None
         """
-        if value is None:
-            return None
-
-        if not self.case_sensitive:
-            value = value.lower()
-
         return value
 
     async def from_db(self, value: DatabaseValue, backend: str) -> Optional[str]:
@@ -304,160 +248,187 @@ class StringField(BaseField[str]):
         if value is None:
             return None
 
-        if not isinstance(value, str):
+        try:
+            if isinstance(value, str):
+                return value
+            return str(value)
+        except (TypeError, ValueError) as e:
             raise FieldValidationError(
-                message=f"Expected string from database, got {type(value).__name__}",
+                message=f"Cannot convert database value to string: {str(e)}",
                 field_name=self.name,
-                code="invalid_type",
-            )
+                code="conversion_error",
+            ) from e
 
-        return value
+    def _prepare_value(self, value: Any) -> DatabaseValue:
+        """Prepare string value for comparison.
 
-
-class EmailField(StringField):
-    """Field for email addresses."""
-
-    def __init__(self, **options: Any) -> None:
-        """Initialize email field.
+        Converts value to string and applies case sensitivity.
 
         Args:
-            **options: Additional field options
-        """
-        super().__init__(
-            pattern=EMAIL_PATTERN,
-            transform="lower",
-            strip=True,
-            case_sensitive=False,
-            **options,
-        )
-
-
-class URLField(StringField):
-    """Field for URLs."""
-
-    def __init__(
-        self, *, require_tld: bool = DEFAULT_REQUIRE_TLD, **options: Any
-    ) -> None:
-        """Initialize URL field.
-
-        Args:
-            require_tld: Whether to require a top-level domain
-            **options: Additional field options
-        """
-        pattern = (
-            URL_PATTERN
-            if require_tld
-            else URL_PATTERN.pattern.replace(r"\.[a-zA-Z]{2,}", "")
-        )
-        super().__init__(
-            pattern=pattern,
-            transform="lower",
-            strip=True,
-            case_sensitive=False,
-            **options,
-        )
-
-
-class PasswordField(StringField):
-    """Field for passwords with validation rules."""
-
-    def __init__(
-        self,
-        *,
-        min_length: int = DEFAULT_PASSWORD_MIN_LENGTH,
-        require_upper: bool = DEFAULT_REQUIRE_UPPER,
-        require_lower: bool = DEFAULT_REQUIRE_LOWER,
-        require_digit: bool = DEFAULT_REQUIRE_DIGIT,
-        require_special: bool = DEFAULT_REQUIRE_SPECIAL,
-        **options: Any,
-    ) -> None:
-        """Initialize password field.
-
-        Args:
-            min_length: Minimum password length
-            require_upper: Require uppercase letter
-            require_lower: Require lowercase letter
-            require_digit: Require digit
-            require_special: Require special character
-            **options: Additional field options
-        """
-        super().__init__(min_length=min_length, strip=True, **options)
-
-        self.require_upper = require_upper
-        self.require_lower = require_lower
-        self.require_digit = require_digit
-        self.require_special = require_special
-
-    async def validate(self, value: Any) -> None:
-        """Validate password value.
-
-        Args:
-            value: Value to validate
-
-        Raises:
-            FieldValidationError: If validation fails
-        """
-        await super().validate(value)
-
-        if value is not None:
-            if self.require_upper and not PASSWORD_PATTERNS["upper"].search(value):
-                raise FieldValidationError(
-                    message="Password must contain at least one uppercase letter",
-                    field_name=self.name,
-                    code="missing_upper",
-                )
-            if self.require_lower and not PASSWORD_PATTERNS["lower"].search(value):
-                raise FieldValidationError(
-                    message="Password must contain at least one lowercase letter",
-                    field_name=self.name,
-                    code="missing_lower",
-                )
-            if self.require_digit and not PASSWORD_PATTERNS["digit"].search(value):
-                raise FieldValidationError(
-                    message="Password must contain at least one digit",
-                    field_name=self.name,
-                    code="missing_digit",
-                )
-            if self.require_special and not PASSWORD_PATTERNS["special"].search(value):
-                raise FieldValidationError(
-                    message="Password must contain at least one special character",
-                    field_name=self.name,
-                    code="missing_special",
-                )
-
-    async def to_db(self, value: Optional[str], backend: str) -> Optional[str]:
-        """Convert password to database format.
-
-        Args:
-            value: Password value to convert
-            backend: Database backend type
+            value: Value to prepare
 
         Returns:
-            Hashed password value or None
+            Prepared string value or None
         """
         if value is None:
             return None
 
-        # TODO: Implement password hashing
-        return value
+        try:
+            result = str(value)
+            if not self.case_sensitive:
+                result = result.lower()
+            return result
+        except (TypeError, ValueError):
+            return None
 
-
-class TextField(StringField):
-    """Field for long text content."""
-
-    def __init__(self, **options: Any) -> None:
-        """Initialize text field.
+    def equals(self, value: str) -> ComparisonOperator:
+        """Check if value equals another string.
 
         Args:
-            **options: Additional field options
-        """
-        super().__init__(strip=True, **options)
+            value: Value to compare with
 
-        # Update backend options for text type
-        self.backend_options.update(
-            {
-                "mongodb": {"type": "string"},
-                "postgres": {"type": "TEXT"},
-                "mysql": {"type": "TEXT"},
-            }
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "eq", self._prepare_value(value))
+
+    def not_equals(self, value: str) -> ComparisonOperator:
+        """Check if value does not equal another string.
+
+        Args:
+            value: Value to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "ne", self._prepare_value(value))
+
+    def contains(self, substring: str) -> ComparisonOperator:
+        """Check if string contains substring.
+
+        Args:
+            substring: Substring to check for
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "contains", self._prepare_value(substring))
+
+    def not_contains(self, substring: str) -> ComparisonOperator:
+        """Check if string does not contain substring.
+
+        Args:
+            substring: Substring to check for
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(
+            self.name, "not_contains", self._prepare_value(substring)
         )
+
+    def starts_with(self, prefix: str) -> ComparisonOperator:
+        """Check if string starts with prefix.
+
+        Args:
+            prefix: Prefix to check for
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "starts_with", self._prepare_value(prefix))
+
+    def ends_with(self, suffix: str) -> ComparisonOperator:
+        """Check if string ends with suffix.
+
+        Args:
+            suffix: Suffix to check for
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "ends_with", self._prepare_value(suffix))
+
+    def matches(self, pattern: str) -> ComparisonOperator:
+        """Check if string matches regular expression pattern.
+
+        Args:
+            pattern: Regular expression pattern
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "matches", pattern)
+
+    def length_equals(self, length: int) -> ComparisonOperator:
+        """Check if string length equals value.
+
+        Args:
+            length: Length to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "length_eq", length)
+
+    def length_greater_than(self, length: int) -> ComparisonOperator:
+        """Check if string length is greater than value.
+
+        Args:
+            length: Length to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "length_gt", length)
+
+    def length_less_than(self, length: int) -> ComparisonOperator:
+        """Check if string length is less than value.
+
+        Args:
+            length: Length to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "length_lt", length)
+
+    def in_list(self, values: list[str]) -> ComparisonOperator:
+        """Check if value is in list of strings.
+
+        Args:
+            values: List of values to check against
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and values
+        """
+        prepared_values = [self._prepare_value(value) for value in values]
+        return ComparisonOperator(self.name, "in", prepared_values)
+
+    def not_in_list(self, values: list[str]) -> ComparisonOperator:
+        """Check if value is not in list of strings.
+
+        Args:
+            values: List of values to check against
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and values
+        """
+        prepared_values = [self._prepare_value(value) for value in values]
+        return ComparisonOperator(self.name, "not_in", prepared_values)
+
+    def is_empty(self) -> ComparisonOperator:
+        """Check if string is empty.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name
+        """
+        return ComparisonOperator(self.name, "is_empty", None)
+
+    def is_not_empty(self) -> ComparisonOperator:
+        """Check if string is not empty.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name
+        """
+        return ComparisonOperator(self.name, "is_not_empty", None)

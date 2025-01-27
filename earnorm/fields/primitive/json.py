@@ -6,6 +6,7 @@ It supports:
 - Schema validation
 - Type conversion
 - Database type mapping
+- JSON comparison operations
 
 Examples:
     >>> class Product(Model):
@@ -17,6 +18,11 @@ Examples:
     ...             "theme": {"type": "string", "enum": ["light", "dark"]},
     ...         },
     ...     })
+    ...
+    ...     # Query examples
+    ...     has_tags = Product.find(Product.metadata.has_key("tags"))
+    ...     dark_theme = Product.find(Product.settings.has_value("dark", path="theme"))
+    ...     notified = Product.find(Product.settings.has_value(True, path="notifications"))
 """
 
 import json
@@ -26,7 +32,7 @@ from jsonschema import Draft202012Validator, ValidationError, validate
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.fields.types import DatabaseValue
+from earnorm.fields.types import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 from earnorm.fields.validators.base import Validator
 
 # Constants
@@ -34,7 +40,7 @@ DEFAULT_ENCODER: Final[type[json.JSONEncoder]] = json.JSONEncoder
 DEFAULT_DECODER: Final[type[json.JSONDecoder]] = json.JSONDecoder
 
 
-class JSONField(BaseField[Any]):
+class JSONField(BaseField[Any], FieldComparisonMixin):
     """Field for JSON data.
 
     This field type handles JSON data, with support for:
@@ -42,6 +48,7 @@ class JSONField(BaseField[Any]):
     - Schema validation
     - Type conversion
     - Database type mapping
+    - JSON comparison operations
 
     Attributes:
         schema: JSON schema for validation
@@ -218,3 +225,130 @@ class JSONField(BaseField[Any]):
                 field_name=self.name,
                 code="conversion_error",
             ) from e
+
+    def _prepare_value(self, value: Any) -> DatabaseValue:
+        """Prepare JSON value for comparison.
+
+        Converts value to JSON string for database comparison.
+
+        Args:
+            value: Value to prepare
+
+        Returns:
+            Prepared JSON value or None
+        """
+        if value is None:
+            return None
+
+        try:
+            return json.dumps(value, cls=self.encoder)
+        except (TypeError, ValueError):
+            return None
+
+    def has_key(self, key: str, path: Optional[str] = None) -> ComparisonOperator:
+        """Check if JSON object has specific key.
+
+        Args:
+            key: Key to check for
+            path: Optional JSON path to check in (dot notation)
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "has_key", {"key": key, "path": path})
+
+    def has_value(self, value: Any, path: Optional[str] = None) -> ComparisonOperator:
+        """Check if JSON object has specific value.
+
+        Args:
+            value: Value to check for
+            path: Optional JSON path to check in (dot notation)
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(
+            self.name, "has_value", {"value": self._prepare_value(value), "path": path}
+        )
+
+    def contains(self, value: Any) -> ComparisonOperator:
+        """Check if JSON array contains value.
+
+        Args:
+            value: Value to check for
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "contains", self._prepare_value(value))
+
+    def length_equals(self, length: int) -> ComparisonOperator:
+        """Check if JSON array length equals value.
+
+        Args:
+            length: Length to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "length_eq", length)
+
+    def length_greater_than(self, length: int) -> ComparisonOperator:
+        """Check if JSON array length is greater than value.
+
+        Args:
+            length: Length to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "length_gt", length)
+
+    def length_less_than(self, length: int) -> ComparisonOperator:
+        """Check if JSON array length is less than value.
+
+        Args:
+            length: Length to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "length_lt", length)
+
+    def matches_schema(self, schema: dict[str, Any]) -> ComparisonOperator:
+        """Check if JSON value matches schema.
+
+        Args:
+            schema: JSON schema to validate against
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "matches_schema", schema)
+
+    def type_equals(self, json_type: str) -> ComparisonOperator:
+        """Check if JSON value is of specific type.
+
+        Args:
+            json_type: JSON type ("object", "array", "string", "number", "boolean", "null")
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "type_equals", json_type)
+
+    def is_empty(self) -> ComparisonOperator:
+        """Check if JSON object/array is empty.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name
+        """
+        return ComparisonOperator(self.name, "is_empty", None)
+
+    def is_not_empty(self) -> ComparisonOperator:
+        """Check if JSON object/array is not empty.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name
+        """
+        return ComparisonOperator(self.name, "is_not_empty", None)

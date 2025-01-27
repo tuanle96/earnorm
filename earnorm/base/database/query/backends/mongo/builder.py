@@ -22,6 +22,7 @@ from typing import Any, List, Literal, Protocol, Tuple, Type, TypeVar, Union
 
 from motor.motor_asyncio import AsyncIOMotorCollection
 
+from earnorm.fields.types import ComparisonOperator
 from earnorm.types import DatabaseModel, JsonDict, ValueType
 
 from .converter import MongoConverter
@@ -31,6 +32,16 @@ SortSpec = List[Tuple[str, int]]
 ModelT = TypeVar("ModelT", bound=DatabaseModel)
 
 Operation = Literal["insert_one", "update", "delete", None]
+
+# Mapping of comparison operators to MongoDB operators
+OPERATOR_MAP = {
+    "=": "$eq",
+    "!=": "$ne",
+    ">": "$gt",
+    ">=": "$gte",
+    "<": "$lt",
+    "<=": "$lte",
+}
 
 
 class QueryBuilder(Protocol[ModelT]):
@@ -281,17 +292,52 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         self._filter = expr
         return self
 
-    def filter(self, **conditions: Any) -> "MongoQueryBuilder[ModelT]":
+    def filter(
+        self, *conditions: Union[ComparisonOperator, JsonDict], **kwargs: Any
+    ) -> "MongoQueryBuilder[ModelT]":
         """Add filter conditions.
 
         Args:
-            **conditions: Filter conditions
+            *conditions: ComparisonOperator instances or filter dictionaries
+            **kwargs: Field-value pairs for exact match filtering
 
         Returns:
             Self for chaining
+
+        Examples:
+            ```python
+            # Using comparison operators
+            builder.filter(User.age > 18, User.name == "John")
+
+            # Using dictionaries
+            builder.filter({"age": {"$gt": 18}})
+
+            # Using kwargs
+            builder.filter(age=18, name="John")
+            ```
         """
-        self._filter = self._filter or {}
-        self._filter.update(conditions)
+        filter_dict: JsonDict = {}
+
+        # Handle conditions
+        for condition in conditions:
+            if isinstance(condition, ComparisonOperator):
+                mongo_op = OPERATOR_MAP.get(condition.operator)
+                if mongo_op is None:
+                    raise ValueError(f"Unsupported operator: {condition.operator}")
+                filter_dict[condition.field_name] = {mongo_op: condition.value}
+            else:
+                filter_dict.update(condition)
+
+        # Handle kwargs
+        filter_dict.update(kwargs)
+
+        # Update filter
+        if not self._filter:
+            self._filter = filter_dict
+        else:
+            # Combine with existing filter using $and
+            self._filter = {"$and": [self._filter, filter_dict]}
+
         return self
 
     def project(self, projection: JsonDict) -> "MongoQueryBuilder[ModelT]":

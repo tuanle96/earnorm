@@ -2,13 +2,30 @@
 
 This module provides the base interface for database adapters.
 Each database type should implement this interface to handle type conversion.
+
+Examples:
+    >>> class PostgresAdapter(BaseAdapter[str]):
+    ...     @property
+    ...     def backend_name(self) -> str:
+    ...         return "postgres"
+    ...
+    ...     async def to_db_value(self, value: Optional[str]) -> DatabaseValue:
+    ...         if value is None:
+    ...             return None
+    ...         return str(value)
+    ...
+    ...     async def from_db_value(self, value: DatabaseValue) -> Optional[str]:
+    ...         if value is None:
+    ...             return None
+    ...         return str(value)
 """
 
-from typing import Any, Optional, Protocol, TypeVar
+from typing import Any, Generic, Optional, Protocol, TypeVar
 
 from earnorm.fields.types import DatabaseValue
 
-T = TypeVar("T")  # Field value type
+# Type variable for field value type
+T = TypeVar("T")
 
 
 class DatabaseAdapter(Protocol[T]):
@@ -17,6 +34,9 @@ class DatabaseAdapter(Protocol[T]):
     This protocol defines the interface that all database adapters must implement.
     Each database type (MongoDB, PostgreSQL, MySQL, etc.) should have its own adapter
     that implements this protocol.
+
+    Type Parameters:
+        T: Field value type
     """
 
     @property
@@ -52,6 +72,9 @@ class DatabaseAdapter(Protocol[T]):
 
         Returns:
             DatabaseValue: Converted value for database
+
+        Raises:
+            FieldValidationError: If value cannot be converted
         """
         ...
 
@@ -63,15 +86,21 @@ class DatabaseAdapter(Protocol[T]):
 
         Returns:
             Optional[T]: Converted Python value
+
+        Raises:
+            FieldValidationError: If value cannot be converted
         """
         ...
 
 
-class BaseAdapter(DatabaseAdapter[T]):
+class BaseAdapter(DatabaseAdapter[T], Generic[T]):
     """Base implementation of database adapter.
 
     This class provides a base implementation that can be extended by
     specific database adapters.
+
+    Type Parameters:
+        T: Field value type
 
     Attributes:
         field_type: Database field type
@@ -85,8 +114,8 @@ class BaseAdapter(DatabaseAdapter[T]):
             field_type: Database field type
             **field_options: Additional field options
         """
-        self._field_type = field_type
-        self._field_options = field_options
+        self._field_type: str = field_type
+        self._field_options: dict[str, Any] = field_options
 
     @property
     def backend_name(self) -> str:
@@ -94,10 +123,13 @@ class BaseAdapter(DatabaseAdapter[T]):
 
         This should be overridden by subclasses.
 
+        Returns:
+            str: Database backend name
+
         Raises:
             NotImplementedError: If not overridden
         """
-        raise NotImplementedError
+        raise NotImplementedError("Subclasses must implement backend_name")
 
     def get_field_type(self) -> str:
         """Get field type.
@@ -123,10 +155,14 @@ class BaseAdapter(DatabaseAdapter[T]):
         Args:
             value: Value to convert
 
+        Returns:
+            DatabaseValue: Converted database value
+
         Raises:
             NotImplementedError: If not overridden
+            FieldValidationError: If value cannot be converted
         """
-        raise NotImplementedError
+        raise NotImplementedError("Subclasses must implement to_db_value()")
 
     async def from_db_value(self, value: DatabaseValue) -> Optional[T]:
         """Convert from database value.
@@ -136,7 +172,37 @@ class BaseAdapter(DatabaseAdapter[T]):
         Args:
             value: Value to convert
 
+        Returns:
+            Optional[T]: Converted Python value
+
         Raises:
             NotImplementedError: If not overridden
+            FieldValidationError: If value cannot be converted
         """
-        raise NotImplementedError
+        raise NotImplementedError("Subclasses must implement from_db_value()")
+
+    def _validate_value(self, value: Any) -> None:
+        """Validate value before conversion.
+
+        This method can be overridden by subclasses to add custom validation.
+
+        Args:
+            value: Value to validate
+
+        Raises:
+            FieldValidationError: If validation fails
+        """
+        pass
+
+    def _prepare_value(self, value: Any) -> Any:
+        """Prepare value for conversion.
+
+        This method can be overridden by subclasses to add custom preparation.
+
+        Args:
+            value: Value to prepare
+
+        Returns:
+            Any: Prepared value
+        """
+        return value

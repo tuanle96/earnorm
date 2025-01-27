@@ -21,7 +21,7 @@ from typing import Any, Final, Generic, Optional, TypeVar, Union
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.fields.types import DatabaseValue
+from earnorm.fields.types import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 from earnorm.fields.validators.base import RangeValidator, TypeValidator, Validator
 
 # Type variables
@@ -37,7 +37,7 @@ DEFAULT_MAX_DIGITS: Final[Optional[int]] = None
 DEFAULT_DECIMAL_PLACES: Final[Optional[int]] = None
 
 
-class NumberField(BaseField[N], Generic[N]):
+class NumberField(BaseField[N], Generic[N], FieldComparisonMixin):
     """Base field for numeric values.
 
     This field type handles numeric values, with support for:
@@ -79,6 +79,9 @@ class NumberField(BaseField[N], Generic[N]):
             step: Required step between values
             unit: Unit for display/conversion
             **options: Additional field options
+
+        Raises:
+            FieldValidationError: If validation fails
         """
         # Create validators
         field_validators: list[Validator[Any]] = []
@@ -103,6 +106,86 @@ class NumberField(BaseField[N], Generic[N]):
 
         # Initialize backend options
         self.backend_options = {}
+
+    def _prepare_value(self, value: Any) -> DatabaseValue:
+        """Prepare numeric value for comparison.
+
+        Converts value to the appropriate numeric type and validates it.
+
+        Args:
+            value: Value to prepare
+
+        Returns:
+            DatabaseValue: Prepared numeric value
+        """
+        if value is None:
+            return None
+
+        try:
+            # Convert to appropriate numeric type
+            if isinstance(self, IntegerField):
+                return int(float(str(value)))
+            elif isinstance(self, FloatField):
+                return float(str(value))
+            elif isinstance(self, DecimalField):
+                return str(Decimal(str(value)))
+            return value  # type: ignore
+        except (TypeError, ValueError, InvalidOperation):
+            return value  # type: ignore
+
+    def mod(self, divisor: N) -> ComparisonOperator:
+        """Check if value is divisible by divisor.
+
+        Args:
+            divisor: Value to divide by
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "mod", divisor)
+
+    def round_to(self, precision: int) -> ComparisonOperator:
+        """Check if value rounds to a specific precision.
+
+        Args:
+            precision: Number of decimal places
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "round_to", precision)
+
+    def is_integer(self) -> ComparisonOperator:
+        """Check if value is an integer (no decimal places).
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "is_integer", None)
+
+    def is_positive(self) -> ComparisonOperator:
+        """Check if value is positive (> 0).
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "is_positive", None)
+
+    def is_negative(self) -> ComparisonOperator:
+        """Check if value is negative (< 0).
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "is_negative", None)
+
+    def is_zero(self) -> ComparisonOperator:
+        """Check if value is zero.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "is_zero", None)
 
     async def validate(self, value: Any) -> None:
         """Validate numeric value.
@@ -179,6 +262,9 @@ class IntegerField(NumberField[int]):
             step: Required step between values
             unit: Unit for display/conversion
             **options: Additional field options
+
+        Raises:
+            FieldValidationError: If validation fails
         """
         field_validators: list[Validator[Any]] = [TypeValidator(int)]
         super().__init__(
@@ -210,7 +296,7 @@ class IntegerField(NumberField[int]):
             value: Value to convert
 
         Returns:
-            Converted integer value or None
+            Optional[int]: Converted integer value or None
 
         Raises:
             FieldValidationError: If value cannot be converted
@@ -241,7 +327,7 @@ class IntegerField(NumberField[int]):
             backend: Database backend type
 
         Returns:
-            Converted integer value or None
+            DatabaseValue: Converted integer value or None
         """
         return value
 
@@ -253,7 +339,7 @@ class IntegerField(NumberField[int]):
             backend: Database backend type
 
         Returns:
-            Converted integer value or None
+            Optional[int]: Converted integer value or None
 
         Raises:
             FieldValidationError: If value cannot be converted
@@ -262,7 +348,11 @@ class IntegerField(NumberField[int]):
             return None
 
         try:
-            return int(value)
+            if isinstance(value, bool):
+                raise TypeError("Cannot convert boolean to integer")
+            if isinstance(value, (dict, list)):
+                raise TypeError("Cannot convert complex types to integer")
+            return int(float(str(value)))
         except (TypeError, ValueError) as e:
             raise FieldValidationError(
                 message=f"Cannot convert database value to integer: {str(e)}",
@@ -301,6 +391,9 @@ class FloatField(NumberField[float]):
             precision: Number of decimal places
             unit: Unit for display/conversion
             **options: Additional field options
+
+        Raises:
+            FieldValidationError: If validation fails
         """
         field_validators: list[Validator[Any]] = [TypeValidator(float)]
         super().__init__(
@@ -335,7 +428,7 @@ class FloatField(NumberField[float]):
             value: Value to convert
 
         Returns:
-            Converted float value or None
+            Optional[float]: Converted float value or None
 
         Raises:
             FieldValidationError: If value cannot be converted
@@ -369,7 +462,7 @@ class FloatField(NumberField[float]):
             backend: Database backend type
 
         Returns:
-            Converted float value or None
+            DatabaseValue: Converted float value or None
         """
         if value is None:
             return None
@@ -387,7 +480,7 @@ class FloatField(NumberField[float]):
             backend: Database backend type
 
         Returns:
-            Converted float value or None
+            Optional[float]: Converted float value or None
 
         Raises:
             FieldValidationError: If value cannot be converted
@@ -396,7 +489,11 @@ class FloatField(NumberField[float]):
             return None
 
         try:
-            value = float(value)
+            if isinstance(value, bool):
+                raise TypeError("Cannot convert boolean to float")
+            if isinstance(value, (dict, list)):
+                raise TypeError("Cannot convert complex types to float")
+            value = float(str(value))
             if self.precision is not None:
                 value = round(value, self.precision)
             return value
@@ -440,6 +537,10 @@ class DecimalField(NumberField[Decimal]):
             decimal_places: Maximum decimal places
             unit: Unit for display/conversion
             **options: Additional field options
+
+        Raises:
+            FieldValidationError: If validation fails
+            InvalidOperation: If decimal conversion fails
         """
         # Convert min/max/step to Decimal
         min_value_dec = Decimal(str(min_value)) if min_value is not None else None
@@ -547,10 +648,11 @@ class DecimalField(NumberField[Decimal]):
             value: Value to convert
 
         Returns:
-            Converted decimal value or None
+            Optional[Decimal]: Converted decimal value or None
 
         Raises:
             FieldValidationError: If value cannot be converted
+            InvalidOperation: If decimal conversion fails
         """
         if value is None:
             return None
@@ -576,7 +678,10 @@ class DecimalField(NumberField[Decimal]):
             backend: Database backend type
 
         Returns:
-            Converted decimal value or None
+            DatabaseValue: Converted decimal value or None
+
+        Raises:
+            InvalidOperation: If decimal conversion fails
         """
         if value is None:
             return None
@@ -594,19 +699,26 @@ class DecimalField(NumberField[Decimal]):
             backend: Database backend type
 
         Returns:
-            Converted decimal value or None
+            Optional[Decimal]: Converted decimal value or None
 
         Raises:
             FieldValidationError: If value cannot be converted
+            InvalidOperation: If decimal conversion fails
         """
         if value is None:
             return None
 
         try:
-            value = Decimal(str(value))
+            if isinstance(value, bool):
+                raise TypeError("Cannot convert boolean to decimal")
+            if isinstance(value, (dict, list)):
+                raise TypeError("Cannot convert complex types to decimal")
+            decimal_value = Decimal(str(value))
             if self.decimal_places is not None:
-                value = value.quantize(Decimal(f"0.{'0' * self.decimal_places}"))
-            return value
+                decimal_value = decimal_value.quantize(
+                    Decimal(f"0.{'0' * self.decimal_places}")
+                )
+            return decimal_value
         except (TypeError, ValueError, InvalidOperation) as e:
             raise FieldValidationError(
                 message=f"Cannot convert database value to decimal: {str(e)}",
@@ -624,6 +736,9 @@ class PositiveIntegerField(IntegerField):
         Args:
             min_value: Minimum allowed value (default: 0)
             **options: Additional field options
+
+        Raises:
+            FieldValidationError: If validation fails
         """
         super().__init__(min_value=min_value, **options)
 
@@ -637,6 +752,9 @@ class NegativeIntegerField(IntegerField):
         Args:
             max_value: Maximum allowed value (default: 0)
             **options: Additional field options
+
+        Raises:
+            FieldValidationError: If validation fails
         """
         super().__init__(max_value=max_value, **options)
 
@@ -650,13 +768,9 @@ class AutoIncrementField(IntegerField):
         Args:
             primary_key: Whether this field is the primary key
             **options: Additional field options
+
+        Raises:
+            FieldValidationError: If validation fails
         """
         options["required"] = False
         super().__init__(**options)
-
-        # Initialize backend options
-        self.backend_options = {
-            "mongodb": {"type": "int", "autoIncrement": True},
-            "postgres": {"type": "SERIAL"},
-            "mysql": {"type": "INT AUTO_INCREMENT"},
-        }

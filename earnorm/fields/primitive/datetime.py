@@ -4,24 +4,32 @@ This module provides datetime field types for handling date and time values.
 It supports:
 - Date and time validation
 - Timezone handling
-- Format parsing and validation
-- Auto-now and auto-now-add options
-- Range validation (min/max)
-- Database type mapping
+- Format validation
+- Range validation
+- Auto now and auto now add
+- DateTime comparison operations
 
 Examples:
     >>> class Post(Model):
     ...     created_at = DateTimeField(auto_now_add=True)
     ...     updated_at = DateTimeField(auto_now=True)
     ...     published_at = DateTimeField(nullable=True)
+    ...
+    ...     # Query examples
+    ...     recent_posts = Post.find(
+    ...         Post.published_at.after(datetime.now() - timedelta(days=7)),
+    ...         Post.published_at.before(datetime.now())
+    ...     )
+    ...     today_posts = Post.find(Post.published_at.is_today())
+    ...     this_month = Post.find(Post.published_at.same_month(datetime.now()))
 """
 
 from datetime import date, datetime, time, timezone
-from typing import Any, Final, Optional
+from typing import Any, Dict, Final, List, Optional, Union
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.fields.types import DatabaseValue
+from earnorm.fields.types import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 from earnorm.fields.validators.base import RangeValidator, TypeValidator, Validator
 
 # Constants
@@ -31,32 +39,28 @@ DEFAULT_USE_TZ: Final[bool] = True
 DEFAULT_TIME_FORMAT: Final[str] = "%H:%M:%S"
 
 
-class DateTimeField(BaseField[datetime]):
+class DateTimeField(BaseField[datetime], FieldComparisonMixin):
     """Field for datetime values.
 
-    This field type handles date and time values, with support for:
+    This field type handles datetime values, with support for:
     - Date and time validation
     - Timezone handling
-    - Format parsing and validation
-    - Auto-now and auto-now-add options
-    - Range validation (min/max)
-    - Database type mapping
+    - Format validation
+    - Range validation
+    - Auto now and auto now add
+    - DateTime comparison operations
 
     Attributes:
         auto_now: Update value on every save
-        auto_now_add: Set value on creation only
+        auto_now_add: Set value on creation
         use_tz: Whether to use timezone-aware datetimes
-        min_value: Minimum allowed datetime
-        max_value: Maximum allowed datetime
         backend_options: Database backend options
     """
 
     auto_now: bool
     auto_now_add: bool
     use_tz: bool
-    min_value: Optional[datetime]
-    max_value: Optional[datetime]
-    backend_options: dict[str, Any]
+    backend_options: Dict[str, Any]
 
     def __init__(
         self,
@@ -64,41 +68,22 @@ class DateTimeField(BaseField[datetime]):
         auto_now: bool = DEFAULT_AUTO_NOW,
         auto_now_add: bool = DEFAULT_AUTO_NOW_ADD,
         use_tz: bool = DEFAULT_USE_TZ,
-        min_value: Optional[datetime] = None,
-        max_value: Optional[datetime] = None,
         **options: Any,
     ) -> None:
         """Initialize datetime field.
 
         Args:
             auto_now: Update value on every save
-            auto_now_add: Set value on creation only
+            auto_now_add: Set value on creation
             use_tz: Whether to use timezone-aware datetimes
-            min_value: Minimum allowed datetime
-            max_value: Maximum allowed datetime
             **options: Additional field options
         """
-        # Create validators
-        field_validators: list[Validator[Any]] = [TypeValidator(datetime)]
-        if min_value is not None or max_value is not None:
-            field_validators.append(
-                RangeValidator(
-                    min_value=min_value,
-                    max_value=max_value,
-                    message=(
-                        f"Value must be between {min_value or '-∞'} "
-                        f"and {max_value or '∞'}"
-                    ),
-                )
-            )
-
+        field_validators: List[Validator[Any]] = [TypeValidator(datetime)]
         super().__init__(validators=field_validators, **options)
 
         self.auto_now = auto_now
         self.auto_now_add = auto_now_add
         self.use_tz = use_tz
-        self.min_value = min_value
-        self.max_value = max_value
 
         # Initialize backend options
         self.backend_options = {
@@ -107,13 +92,286 @@ class DateTimeField(BaseField[datetime]):
             "mysql": {"type": "DATETIME"},
         }
 
+    def _prepare_value(self, value: Any) -> DatabaseValue:
+        """Prepare datetime value for comparison.
+
+        Converts value to datetime and handles timezone.
+
+        Args:
+            value: Value to prepare
+
+        Returns:
+            Prepared datetime value as ISO format string
+        """
+        if value is None:
+            return None
+
+        try:
+            if isinstance(value, str):
+                value = datetime.fromisoformat(value)
+            elif isinstance(value, (int, float)):
+                value = datetime.fromtimestamp(value)
+            elif isinstance(value, date) and not isinstance(value, datetime):
+                value = datetime.combine(value, time())
+
+            if self.use_tz and value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            elif not self.use_tz and value.tzinfo is not None:
+                value = value.replace(tzinfo=None)
+
+            return value.isoformat()
+        except (TypeError, ValueError):
+            return None
+
+    def before(
+        self, other: Union[datetime, date, str, int, float]
+    ) -> ComparisonOperator:
+        """Check if value is before other datetime.
+
+        Args:
+            other: Datetime to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "before", self._prepare_value(other))
+
+    def after(
+        self, other: Union[datetime, date, str, int, float]
+    ) -> ComparisonOperator:
+        """Check if value is after other datetime.
+
+        Args:
+            other: Datetime to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "after", self._prepare_value(other))
+
+    def between(
+        self,
+        start: Union[datetime, date, str, int, float],
+        end: Union[datetime, date, str, int, float],
+    ) -> ComparisonOperator:
+        """Check if value is between start and end dates.
+
+        Args:
+            start: Start datetime
+            end: End datetime
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(
+            self.name,
+            "between",
+            [self._prepare_value(start), self._prepare_value(end)],
+        )
+
+    def in_range(
+        self,
+        start: Union[datetime, date, str, int, float],
+        end: Union[datetime, date, str, int, float],
+    ) -> ComparisonOperator:
+        """Alias for between().
+
+        Args:
+            start: Start datetime
+            end: End datetime
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return self.between(start, end)
+
+    def same_day(
+        self, other: Union[datetime, date, str, int, float]
+    ) -> ComparisonOperator:
+        """Check if value is on the same day as other datetime.
+
+        Args:
+            other: Datetime to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "same_day", self._prepare_value(other))
+
+    def same_month(
+        self, other: Union[datetime, date, str, int, float]
+    ) -> ComparisonOperator:
+        """Check if value is in the same month as other datetime.
+
+        Args:
+            other: Datetime to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "same_month", self._prepare_value(other))
+
+    def same_year(
+        self, other: Union[datetime, date, str, int, float]
+    ) -> ComparisonOperator:
+        """Check if value is in the same year as other datetime.
+
+        Args:
+            other: Datetime to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "same_year", self._prepare_value(other))
+
+    def days_ago(self, days: int) -> ComparisonOperator:
+        """Check if value is exactly days ago.
+
+        Args:
+            days: Number of days
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "days_ago", days)
+
+    def days_before(self, days: int) -> ComparisonOperator:
+        """Check if value is at least days ago.
+
+        Args:
+            days: Number of days
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "days_before", days)
+
+    def days_after(self, days: int) -> ComparisonOperator:
+        """Check if value is at most days ago.
+
+        Args:
+            days: Number of days
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "days_after", days)
+
+    def hours_ago(self, hours: int) -> ComparisonOperator:
+        """Check if value is exactly hours ago.
+
+        Args:
+            hours: Number of hours
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "hours_ago", hours)
+
+    def minutes_ago(self, minutes: int) -> ComparisonOperator:
+        """Check if value is exactly minutes ago.
+
+        Args:
+            minutes: Number of minutes
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "minutes_ago", minutes)
+
+    def seconds_ago(self, seconds: int) -> ComparisonOperator:
+        """Check if value is exactly seconds ago.
+
+        Args:
+            seconds: Number of seconds
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "seconds_ago", seconds)
+
+    def is_future(self) -> ComparisonOperator:
+        """Check if value is in the future.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "is_future", None)
+
+    def is_past(self) -> ComparisonOperator:
+        """Check if value is in the past.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "is_past", None)
+
+    def is_today(self) -> ComparisonOperator:
+        """Check if value is today.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "is_today", None)
+
+    def is_this_week(self) -> ComparisonOperator:
+        """Check if value is in current week.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "is_this_week", None)
+
+    def is_this_month(self) -> ComparisonOperator:
+        """Check if value is in current month.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "is_this_month", None)
+
+    def is_this_year(self) -> ComparisonOperator:
+        """Check if value is in current year.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "is_this_year", None)
+
+    def in_list(
+        self, values: List[Union[datetime, date, str, int, float]]
+    ) -> ComparisonOperator:
+        """Check if value is in list of datetimes.
+
+        Args:
+            values: List of datetimes to check against
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and values
+        """
+        prepared_values = [self._prepare_value(value) for value in values]
+        return ComparisonOperator(self.name, "in", prepared_values)
+
+    def not_in_list(
+        self, values: List[Union[datetime, date, str, int, float]]
+    ) -> ComparisonOperator:
+        """Check if value is not in list of datetimes.
+
+        Args:
+            values: List of datetimes to check against
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and values
+        """
+        prepared_values = [self._prepare_value(value) for value in values]
+        return ComparisonOperator(self.name, "not_in", prepared_values)
+
     async def validate(self, value: Any) -> None:
         """Validate datetime value.
 
         This method validates:
         - Value is datetime type
-        - Value is within min/max range
-        - Value has correct timezone info
+        - Timezone info matches field configuration
 
         Args:
             value: Value to validate
@@ -216,7 +474,7 @@ class DateTimeField(BaseField[datetime]):
             if value.tzinfo is not None:
                 value = value.replace(tzinfo=None)
 
-        return value
+        return value.isoformat()
 
     async def from_db(self, value: DatabaseValue, backend: str) -> Optional[datetime]:
         """Convert database value to datetime.
@@ -234,22 +492,29 @@ class DateTimeField(BaseField[datetime]):
         if value is None:
             return None
 
-        if not isinstance(value, datetime):
+        try:
+            if isinstance(value, datetime):
+                dt = value
+            elif isinstance(value, str):
+                dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            else:
+                raise TypeError(f"Cannot convert {type(value).__name__} to datetime")
+
+            # Handle timezone
+            if self.use_tz:
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)  # type: ignore
+            else:
+                if dt.tzinfo is not None:
+                    dt = dt.replace(tzinfo=None)  # type: ignore
+
+            return dt
+        except (TypeError, ValueError) as e:
             raise FieldValidationError(
-                message=f"Expected datetime from database, got {type(value).__name__}",
+                message=f"Cannot convert database value to datetime: {str(e)}",
                 field_name=self.name,
-                code="invalid_type",
-            )
-
-        # Handle timezone
-        if self.use_tz:
-            if value.tzinfo is None:
-                value = value.replace(tzinfo=timezone.utc)
-        else:
-            if value.tzinfo is not None:
-                value = value.replace(tzinfo=None)
-
-        return value
+                code="conversion_error",
+            ) from e
 
 
 class DateField(DateTimeField):
@@ -471,7 +736,9 @@ class TimeField(BaseField[time]):
         Returns:
             Converted time value or None
         """
-        return value
+        if value is None:
+            return None
+        return value.strftime(self.format)
 
     async def from_db(self, value: DatabaseValue, backend: str) -> Optional[time]:
         """Convert database value to time.

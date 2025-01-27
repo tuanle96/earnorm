@@ -5,6 +5,7 @@ It handles:
 - Field setup and initialization
 - Value validation and conversion
 - Type checking and constraints
+- Comparison operations
 """
 
 from typing import (
@@ -13,7 +14,9 @@ from typing import (
     Coroutine,
     Dict,
     Generic,
+    List,
     Optional,
+    Pattern,
     Tuple,
     TypeVar,
     Union,
@@ -22,13 +25,346 @@ from typing import (
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.adapters.base import DatabaseAdapter
-from earnorm.fields.types import DatabaseValue
+from earnorm.fields.types import ComparisonOperator, DatabaseValue
 
 T = TypeVar("T")  # Field value type
 
 # Type aliases for validation
 ValidatorResult = Union[bool, Tuple[bool, str]]
 ValidatorCallable = Callable[[Any], Coroutine[Any, Any, ValidatorResult]]
+
+
+class FieldComparison:
+    """Helper class for field comparisons.
+
+    This class provides comparison methods that return ComparisonOperator instances
+    instead of boolean values. This avoids conflicts with Python's built-in
+    comparison methods.
+
+    Supported operators:
+    - Basic comparisons: eq, ne, gt, ge, lt, le
+    - List operations: in_, not_in
+    - String operations: like, ilike, regex, iregex
+    - Null checks: is_null, is_not_null
+    - Range operations: between, not_between
+    - Array operations: contains, not_contains, all, any, size
+    - String operations: starts_with, ends_with, length
+    - Document operations: exists, not_exists
+    """
+
+    def __init__(self, field_name: str) -> None:
+        """Initialize field comparison.
+
+        Args:
+            field_name: Name of the field being compared
+        """
+        self.field_name = field_name
+
+    def eq(self, other: Any) -> ComparisonOperator:
+        """Equal comparison.
+
+        Args:
+            other: Value to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, "=", other)
+
+    def ne(self, other: Any) -> ComparisonOperator:
+        """Not equal comparison.
+
+        Args:
+            other: Value to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, "!=", other)
+
+    def gt(self, other: Any) -> ComparisonOperator:
+        """Greater than comparison.
+
+        Args:
+            other: Value to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, ">", other)
+
+    def ge(self, other: Any) -> ComparisonOperator:
+        """Greater than or equal comparison.
+
+        Args:
+            other: Value to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, ">=", other)
+
+    def lt(self, other: Any) -> ComparisonOperator:
+        """Less than comparison.
+
+        Args:
+            other: Value to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, "<", other)
+
+    def le(self, other: Any) -> ComparisonOperator:
+        """Less than or equal comparison.
+
+        Args:
+            other: Value to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, "<=", other)
+
+    def in_(self, values: List[Any]) -> ComparisonOperator:
+        """Check if field value is in list.
+
+        Args:
+            values: List of values to check against
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, "in", values)
+
+    def not_in(self, values: List[Any]) -> ComparisonOperator:
+        """Check if field value is not in list.
+
+        Args:
+            values: List of values to check against
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, "not_in", values)
+
+    def like(self, pattern: str) -> ComparisonOperator:
+        """Case-sensitive pattern matching.
+
+        Args:
+            pattern: Pattern to match against (using SQL LIKE syntax)
+                % - Match any sequence of characters
+                _ - Match any single character
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, "like", pattern)
+
+    def ilike(self, pattern: str) -> ComparisonOperator:
+        """Case-insensitive pattern matching.
+
+        Args:
+            pattern: Pattern to match against (using SQL LIKE syntax)
+                % - Match any sequence of characters
+                _ - Match any single character
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, "ilike", pattern)
+
+    def regex(self, pattern: Union[str, Pattern[str]]) -> ComparisonOperator:
+        """Case-sensitive regular expression matching.
+
+        Args:
+            pattern: Regular expression pattern to match against
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, "regex", pattern)
+
+    def iregex(self, pattern: Union[str, Pattern[str]]) -> ComparisonOperator:
+        """Case-insensitive regular expression matching.
+
+        Args:
+            pattern: Regular expression pattern to match against
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, "iregex", pattern)
+
+    def is_null(self) -> ComparisonOperator:
+        """Check if field value is null.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, "is_null", None)
+
+    def is_not_null(self) -> ComparisonOperator:
+        """Check if field value is not null.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, "is_not_null", None)
+
+    def between(self, start: Any, end: Any) -> ComparisonOperator:
+        """Check if field value is between start and end (inclusive).
+
+        Args:
+            start: Start value
+            end: End value
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, "between", (start, end))
+
+    def not_between(self, start: Any, end: Any) -> ComparisonOperator:
+        """Check if field value is not between start and end (inclusive).
+
+        Args:
+            start: Start value
+            end: End value
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, "not_between", (start, end))
+
+    # Array operations
+    def contains(self, value: Any) -> ComparisonOperator:
+        """Check if array field contains value.
+
+        Args:
+            value: Value to check for
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, "contains", value)
+
+    def not_contains(self, value: Any) -> ComparisonOperator:
+        """Check if array field does not contain value.
+
+        Args:
+            value: Value to check for
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, "not_contains", value)
+
+    def all(self, values: List[Any]) -> ComparisonOperator:
+        """Check if array field contains all values.
+
+        Args:
+            values: List of values that must all be present
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, "all", values)
+
+    def any(self, values: List[Any]) -> ComparisonOperator:
+        """Check if array field contains any of the values.
+
+        Args:
+            values: List of values to check for
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, "any", values)
+
+    def size(self, size: int) -> ComparisonOperator:
+        """Check array or string field length.
+
+        Args:
+            size: Expected length
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, "size", size)
+
+    # String operations
+    def starts_with(
+        self, prefix: str, case_sensitive: bool = True
+    ) -> ComparisonOperator:
+        """Check if string field starts with prefix.
+
+        Args:
+            prefix: String prefix to check for
+            case_sensitive: Whether to perform case-sensitive comparison
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        operator = "starts_with" if case_sensitive else "istarts_with"
+        return ComparisonOperator(self.field_name, operator, prefix)
+
+    def ends_with(self, suffix: str, case_sensitive: bool = True) -> ComparisonOperator:
+        """Check if string field ends with suffix.
+
+        Args:
+            suffix: String suffix to check for
+            case_sensitive: Whether to perform case-sensitive comparison
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        operator = "ends_with" if case_sensitive else "iends_with"
+        return ComparisonOperator(self.field_name, operator, suffix)
+
+    def length(self, length: int) -> ComparisonOperator:
+        """Check string field length.
+
+        Args:
+            length: Expected length
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, "length", length)
+
+    # Document operations
+    def exists(self, field: str) -> ComparisonOperator:
+        """Check if document field exists.
+
+        Args:
+            field: Field name to check for existence
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, "exists", field)
+
+    def not_exists(self, field: str) -> ComparisonOperator:
+        """Check if document field does not exist.
+
+        Args:
+            field: Field name to check for non-existence
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, "not_exists", field)
+
+    def matches(self, query: Dict[str, Any]) -> ComparisonOperator:
+        """Check if document field matches query.
+
+        Args:
+            query: Query dictionary to match against
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.field_name, "matches", query)
 
 
 class BaseField(Generic[T]):
@@ -38,6 +374,7 @@ class BaseField(Generic[T]):
     - Field setup and initialization
     - Value validation and conversion
     - Type checking and constraints
+    - Comparison operations for filtering
 
     Args:
         **kwargs: Field options passed to subclasses.
@@ -72,6 +409,17 @@ class BaseField(Generic[T]):
         self.depends = kwargs.get("depends", [])
         self.validators = kwargs.get("validators", [])
         self.adapters: Dict[str, DatabaseAdapter[T]] = {}
+        self._comparison = FieldComparison(self.name)
+
+    @property
+    def comparison(self) -> FieldComparison:
+        """Get field comparison helper.
+
+        Returns:
+            FieldComparison: Field comparison helper
+        """
+        self._comparison.field_name = self.name  # Update field name in case it changed
+        return self._comparison
 
     @property
     def default(self) -> Optional[Any]:

@@ -7,19 +7,25 @@ It supports:
 - Case insensitive string matching
 - Default values
 - Database type mapping
+- Boolean comparison operations
 
 Examples:
     >>> class User(Model):
     ...     is_active = BooleanField(default=True)
     ...     is_admin = BooleanField(default=False)
     ...     has_verified_email = BooleanField()
+    ...
+    ...     # Query examples
+    ...     admins = User.find(User.is_admin.is_true())
+    ...     inactive = User.find(User.is_active.is_false())
+    ...     unverified = User.find(User.has_verified_email.negate())
 """
 
-from typing import Any, Final, Optional, Set
+from typing import Any, Final, Optional, Set, Union
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.fields.types import DatabaseValue
+from earnorm.fields.types import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 from earnorm.fields.validators.base import TypeValidator, Validator
 
 # Constants
@@ -27,7 +33,7 @@ TRUE_VALUES: Final[Set[str]] = {"true", "1", "yes", "on", "t", "y"}
 FALSE_VALUES: Final[Set[str]] = {"false", "0", "no", "off", "f", "n"}
 
 
-class BooleanField(BaseField[bool]):
+class BooleanField(BaseField[bool], FieldComparisonMixin):
     """Field for boolean values.
 
     This field type handles true/false values, with support for:
@@ -36,6 +42,7 @@ class BooleanField(BaseField[bool]):
     - Case insensitive string matching
     - Default values
     - Database type mapping
+    - Boolean comparison operations
 
     Attributes:
         true_values: Set of string values that convert to True
@@ -73,6 +80,77 @@ class BooleanField(BaseField[bool]):
             "postgres": {"type": "BOOLEAN"},
             "mysql": {"type": "BOOLEAN"},
         }
+
+    def _prepare_value(self, value: Any) -> DatabaseValue:
+        """Prepare boolean value for comparison.
+
+        Converts value to boolean using the same rules as convert().
+
+        Args:
+            value: Value to prepare
+
+        Returns:
+            Prepared boolean value
+        """
+        if value is None:
+            return None
+
+        try:
+            if isinstance(value, bool):
+                return value
+            elif isinstance(value, int):
+                return bool(value)
+            elif isinstance(value, str):
+                value = value.lower().strip()
+                if value in self.true_values:
+                    return True
+                if value in self.false_values:
+                    return False
+            return None
+        except (TypeError, ValueError):
+            return None
+
+    def is_true(self) -> ComparisonOperator:
+        """Check if value is True.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "equals", True)
+
+    def is_false(self) -> ComparisonOperator:
+        """Check if value is False.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "equals", False)
+
+    def equals(self, value: Union[bool, int, str]) -> ComparisonOperator:
+        """Check if value equals another value.
+
+        Args:
+            value: Value to compare with (will be converted to boolean)
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        prepared_value = self._prepare_value(value)
+        if prepared_value is None:
+            raise ValueError(
+                f"Cannot convert {value} to boolean. "
+                f"Valid true values: {sorted(self.true_values)}, "
+                f"valid false values: {sorted(self.false_values)}"
+            )
+        return ComparisonOperator(self.name, "equals", prepared_value)
+
+    def negate(self) -> ComparisonOperator:
+        """Get the opposite of the current value.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and operation
+        """
+        return ComparisonOperator(self.name, "negate", None)
 
     async def validate(self, value: Any) -> None:
         """Validate boolean value.

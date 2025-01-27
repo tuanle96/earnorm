@@ -34,12 +34,14 @@ from typing import (
     TypeVar,
     Union,
     cast,
+    runtime_checkable,
 )
 
 from earnorm.base.env import Environment
 from earnorm.base.model.meta import BaseModel
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
+from earnorm.fields.types import ComparisonOperator
 
 # Type variables with constraints
 M_co = TypeVar("M_co", bound=BaseModel, covariant=True)
@@ -56,6 +58,94 @@ DEFAULT_CONTEXT: Final[Dict[str, Any]] = {}
 VALID_OPERATORS: Final[FrozenSet[DomainOperator]] = frozenset(
     {"=", "!=", ">", ">=", "<", "<=", "in", "not in"}
 )
+
+
+@runtime_checkable
+class RelationComparisonMixin(Protocol):
+    """Mixin class for relation-specific comparison operations.
+
+    This class provides default implementations for comparison operations
+    specific to relation fields. Each relation type can override these
+    methods to provide type-specific comparison behavior.
+    """
+
+    name: str  # Field name for error messages
+
+    def is_empty(self) -> ComparisonOperator:
+        """Check if relation is empty (no related records).
+
+        Returns:
+            ComparisonOperator: Comparison operator for empty check
+        """
+        return ComparisonOperator(self.name, "is_empty", None)
+
+    def is_not_empty(self) -> ComparisonOperator:
+        """Check if relation is not empty (has related records).
+
+        Returns:
+            ComparisonOperator: Comparison operator for non-empty check
+        """
+        return ComparisonOperator(self.name, "is_not_empty", None)
+
+    def contains(self, value: Union[str, BaseModel]) -> ComparisonOperator:
+        """Check if relation contains a specific value.
+
+        Args:
+            value: Value to check for (model instance or ID)
+
+        Returns:
+            ComparisonOperator: Comparison operator for contains check
+        """
+        if isinstance(value, BaseModel):
+            value = str(value.id)  # type: ignore
+        return ComparisonOperator(self.name, "contains", value)
+
+    def size(self, operator: DomainOperator, value: int) -> ComparisonOperator:
+        """Compare the size of the relation.
+
+        Args:
+            operator: Comparison operator (=, !=, >, >=, <, <=)
+            value: Size to compare against
+
+        Returns:
+            ComparisonOperator: Comparison operator for size check
+
+        Raises:
+            ValueError: If operator is not valid for size comparison
+        """
+        if operator not in {"=", "!=", ">", ">=", "<", "<="}:
+            raise ValueError(f"Invalid operator for size comparison: {operator}")
+        return ComparisonOperator(self.name, f"size_{operator}", value)
+
+    def any(
+        self, field: str, operator: DomainOperator, value: Any
+    ) -> ComparisonOperator:
+        """Check if any related record matches a condition.
+
+        Args:
+            field: Field name to check
+            operator: Comparison operator
+            value: Value to compare against
+
+        Returns:
+            ComparisonOperator: Comparison operator for any check
+        """
+        return ComparisonOperator(self.name, "any", (field, operator, value))
+
+    def all(
+        self, field: str, operator: DomainOperator, value: Any
+    ) -> ComparisonOperator:
+        """Check if all related records match a condition.
+
+        Args:
+            field: Field name to check
+            operator: Comparison operator
+            value: Value to compare against
+
+        Returns:
+            ComparisonOperator: Comparison operator for all check
+        """
+        return ComparisonOperator(self.name, "all", (field, operator, value))
 
 
 class ModelProtocol(Protocol[M_co]):
@@ -92,7 +182,7 @@ class ModelList(BaseModel, Generic[M]):
         self.items = items
 
 
-class RelationField(BaseField[M]):
+class RelationField(BaseField[M], RelationComparisonMixin):
     """Base class for relation fields.
 
     This class provides common functionality for relation fields:
@@ -100,6 +190,7 @@ class RelationField(BaseField[M]):
     - Back references and cascade operations
     - Domain filtering and context
     - Validation and type checking
+    - Comparison operations
 
     Args:
         model_ref: Referenced model name or class

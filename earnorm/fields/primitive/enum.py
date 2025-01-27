@@ -6,6 +6,7 @@ It supports:
 - String/integer conversion
 - Case sensitivity control
 - Database type mapping
+- Enum comparison operations
 
 Examples:
     >>> from enum import Enum
@@ -17,14 +18,19 @@ Examples:
     >>> class User(Model):
     ...     status = EnumField(UserStatus, default=UserStatus.ACTIVE)
     ...     role = EnumField(UserRole, required=True)
+    ...
+    ...     # Query examples
+    ...     active_users = User.find(User.status.equals(UserStatus.ACTIVE))
+    ...     banned_users = User.find(User.status.in_list([UserStatus.BANNED]))
+    ...     staff = User.find(User.role.in_list([UserRole.ADMIN, UserRole.MODERATOR]))
 """
 
 from enum import Enum
-from typing import Any, Final, Generic, Optional, Type, TypeVar
+from typing import Any, Final, Generic, List, Optional, Type, TypeVar, Union
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.fields.types import DatabaseValue
+from earnorm.fields.types import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 from earnorm.fields.validators.base import TypeValidator, Validator
 
 # Type variable for enum type
@@ -34,7 +40,7 @@ E = TypeVar("E", bound=Enum)
 DEFAULT_CASE_SENSITIVE: Final[bool] = True
 
 
-class EnumField(BaseField[E], Generic[E]):
+class EnumField(BaseField[E], FieldComparisonMixin, Generic[E]):
     """Field for enum values.
 
     This field type handles enumerated values, with support for:
@@ -42,6 +48,7 @@ class EnumField(BaseField[E], Generic[E]):
     - String/integer conversion
     - Case sensitivity control
     - Database type mapping
+    - Enum comparison operations
 
     Attributes:
         enum_class: Enum class to use
@@ -256,3 +263,101 @@ class EnumField(BaseField[E], Generic[E]):
                 field_name=self.name,
                 code="conversion_error",
             ) from e
+
+    def _prepare_value(self, value: Any) -> DatabaseValue:
+        """Prepare enum value for comparison.
+
+        Converts value to enum value (string or int) for database comparison.
+
+        Args:
+            value: Value to prepare
+
+        Returns:
+            Prepared enum value or None
+        """
+        if value is None:
+            return None
+
+        try:
+            if isinstance(value, self.enum_class):
+                return value.value
+            elif isinstance(value, (str, int)):
+                # Try to convert to enum first
+                for member in self.enum_class.__members__.values():
+                    if (
+                        isinstance(member.value, str)
+                        and isinstance(value, str)
+                        and (
+                            (self.case_sensitive and member.value == value)
+                            or (
+                                not self.case_sensitive
+                                and member.value.upper() == value.upper()
+                            )
+                        )
+                    ) or member.value == value:
+                        return member.value
+            return None
+        except (TypeError, ValueError):
+            return None
+
+    def equals(self, value: Union[E, str, int]) -> ComparisonOperator:
+        """Check if value equals another value.
+
+        Args:
+            value: Value to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "eq", self._prepare_value(value))
+
+    def not_equals(self, value: Union[E, str, int]) -> ComparisonOperator:
+        """Check if value does not equal another value.
+
+        Args:
+            value: Value to compare with
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and value
+        """
+        return ComparisonOperator(self.name, "ne", self._prepare_value(value))
+
+    def in_list(self, values: List[Union[E, str, int]]) -> ComparisonOperator:
+        """Check if value is in list of values.
+
+        Args:
+            values: List of values to check against
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and values
+        """
+        prepared_values = [self._prepare_value(value) for value in values]
+        return ComparisonOperator(self.name, "in", prepared_values)
+
+    def not_in_list(self, values: List[Union[E, str, int]]) -> ComparisonOperator:
+        """Check if value is not in list of values.
+
+        Args:
+            values: List of values to check against
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and values
+        """
+        prepared_values = [self._prepare_value(value) for value in values]
+        return ComparisonOperator(self.name, "not_in", prepared_values)
+
+    def is_null(self) -> ComparisonOperator:
+        """Check if value is null.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name
+        """
+        return ComparisonOperator(self.name, "is_null", None)
+
+    def is_not_null(self) -> ComparisonOperator:
+        """Check if value is not null.
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name
+        """
+        return ComparisonOperator(self.name, "is_not_null", None)
