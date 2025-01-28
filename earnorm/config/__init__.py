@@ -1,24 +1,8 @@
-"""Config module.
+"""Config module for EarnORM.
 
-This module provides configuration management for EarnORM.
-It includes:
-- SystemConfig model for storing and managing configuration
+This module provides configuration management functionality.
 """
 
-from earnorm.config.exceptions import (
-    ConfigBackupError,
-    ConfigError,
-    ConfigMigrationError,
-    ConfigValidationError,
-)
 from earnorm.config.model import SystemConfig
 
-__all__ = [
-    # Exceptions
-    "ConfigError",
-    "ConfigValidationError",
-    "ConfigMigrationError",
-    "ConfigBackupError",
-    # Models
-    "SystemConfig",
-]
+__all__ = ["SystemConfig"]

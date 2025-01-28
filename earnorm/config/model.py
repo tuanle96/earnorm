@@ -33,8 +33,8 @@ from dotenv import load_dotenv
 
 from earnorm.base import BaseModel
 from earnorm.cache import cached
-from earnorm.config.exceptions import ConfigError, ConfigValidationError
 from earnorm.di import container
+from earnorm.exceptions import ConfigError, ConfigValidationError
 from earnorm.fields.primitive.boolean import BooleanField
 from earnorm.fields.primitive.datetime import DateTimeField
 from earnorm.fields.primitive.number import IntegerField

@@ -19,6 +19,70 @@ class EarnORMError(Exception):
         super().__init__(message)
 
 
+# Config-related exceptions
+class ConfigError(EarnORMError):
+    """Base class for config module exceptions.
+
+    This class serves as the base for all configuration-related errors.
+    """
+
+    def __init__(self, message: str) -> None:
+        """Initialize config error.
+
+        Args:
+            message: Error message
+        """
+        super().__init__(f"Config error: {message}")
+
+
+class ConfigValidationError(ConfigError):
+    """Error raised when config validation fails.
+
+    This error is raised when configuration validation fails,
+    typically when required fields are missing or have invalid values.
+    """
+
+    def __init__(self, message: str) -> None:
+        """Initialize config validation error.
+
+        Args:
+            message: Error message
+        """
+        super().__init__(f"Validation error: {message}")
+
+
+class ConfigMigrationError(ConfigError):
+    """Error raised when config migration fails.
+
+    This error is raised when configuration migration between versions fails,
+    typically when there are incompatible changes or data corruption.
+    """
+
+    def __init__(self, message: str) -> None:
+        """Initialize config migration error.
+
+        Args:
+            message: Error message
+        """
+        super().__init__(f"Migration error: {message}")
+
+
+class ConfigBackupError(ConfigError):
+    """Error raised when config backup/restore fails.
+
+    This error is raised when configuration backup or restore operations fail,
+    typically due to file system issues or data corruption.
+    """
+
+    def __init__(self, message: str) -> None:
+        """Initialize config backup error.
+
+        Args:
+            message: Error message
+        """
+        super().__init__(f"Backup error: {message}")
+
+
 class ValidationError(EarnORMError):
     """Error raised when validation fails.
 
