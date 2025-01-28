@@ -8,7 +8,7 @@ Examples:
     >>> config = container.get("config")
     >>> print(config.mongodb_uri)
     >>> config.redis_host = "localhost"
-    >>> await config.save()
+    >>> await config.write({"redis_host": "localhost"})
 """
 
 import logging
@@ -73,33 +73,23 @@ def validate_pool_sizes(min_size: int, max_size: int) -> None:
 
 
 class SystemConfig(BaseModel):
-    """System configuration singleton model.
+    """System configuration model.
 
-    This model represents system-wide configuration and follows
-    the singleton pattern - only one instance exists in the database.
-
-    The config is automatically loaded into the DI container on startup
-    and can be accessed through the environment in BaseModel:
+    This model represents system-wide configuration with validation rules.
+    Config can be loaded from environment variables or YAML files.
 
     Examples:
-        ```python
-        class MyModel(BaseModel):
-            def my_method(self):
-                config = self.env.config
-                mongo_uri = config.mongodb_uri
-        ```
+        >>> # Load from .env file
+        >>> config = await SystemConfig.load_env(".env")
+        >>> print(config.database_uri)
+
+        >>> # Load from YAML file
+        >>> config = await SystemConfig.load_yaml("config.yaml")
+        >>> print(config.redis_host)
     """
 
     # Collection configuration
-    _collection = "system_config"
     _name = "system_config"
-
-    # Collection indexes
-    indexes = [
-        {"keys": [("version", 1)]},
-        {"keys": [("created_at", -1)]},
-        {"keys": [("updated_at", -1)]},
-    ]
 
     # Singleton instance
     _instance: ClassVar[Optional["SystemConfig"]] = None
@@ -227,8 +217,21 @@ class SystemConfig(BaseModel):
     def __init__(self, **data: Any) -> None:
         """Initialize config instance."""
         super().__init__(**data)
-        # Run all validations
-        self._validate_all()
+
+    def validate(self) -> None:
+        """Validate all configuration settings.
+
+        This method runs all validation checks on the configuration:
+        - Database configuration (URI, pool sizes, timeouts)
+        - Redis configuration (host, port, pool sizes)
+        - Cache configuration (backend type, TTL values)
+
+        Raises:
+            ConfigValidationError: If any validation check fails
+        """
+        self._validate_database_config()
+        self._validate_redis_config()
+        self._validate_cache_config()
 
     @property
     def database(self) -> Dict[str, Any]:
@@ -255,17 +258,29 @@ class SystemConfig(BaseModel):
     @classmethod
     @cached(ttl=300)
     async def get_instance(cls: Type[T]) -> T:
-        """Get singleton instance of config."""
+        """Get singleton instance of config.
+
+        This method ensures only one config instance exists in the database.
+        If no config exists, it creates a new one with default values.
+        If multiple configs exist, it keeps the first one and deletes the rest.
+
+        Returns:
+            SystemConfig instance
+
+        Raises:
+            ConfigError: If failed to get or create config
+        """
         if cls._get_instance() is None:
             instances = await cls.search([])
 
             if not instances:
-                instance = cls()
-                await instance.save()
+                # Create new instance with default values
+                instance = await cls.create({})
                 cls._set_instance(instance)
             else:
                 cls._set_instance(instances)
 
+                # Delete duplicate configs if any
                 if len(instances) > 1:
                     for other in instances[1:]:
                         await other.unlink()
@@ -415,58 +430,117 @@ class SystemConfig(BaseModel):
                 logger.error("Failed to notify listener: %s", str(e))
 
     @classmethod
-    def from_env(cls) -> "SystemConfig":
-        """Create config instance from environment variables.
+    async def load_env(
+        cls, path: str, *, prefix: str = "EARNORM_", validate: bool = True
+    ) -> "SystemConfig":
+        """Load and create config from environment variables.
+
+        This method:
+        1. Loads configuration from .env file and environment variables
+        2. Creates a new config record in database
+        3. Optionally validates the configuration
+
+        Args:
+            path: Path to .env file
+            prefix: Prefix for environment variables (default: EARNORM_)
+            validate: Whether to validate config after loading (default: True)
 
         Returns:
-            SystemConfig instance with values from environment
+            Created SystemConfig instance
 
-        Examples:
-            >>> config = SystemConfig.from_env()
-            >>> print(config.mongodb_uri)
+        Raises:
+            ConfigError: If config file not found or invalid
+            ConfigValidationError: If validation fails and validate=True
+            DatabaseError: If database operation fails
         """
-        # Load .env file if exists
-        env_file = Path(".env")
-        if env_file.exists():
-            load_dotenv(env_file)
+        try:
+            # Load .env file if provided
+            if path:
+                env_path = Path(path)
+                if not env_path.exists():
+                    raise ConfigError(f"Config file not found: {path}")
+                load_dotenv(env_path)
 
-        # Get all environment variables with config prefixes
-        data: Dict[str, Any] = {}
-        for key, value in os.environ.items():
-            if any(key.startswith(prefix) for prefix in CONFIG_PREFIXES):
-                field_name = key.lower()
-                if field_name in cls._fields:
-                    data[field_name] = value
+            # Get all environment variables with prefix
+            data: Dict[str, Any] = {}
+            for key, value in os.environ.items():
+                # Check both custom prefix and default prefixes
+                if key.startswith(prefix) or any(
+                    key.startswith(p) for p in CONFIG_PREFIXES
+                ):
+                    # Remove prefix and convert to lowercase
+                    field_name = key.lower()
+                    if field_name in cls._fields:
+                        data[field_name] = value
 
-        return cls(**data)
+            # Create config instance
+            config = await cls.create(data)
+
+            # Validate if requested
+            if validate:
+                config.validate()
+
+            return config
+
+        except Exception as e:
+            if isinstance(e, (ConfigError, ConfigValidationError)):
+                raise
+            raise ConfigError(f"Failed to load config from environment: {e}") from e
 
     @classmethod
-    def from_yaml(cls, path: str) -> "SystemConfig":
-        """Create config instance from YAML file.
+    async def load_yaml(cls, path: str, *, validate: bool = True) -> "SystemConfig":
+        """Load and create config from YAML file.
+
+        This method:
+        1. Loads configuration from YAML file
+        2. Creates a new config record in database
+        3. Optionally validates the configuration
 
         Args:
             path: Path to YAML file
+            validate: Whether to validate config after loading (default: True)
 
         Returns:
-            SystemConfig instance with values from YAML
+            Created SystemConfig instance
 
-        Examples:
-            >>> config = SystemConfig.from_yaml("config.yaml")
-            >>> print(config.mongodb_uri)
+        Raises:
+            ConfigError: If config file not found or invalid
+            ConfigValidationError: If validation fails and validate=True
+            DatabaseError: If database operation fails
         """
-        with open(path, encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-        return cls(**data)
+        try:
+            # Validate file exists
+            yaml_path = Path(path)
+            if not yaml_path.exists():
+                raise ConfigError(f"Config file not found: {path}")
+
+            # Load and parse YAML
+            with open(yaml_path, encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+
+            # Create config instance
+            config = await cls.create(data)
+
+            # Validate if requested
+            if validate:
+                config.validate()
+
+            return config
+
+        except Exception as e:
+            if isinstance(e, (ConfigError, ConfigValidationError)):
+                raise
+            raise ConfigError(f"Failed to load config from YAML: {e}") from e
 
     async def to_yaml(self, path: str) -> None:
-        """Save config to YAML file.
+        """Export config to YAML file.
 
         Args:
-            path: Path to save YAML file
+            path: Path to export YAML file
 
         Examples:
-            >>> config = await SystemConfig.get_instance()
-            >>> await config.to_yaml("config.yaml")
+            >>> config = await SystemConfig.load_yaml("config.yaml")
+            >>> await config.to_yaml("config_backup.yaml")
         """
         with open(path, "w", encoding="utf-8") as f:
             yaml.dump(self.to_dict(), f)
@@ -508,26 +582,29 @@ class SystemConfig(BaseModel):
         """Get singleton instance."""
         return cls._instance
 
-    async def reload(self) -> None:
-        """Reload config from database."""
-        try:
-
-            # Reload from database
-            instance = await self.__class__.get_instance()
-
-            # Update container
-            container.register("config", instance)
-
-            logger.info("System config reloaded successfully")
-        except Exception as e:
-            logger.error("Failed to reload system config: %s", str(e))
-            raise ConfigError(f"Failed to reload system config: {e}") from e
-
     async def apply(self) -> None:
-        """Apply config changes to system."""
+        """Apply config changes to system.
+
+        This method:
+        1. Validates all configuration settings
+        2. Updates the config in database
+        3. Notifies all listeners of changes
+        4. Reconfigures dependent services
+
+        Raises:
+            ConfigError: If applying changes fails
+            ConfigValidationError: If validation fails
+            DatabaseError: If database update fails
+        """
         try:
-            # Save changes
-            await self.save()
+            # Validate all settings
+            self._validate_all()
+
+            # Update in database
+            await self.write(self.__dict__)
+
+            # Notify listeners
+            await self.notify_listeners()
 
             # Get all services that depend on config
             database = await container.get("database_registry")
@@ -543,3 +620,26 @@ class SystemConfig(BaseModel):
         except Exception as e:
             logger.error("Failed to apply system config: %s", str(e))
             raise ConfigError(f"Failed to apply system config: {e}") from e
+
+    async def reload(self) -> None:
+        """Reload config from database.
+
+        This method:
+        1. Reloads the config from database
+        2. Updates the singleton instance
+        3. Updates the DI container
+
+        Raises:
+            ConfigError: If reload fails
+        """
+        try:
+            # Reload from database
+            instance = await self.__class__.get_instance()
+
+            # Update container
+            container.register("config", instance)
+
+            logger.info("System config reloaded successfully")
+        except Exception as e:
+            logger.error("Failed to reload system config: %s", str(e))
+            raise ConfigError(f"Failed to reload system config: {e}") from e

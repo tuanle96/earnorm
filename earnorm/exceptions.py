@@ -1,38 +1,35 @@
-"""Global exceptions for EarnORM.
+"""EarnORM exceptions.
 
-This module provides all custom exceptions used throughout EarnORM.
+This module contains all custom exceptions used in EarnORM.
 """
 
 from typing import Any, Dict, Optional
 
 
 class EarnORMError(Exception):
-    """Base class for all EarnORM errors."""
+    """Base class for all EarnORM exceptions."""
 
     def __init__(self, message: str) -> None:
-        """Initialize EarnORM error.
+        """Initialize exception.
 
         Args:
             message: Error message
         """
-        self.message = message
         super().__init__(message)
+        self.message = message
 
 
 # Config-related exceptions
 class ConfigError(EarnORMError):
-    """Base class for config module exceptions.
-
-    This class serves as the base for all configuration-related errors.
-    """
+    """Raised when there is an error in configuration."""
 
     def __init__(self, message: str) -> None:
-        """Initialize config error.
+        """Initialize exception.
 
         Args:
             message: Error message
         """
-        super().__init__(f"Config error: {message}")
+        super().__init__(f"Configuration error: {message}")
 
 
 class ConfigValidationError(ConfigError):
@@ -175,14 +172,9 @@ class FieldError(EarnORMError):
 class FieldValidationError(FieldError):
     """Error raised when field validation fails.
 
-        This error is raised when a field value fails validation,
-        either due to type mismatch, constraint violation, or
-        custom validation rules.
-    ko
-        Attributes:
-            message: Error message
-            field_name: Name of field that caused the error
-            code: Error code for identifying validation error type
+    This error is raised when a field value fails validation,
+    either due to type mismatch, constraint violation, or
+    custom validation rules.
     """
 
     def __init__(
@@ -460,3 +452,171 @@ class CacheKeyError(CacheError):
         """
         self.key = key
         super().__init__(f"{message} (key={key})", backend=backend)
+
+
+# Dependency Injection related exceptions
+class DIError(EarnORMError):
+    """Base class for all DI exceptions.
+
+    This error is raised when there are issues with:
+    - Service registration
+    - Service resolution
+    - Circular dependencies
+    - Missing dependencies
+    - Event handling
+    """
+
+    def __init__(self, message: str) -> None:
+        """Initialize DI error.
+
+        Args:
+            message: Error message describing the DI issue
+        """
+        super().__init__(f"DI error: {message}")
+
+
+class CircularDependencyError(DIError):
+    """Error raised when circular dependency is detected.
+
+    This error is raised when a circular dependency is detected
+    in the dependency graph during service resolution.
+    """
+
+    def __init__(self, message: str) -> None:
+        """Initialize circular dependency error.
+
+        Args:
+            message: Error message describing the circular dependency
+        """
+        super().__init__(f"Circular dependency detected: {message}")
+
+
+class EventError(DIError):
+    """Error raised when event handling fails.
+
+    This error is raised when there are issues with:
+    - Event registration
+    - Event emission
+    - Event handler execution
+    """
+
+    def __init__(self, message: str) -> None:
+        """Initialize event error.
+
+        Args:
+            message: Error message describing the event error
+        """
+        super().__init__(f"Event error: {message}")
+
+
+class ServiceNotFoundError(DIError):
+    """Error raised when service is not found.
+
+    This error is raised when trying to get a service that:
+    - Is not registered
+    - Has been unregistered
+    - Cannot be created by any factory
+    """
+
+    def __init__(self, name: str) -> None:
+        """Initialize service not found error.
+
+        Args:
+            name: Name of the service that was not found
+        """
+        super().__init__(f"Service not found: {name}")
+
+
+class ServiceInitializationError(DIError):
+    """Error raised when service initialization fails.
+
+    This error is raised when:
+    - Service constructor fails
+    - Service async initialization fails
+    - Service dependencies cannot be resolved
+    """
+
+    def __init__(self, name: str, message: str) -> None:
+        """Initialize service initialization error.
+
+        Args:
+            name: Name of the service that failed to initialize
+            message: Error message describing the initialization error
+        """
+        super().__init__(f"Failed to initialize service {name}: {message}")
+
+
+class FactoryError(DIError):
+    """Error raised when factory operation fails.
+
+    This error is raised when:
+    - Factory registration fails
+    - Factory creation fails
+    - Factory dependencies cannot be resolved
+    """
+
+    def __init__(self, name: str, message: str) -> None:
+        """Initialize factory error.
+
+        Args:
+            name: Name of the factory that failed
+            message: Error message describing the factory error
+        """
+        super().__init__(f"Factory error for {name}: {message}")
+
+
+class RegistrationError(EarnORMError):
+    """Error raised when service registration fails.
+
+    This error is raised when there are issues with:
+    - Service registration in DI container
+    - Model registration in registry
+    - Event handler registration
+    - Connection pool registration
+    """
+
+    def __init__(self, message: str) -> None:
+        """Initialize registration error.
+
+        Args:
+            message: Error message describing the registration issue
+        """
+        super().__init__(f"Registration error: {message}")
+
+
+class CleanupError(EarnORMError):
+    """Error raised when cleanup process fails.
+
+    This error is raised when there are issues with:
+    - Resource cleanup
+    - Connection pool shutdown
+    - Event handler cleanup
+    - Cache invalidation
+    """
+
+    def __init__(self, message: str) -> None:
+        """Initialize cleanup error.
+
+        Args:
+            message: Error message describing the cleanup issue
+        """
+        super().__init__(f"Cleanup error: {message}")
+
+
+class InitializationError(EarnORMError):
+    """Error raised when initialization fails.
+
+    This error is raised when there are issues with:
+    - Framework initialization
+    - Service initialization
+    - Connection pool initialization
+    - Cache initialization
+    """
+
+    def __init__(self, message: str) -> None:
+        """Initialize initialization error.
+
+        Args:
+            message: Error message describing the initialization issue
+        """
+        super().__init__(f"Initialization error: {message}")

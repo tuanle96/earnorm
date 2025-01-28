@@ -927,3 +927,42 @@ class BaseModel(DatabaseModel, metaclass=MetaModel):
             ValidationError: If validation fails
         """
         pass
+
+    @classmethod
+    async def create(cls, values: Dict[str, Any]) -> Self:
+        """Create a new record.
+
+        This method creates a new record in the database with the given values.
+        It performs the following steps:
+        1. Create a new instance of the model
+        2. Validate the values
+        3. Convert values to database format
+        4. Insert into database
+        5. Return the new record
+
+        Args:
+            values: Field values to create record with
+
+        Returns:
+            New record instance
+
+        Raises:
+            FieldValidationError: If validation fails
+            DatabaseError: If database operation fails
+            UniqueConstraintError: If unique constraint is violated
+
+        Examples:
+            >>> user = await User.create({
+            ...     "name": "John Doe",
+            ...     "email": "john@example.com",
+            ...     "age": 30
+            ... })
+            >>> print(user.id)  # New record ID
+        """
+        # Create new instance
+        record = cls._browse(cls._env, [], [])
+
+        # Create record
+        await record._create(values)
+
+        return record

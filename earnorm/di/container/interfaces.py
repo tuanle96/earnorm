@@ -2,6 +2,8 @@
 
 from typing import Any, Callable, Protocol, runtime_checkable
 
+from earnorm.config.model import SystemConfig
+
 
 @runtime_checkable
 class ContainerInterface(Protocol):
@@ -64,10 +66,10 @@ class ContainerInterface(Protocol):
         """
         ...
 
-    async def init(self, **config: Any) -> None:
+    async def init(self, config: SystemConfig) -> None:
         """Initialize container.
 
         Args:
-            **config: Configuration options
+            config: System configuration instance
         """
         ...

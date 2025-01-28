@@ -85,16 +85,19 @@ async def register_database_services(config: SystemConfig) -> None:
     # Register MongoDB adapter
     container.register("mongodb", MongoAdapter)
 
+    if not config.database_uri or not config.database_name:
+        return
+
     # Create and register MongoDB pool
     mongo_pool = cast(
         AsyncPoolProtocol[DB, COLL],
         await create_mongo_pool(
-            uri=str(config.mongodb_uri),
-            database=str(config.mongodb_database),
-            min_size=int(await config.mongodb_min_pool_size),
-            max_size=int(await config.mongodb_max_pool_size),
-            validate_on_borrow=bool(await config.mongodb_validate_on_borrow),
-            test_on_return=bool(await config.mongodb_test_on_return),
+            uri=config.database_uri or "",
+            database=config.database_name,
+            min_size=int(config.database_max_pool_size),
+            max_size=int(config.database_max_pool_size),
+            validate_on_borrow=bool(config.database_validate_on_borrow),
+            test_on_return=bool(config.database_test_on_return),
         ),
     )
     await mongo_pool.init()
@@ -108,16 +111,19 @@ async def register_pool_services(config: SystemConfig) -> None:
     - MongoDB connection pool
     - Redis pool for event system
     """
+    if not config.redis_host or not config.redis_port or not config.redis_db:
+        return
+
     # Create Redis pool for event and cache system
     redis_pool = cast(
         AsyncPoolProtocol[Redis, None],
         await create_redis_pool(
-            host=str(config.redis_host),
-            port=int(config.redis_port),
-            db=int(config.redis_db),
-            min_size=int(config.redis_min_pool_size),
-            max_size=int(config.redis_max_pool_size),
-            timeout=int(config.redis_pool_timeout),
+            host=config.redis_host or "localhost",
+            port=int(config.redis_port or 6379),
+            db=int(config.redis_db or 0),
+            min_size=int(config.redis_min_pool_size or 1),
+            max_size=int(config.redis_max_pool_size or 10),
+            timeout=int(config.redis_pool_timeout or 10),
         ),
     )
 
