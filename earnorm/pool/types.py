@@ -3,12 +3,10 @@
 This module contains all type hints used in the pool module.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Set, TypeVar, Union
+from typing import Any, Dict, List, Set, TypeVar, Union
 
-if TYPE_CHECKING:
-    from motor.motor_asyncio import AsyncIOMotorDatabase, AsyncIOMotorCollection
-    from redis.asyncio import Redis
-
+from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
+from redis.asyncio import Redis  # pylint: disable=import-error,no-name-in-module
 from typing_extensions import TypeAlias
 
 # Generic types
