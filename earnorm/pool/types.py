@@ -3,13 +3,29 @@
 This module contains all type hints used in the pool module.
 """
 
-from typing import Any, Dict, List, Set, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Set, TypeVar, Union
+
+if TYPE_CHECKING:
+    from motor.motor_asyncio import AsyncIOMotorDatabase, AsyncIOMotorCollection
+    from redis.asyncio import Redis
+
 from typing_extensions import TypeAlias
 
 # Generic types
 T = TypeVar("T")
 DB = TypeVar("DB")
 COLL = TypeVar("COLL")
+
+# Type aliases for MongoDB
+MongoDBType = AsyncIOMotorDatabase[Dict[str, Any]]  # type: ignore
+MongoCollectionType = AsyncIOMotorCollection[Dict[str, Any]]  # type: ignore
+
+# Type alias for Redis
+RedisType = Redis  # type: ignore
+
+# Type variables for pools
+DBType = TypeVar("DBType")
+CollType = TypeVar("CollType")
 
 # MongoDB types
 MongoDocument: TypeAlias = Dict[str, Any]

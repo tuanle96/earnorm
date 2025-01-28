@@ -35,6 +35,7 @@ class Environment:
     Examples:
         >>> env = Environment.get_instance()
         >>> await env.init(config)
+        >>> adapter = await env.get_adapter()
         >>> User = env.get_model('res.users')
         >>> cache = env.cache_manager
         >>> events = env.event_bus
@@ -132,7 +133,7 @@ class Environment:
             logger.error("Failed to cleanup environment: %s", str(e))
             raise RuntimeError(f"Environment cleanup failed: {e}") from e
 
-    def get_service(self, name: str, required: bool = True) -> Any:
+    async def get_service(self, name: str, required: bool = True) -> Any:
         """Get service from DI container.
 
         Args:
@@ -145,30 +146,37 @@ class Environment:
         Raises:
             RuntimeError: If service not found and required=True
         """
-        service = container.get(name)
+        service = await container.get(name)
         if service is None and required:
             raise RuntimeError(f"Service {name} not found in DI container")
         return service
 
     @property
-    def cache_manager(self) -> CacheManager:
+    async def cache_manager(self) -> CacheManager:
         """Get cache manager.
 
         Returns:
             Cache manager instance
         """
-        return self.get_service("cache_manager")
+        return await self.get_service("cache_manager")
 
     @property
     def adapter(self) -> DatabaseAdapter[DatabaseModel]:
-        """Get database adapter.
+        """Get database adapter synchronously.
 
         Returns:
             Database adapter instance
-        """
-        return self.get_service("database_adapter")
 
-    def get_model(self, name: str) -> Type[BaseModel]:
+        Raises:
+            RuntimeError: If adapter not initialized
+        """
+        if not self._initialized:
+            raise RuntimeError("Environment not initialized")
+        if self._adapter is None:
+            raise RuntimeError("Adapter not initialized. Call init() first")
+        return self._adapter
+
+    async def get_model(self, name: str) -> Type[BaseModel]:
         """Get model by name.
 
         Args:
@@ -180,7 +188,7 @@ class Environment:
         Raises:
             ValueError: If model not found
         """
-        model = self.get_service(f"model.{name}", required=False)
+        model = await self.get_service(f"model.{name}", required=False)
         if model is None:
             raise ValueError(f"Model {name} not found")
         return model

@@ -34,7 +34,6 @@ from earnorm.cache.core.backend import BaseCacheBackend
 from earnorm.cache.core.exceptions import CacheError
 from earnorm.cache.core.serializer import SerializerProtocol
 from earnorm.cache.serializers.json import JsonSerializer
-from earnorm.di import Container
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +78,6 @@ class CacheManager:
 
     def __init__(
         self,
-        container: Container,
         backend_type: str = "redis",
         prefix: str = "app",
         ttl: int = 300,
@@ -98,7 +96,6 @@ class CacheManager:
         if backend_type not in ["redis"]:
             raise CacheError(f"Unsupported backend type: {backend_type}")
 
-        self._container = container
         self._backend_type = backend_type
         self._prefix = prefix
         self._ttl = ttl

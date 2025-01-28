@@ -13,25 +13,15 @@ Examples:
     ```
 """
 
-from typing import Any, Dict, TypeVar, cast
-
-from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
-
-try:
-    from redis.asyncio import Redis
-except ImportError:
-    Redis = None
+from typing import TypeVar, cast
 
 from earnorm.base.database.adapters.mongo import MongoAdapter
 from earnorm.base.env import Environment
 from earnorm.config import SystemConfig
 from earnorm.di import container
 from earnorm.pool import PoolRegistry, create_mongo_pool, create_redis_pool
-from earnorm.pool.protocols.pool import AsyncPoolProtocol
-
-# Type hints for MongoDB
-DB = AsyncIOMotorDatabase[Dict[str, Any]]
-COLL = AsyncIOMotorCollection[Dict[str, Any]]
+from earnorm.pool.protocols import AsyncPoolProtocol
+from earnorm.pool.types import MongoCollectionType, MongoDBType, RedisType
 
 # Type vars for pools
 DBType = TypeVar("DBType")  # pylint: disable=invalid-name
@@ -90,14 +80,12 @@ async def register_database_services(config: SystemConfig) -> None:
 
     # Create and register MongoDB pool
     mongo_pool = cast(
-        AsyncPoolProtocol[DB, COLL],
+        AsyncPoolProtocol[MongoDBType, MongoCollectionType],
         await create_mongo_pool(
             uri=config.database_uri or "",
             database=config.database_name,
-            min_size=int(config.database_max_pool_size),
-            max_size=int(config.database_max_pool_size),
-            validate_on_borrow=bool(config.database_validate_on_borrow),
-            test_on_return=bool(config.database_test_on_return),
+            min_size=int(config.database_min_pool_size or 1),
+            max_size=int(config.database_max_pool_size or 10),
         ),
     )
     await mongo_pool.init()
@@ -116,7 +104,7 @@ async def register_pool_services(config: SystemConfig) -> None:
 
     # Create Redis pool for event and cache system
     redis_pool = cast(
-        AsyncPoolProtocol[Redis, None],
+        AsyncPoolProtocol[RedisType, None],
         await create_redis_pool(
             host=config.redis_host or "localhost",
             port=int(config.redis_port or 6379),
@@ -145,7 +133,7 @@ async def register_cache_services(config: SystemConfig) -> None:
     # Register cache manager
     container.register(
         "cache_manager",
-        CacheManager(container=container, ttl=int(config.cache_ttl)),
+        CacheManager(ttl=int(config.cache_ttl or 60)),
     )
 
 

@@ -192,7 +192,7 @@ class ManyToManyField(RelationField[ModelList[M]]):
         # Resolve through model reference if string
         if isinstance(self.through, str):
             env = Environment.get_instance()
-            self._through_class = env.get_model(self.through)
+            self._through_class = await env.get_model(self.through)
 
     def _create_back_reference(self) -> "ManyToManyField[M]":
         """Create back reference field.
