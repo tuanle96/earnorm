@@ -156,8 +156,6 @@ logger = logging.getLogger(__name__)
 async def init(
     config_path: str | Path,
     *,
-    env_prefix: str = "EARNORM_",
-    validate_config: bool = True,
     auto_cleanup: bool = True,
 ) -> SystemConfig:
     """Initialize EarnORM with the provided configuration.
@@ -210,13 +208,9 @@ async def init(
         try:
             # Load and create config based on file type
             if config_path.suffix == ".yaml":
-                config = await SystemConfig.load_yaml(
-                    str(config_path), validate=validate_config
-                )
+                config = await SystemConfig.load_yaml(str(config_path))
             else:
-                config = await SystemConfig.load_env(
-                    str(config_path), prefix=env_prefix, validate=validate_config
-                )
+                config = await SystemConfig.load_env(str(config_path))
         except (ConfigError, yaml.YAMLError) as e:
             raise ConfigError(f"Failed to load config from {config_path}: {e}") from e
 

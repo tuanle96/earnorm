@@ -14,26 +14,12 @@ Examples:
 import logging
 import os
 from pathlib import Path
-from typing import (
-    Any,
-    Awaitable,
-    Callable,
-    ClassVar,
-    Dict,
-    List,
-    Optional,
-    Type,
-    TypeVar,
-    Union,
-    cast,
-)
+from typing import Any, ClassVar, Dict, Optional, Self, TypeVar, Union
 
 import yaml
 from dotenv import load_dotenv
 
 from earnorm.base import BaseModel
-from earnorm.cache import cached
-from earnorm.di import container
 from earnorm.exceptions import ConfigError, ConfigValidationError
 from earnorm.fields.primitive.boolean import BooleanField
 from earnorm.fields.primitive.datetime import DateTimeField
@@ -41,9 +27,6 @@ from earnorm.fields.primitive.number import IntegerField
 from earnorm.fields.primitive.string import StringField
 
 logger = logging.getLogger(__name__)
-
-# Type for config change listener
-ConfigListener = Callable[["SystemConfig"], Awaitable[None]]
 
 # Config prefixes
 CONFIG_PREFIXES = ("MONGO_", "REDIS_", "CACHE_", "EVENT_")
@@ -93,9 +76,6 @@ class SystemConfig(BaseModel):
 
     # Singleton instance
     _instance: ClassVar[Optional["SystemConfig"]] = None
-
-    # Change listeners
-    _listeners: ClassVar[List[ConfigListener]] = []
 
     # Version and timestamps
     version = StringField(default="1.0.0")
@@ -248,398 +228,128 @@ class SystemConfig(BaseModel):
             "password": self.database_password,
             "pool_size": self.database_max_pool_size,
             "pool_timeout": self.database_pool_timeout,
-            "pool_recycle": self.database_max_lifetime,
+            "max_lifetime": self.database_max_lifetime,
+            "idle_timeout": self.database_idle_timeout,
             "ssl": self.database_ssl,
             "ssl_ca": self.database_ssl_ca,
             "ssl_cert": self.database_ssl_cert,
             "ssl_key": self.database_ssl_key,
         }
 
-    @classmethod
-    @cached(ttl=300)
-    async def get_instance(cls: Type[T]) -> T:
-        """Get singleton instance of config.
-
-        This method ensures only one config instance exists in the database.
-        If no config exists, it creates a new one with default values.
-        If multiple configs exist, it keeps the first one and deletes the rest.
+    @property
+    def redis(self) -> Dict[str, Any]:
+        """Get Redis configuration.
 
         Returns:
-            SystemConfig instance
-
-        Raises:
-            ConfigError: If failed to get or create config
+            Dictionary with Redis configuration
         """
-        if cls._get_instance() is None:
-            instances = await cls.search([])
+        return {
+            "host": self.redis_host,
+            "port": self.redis_port,
+            "db": self.redis_db,
+            "min_pool_size": self.redis_min_pool_size,
+            "max_pool_size": self.redis_max_pool_size,
+            "pool_timeout": self.redis_pool_timeout,
+        }
 
-            if not instances:
-                # Create new instance with default values
-                instance = await cls.create({})
-                cls._set_instance(instance)
-            else:
-                cls._set_instance(instances)
+    @property
+    def cache(self) -> Dict[str, Any]:
+        """Get cache configuration.
 
-                # Delete duplicate configs if any
-                if len(instances) > 1:
-                    for other in instances[1:]:
-                        await other.unlink()
-
-        assert cls._get_instance() is not None
-        return cast(T, cls._get_instance())
-
-    def _validate_all(self) -> None:
-        """Run all validation checks."""
-        self._validate_database_config()
-        self._validate_redis_config()
-        self._validate_cache_config()
+        Returns:
+            Dictionary with cache configuration
+        """
+        return {
+            "backend": self.cache_backend,
+            "ttl": self.cache_ttl,
+        }
 
     def _validate_database_config(self) -> None:
         """Validate database configuration.
 
-        Validates:
-        - URI format and required components
-        - Database name format
-        - Pool sizes and relationships
-        - Timeout values and relationships
+        Raises:
+            ConfigValidationError: If validation fails
         """
-        # Validate database name
-        db_name = str(self.database_name)
-        if not db_name.isalnum():
-            raise ConfigValidationError(
-                f"Invalid database name: {db_name}. Must be alphanumeric"
-            )
-
-        # Validate pool sizes
-        min_size = self.database_min_pool_size
-        max_size = self.database_max_pool_size
-        if min_size is not None and max_size is not None and min_size > max_size:
-            raise ConfigValidationError(
-                f"Minimum database pool size ({min_size}) cannot be greater than "
-                f"maximum pool size ({max_size})"
-            )
-
-        # Validate timeouts
-        pool_timeout = self.database_pool_timeout
-        idle_timeout = self.database_idle_timeout
-        max_lifetime = self.database_max_lifetime
-
         if (
-            pool_timeout is not None
-            and idle_timeout is not None
-            and pool_timeout >= idle_timeout
+            self.database_min_pool_size is not None
+            and self.database_max_pool_size is not None
         ):
-            raise ConfigValidationError(
-                f"Pool timeout ({pool_timeout}s) must be less than "
-                f"idle timeout ({idle_timeout}s)"
-            )
-
-        if (
-            idle_timeout is not None
-            and max_lifetime is not None
-            and idle_timeout >= max_lifetime
-        ):
-            raise ConfigValidationError(
-                f"Idle timeout ({idle_timeout}s) must be less than "
-                f"max lifetime ({max_lifetime}s)"
+            validate_pool_sizes(
+                self.database_min_pool_size, self.database_max_pool_size
             )
 
     def _validate_redis_config(self) -> None:
         """Validate Redis configuration.
 
-        Validates:
-        - Host format
-        - Port range
-        - Database number range
-        - Pool sizes and relationships
-        - Timeout values
+        Raises:
+            ConfigValidationError: If validation fails
         """
-        # Validate host format
-        host = str(self.redis_host)
-        if not host:
-            raise ConfigValidationError("Redis host cannot be empty")
-
-        # Validate port range
-        port = self.redis_port
-        if port is not None and not 1 <= port <= 65535:
-            raise ConfigValidationError(
-                f"Invalid Redis port: {port}. Must be between 1 and 65535"
-            )
-
-        # Validate database number
-        db = self.redis_db
-        if db is not None and not 0 <= db <= 15:
-            raise ConfigValidationError(
-                f"Invalid Redis database number: {db}. Must be between 0 and 15"
-            )
-
-        # Validate pool sizes
-        min_size = self.redis_min_pool_size
-        max_size = self.redis_max_pool_size
-        if min_size is not None and max_size is not None:
-            validate_pool_sizes(min_size, max_size)
-
-        # Validate timeout
-        timeout = self.redis_pool_timeout
-        if timeout is not None and timeout < 1:
-            raise ConfigValidationError(
-                f"Invalid Redis connection timeout: {timeout}. Must be greater than 0"
-            )
+        if (
+            self.redis_min_pool_size is not None
+            and self.redis_max_pool_size is not None
+        ):
+            validate_pool_sizes(self.redis_min_pool_size, self.redis_max_pool_size)
 
     def _validate_cache_config(self) -> None:
         """Validate cache configuration.
 
-        Validates:
-        - Backend type is supported
-        - TTL values are reasonable
-        """
-        # Validate cache backend
-        backend = str(self.cache_backend)
-        if backend not in ["redis", "memory"]:
-            raise ConfigValidationError(
-                f"Invalid cache backend: {backend}. Must be one of: redis, memory"
-            )
-
-        # Validate TTL
-        ttl = self.cache_ttl
-        if ttl is not None and ttl <= 0:
-            raise ConfigValidationError(
-                f"Invalid cache TTL: {ttl}. Must be greater than 0"
-            )
-
-        if ttl is not None and ttl > 86400:  # 24 hours
-            raise ConfigValidationError(
-                f"Invalid cache TTL: {ttl}. Must not exceed 24 hours (86400 seconds)"
-            )
-
-    @classmethod
-    def add_listener(cls, listener: ConfigListener) -> None:
-        """Add config change listener.
-
-        Args:
-            listener: Async function to call when config changes
-        """
-        cls._listeners.append(listener)
-
-    async def notify_listeners(self) -> None:
-        """Notify all listeners of config change."""
-        for listener in self._listeners:
-            try:
-                await listener(self)
-            except (ValueError, TypeError, RuntimeError) as e:
-                logger.error("Failed to notify listener: %s", str(e))
-
-    @classmethod
-    async def load_env(
-        cls, path: str, *, prefix: str = "EARNORM_", validate: bool = True
-    ) -> "SystemConfig":
-        """Load and create config from environment variables.
-
-        This method:
-        1. Loads configuration from .env file and environment variables
-        2. Creates a new config record in database
-        3. Optionally validates the configuration
-
-        Args:
-            path: Path to .env file
-            prefix: Prefix for environment variables (default: EARNORM_)
-            validate: Whether to validate config after loading (default: True)
-
-        Returns:
-            Created SystemConfig instance
-
         Raises:
-            ConfigError: If config file not found or invalid
-            ConfigValidationError: If validation fails and validate=True
-            DatabaseError: If database operation fails
-        """
-        try:
-            # Load .env file if provided
-            if path:
-                env_path = Path(path)
-                if not env_path.exists():
-                    raise ConfigError(f"Config file not found: {path}")
-                load_dotenv(env_path)
-
-            # Get all environment variables with prefix
-            data: Dict[str, Any] = {}
-            for key, value in os.environ.items():
-                # Check both custom prefix and default prefixes
-                if key.startswith(prefix) or any(
-                    key.startswith(p) for p in CONFIG_PREFIXES
-                ):
-                    # Remove prefix and convert to lowercase
-                    field_name = key.lower()
-                    if field_name in cls._fields:
-                        data[field_name] = value
-
-            # Create config instance
-            config = await cls.create(data)
-
-            # Validate if requested
-            if validate:
-                config.validate()
-
-            return config
-
-        except Exception as e:
-            if isinstance(e, (ConfigError, ConfigValidationError)):
-                raise
-            raise ConfigError(f"Failed to load config from environment: {e}") from e
-
-    @classmethod
-    async def load_yaml(cls, path: str, *, validate: bool = True) -> "SystemConfig":
-        """Load and create config from YAML file.
-
-        This method:
-        1. Loads configuration from YAML file
-        2. Creates a new config record in database
-        3. Optionally validates the configuration
-
-        Args:
-            path: Path to YAML file
-            validate: Whether to validate config after loading (default: True)
-
-        Returns:
-            Created SystemConfig instance
-
-        Raises:
-            ConfigError: If config file not found or invalid
-            ConfigValidationError: If validation fails and validate=True
-            DatabaseError: If database operation fails
-        """
-        try:
-            # Validate file exists
-            yaml_path = Path(path)
-            if not yaml_path.exists():
-                raise ConfigError(f"Config file not found: {path}")
-
-            # Load and parse YAML
-            with open(yaml_path, encoding="utf-8") as f:
-                data = yaml.safe_load(f)
-
-            # Create config instance
-            config = await cls.create(data)
-
-            # Validate if requested
-            if validate:
-                config.validate()
-
-            return config
-
-        except Exception as e:
-            if isinstance(e, (ConfigError, ConfigValidationError)):
-                raise
-            raise ConfigError(f"Failed to load config from YAML: {e}") from e
-
-    async def to_yaml(self, path: str) -> None:
-        """Export config to YAML file.
-
-        Args:
-            path: Path to export YAML file
-
-        Examples:
-            >>> config = await SystemConfig.load_yaml("config.yaml")
-            >>> await config.to_yaml("config_backup.yaml")
-        """
-        with open(path, "w", encoding="utf-8") as f:
-            yaml.dump(self.to_dict(), f)
-
-    @classmethod
-    async def load(cls) -> None:
-        """Load config into DI container.
-
-        This method is called on startup to load the config
-        into the DI container for access through the environment.
-
-        Examples:
-            ```python
-            # In your application startup
-            await SystemConfig.load()
-
-            # Then in your models
-            class MyModel(BaseModel):
-                def my_method(self):
-                    config = self.env.config
-                    uri = config.mongodb_uri
-            ```
-        """
-        try:
-            instance = await cls.get_instance()
-            container.register("config", instance)
-            logger.info("System config loaded successfully")
-        except Exception as e:
-            logger.error("Failed to load system config: %s", str(e))
-            raise ConfigError(f"Failed to load system config: {e}") from e
-
-    @classmethod
-    def _set_instance(cls, instance: Optional["SystemConfig"]) -> None:
-        """Set singleton instance."""
-        cls._instance = instance
-
-    @classmethod
-    def _get_instance(cls) -> Optional["SystemConfig"]:
-        """Get singleton instance."""
-        return cls._instance
-
-    async def apply(self) -> None:
-        """Apply config changes to system.
-
-        This method:
-        1. Validates all configuration settings
-        2. Updates the config in database
-        3. Notifies all listeners of changes
-        4. Reconfigures dependent services
-
-        Raises:
-            ConfigError: If applying changes fails
             ConfigValidationError: If validation fails
-            DatabaseError: If database update fails
         """
-        try:
-            # Validate all settings
-            self._validate_all()
+        if self.cache_backend == "redis":
+            if not self.redis_host:
+                raise ConfigValidationError(
+                    "Redis host is required for Redis cache backend"
+                )
 
-            # Update in database
-            await self.write(self.__dict__)
+    @classmethod
+    async def load_env(cls, env_file: Optional[Union[str, Path]] = None) -> Self:
+        """Load configuration from environment variables.
 
-            # Notify listeners
-            await self.notify_listeners()
+        Args:
+            env_file: Optional path to .env file
 
-            # Get all services that depend on config
-            database = await container.get("database_registry")
-            cache = await container.get("cache_manager")
-
-            # Update services
-            if hasattr(database, "reconnect"):
-                await database.reconnect()
-            if hasattr(cache, "reconfigure"):
-                await cache.reconfigure()
-
-            logger.info("System config applied successfully")
-        except Exception as e:
-            logger.error("Failed to apply system config: %s", str(e))
-            raise ConfigError(f"Failed to apply system config: {e}") from e
-
-    async def reload(self) -> None:
-        """Reload config from database.
-
-        This method:
-        1. Reloads the config from database
-        2. Updates the singleton instance
-        3. Updates the DI container
+        Returns:
+            SystemConfig instance
 
         Raises:
-            ConfigError: If reload fails
+            ConfigError: If failed to load configuration
         """
         try:
-            # Reload from database
-            instance = await self.__class__.get_instance()
+            # Load environment variables from file
+            if env_file:
+                load_dotenv(env_file)
 
-            # Update container
-            container.register("config", instance)
+            # Get all environment variables with config prefixes
+            config_data: ConfigData = {}
+            for key, value in os.environ.items():
+                if any(key.startswith(prefix) for prefix in CONFIG_PREFIXES):
+                    config_data[key.lower()] = value
 
-            logger.info("System config reloaded successfully")
+            # Create config instance
+            return await cls.create(values=config_data)
         except Exception as e:
-            logger.error("Failed to reload system config: %s", str(e))
-            raise ConfigError(f"Failed to reload system config: {e}") from e
+            raise ConfigError("Failed to load configuration from environment") from e
+
+    @classmethod
+    async def load_yaml(cls, yaml_file: Union[str, Path]) -> Self:
+        """Load configuration from YAML file.
+
+        Args:
+            yaml_file: Path to YAML file
+
+        Returns:
+            SystemConfig instance
+
+        Raises:
+            ConfigError: If failed to load configuration
+        """
+        try:
+            # Load YAML file
+            with open(yaml_file, "r", encoding="utf-8") as f:
+                config_data = yaml.safe_load(f)
+
+            # Create config instance
+            return await cls.create(**config_data)
+        except Exception as e:
+            raise ConfigError("Failed to load configuration from YAML file") from e
