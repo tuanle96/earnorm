@@ -22,7 +22,7 @@ Examples:
 """
 
 import re
-from typing import Any, Final, Optional
+from typing import Any, Final, Optional, Union, overload
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
@@ -69,6 +69,33 @@ class StringField(BaseField[str], FieldComparisonMixin):
     lower: bool
     upper: bool
     backend_options: dict[str, Any]
+
+    @overload
+    def __get__(self, instance: None, owner: Any) -> "StringField": ...
+
+    @overload
+    def __get__(self, instance: Any, owner: Any) -> Optional[str]: ...
+
+    def __get__(
+        self, instance: Optional[Any], owner: Any
+    ) -> Union["StringField", Optional[str]]:
+        """Get field value.
+
+        This method implements the descriptor protocol.
+        When accessed through the class, returns the field instance.
+        When accessed through an instance, returns the field value.
+
+        Args:
+            instance: Model instance or None
+            owner: Model class
+
+        Returns:
+            Field instance when accessed through class,
+            field value when accessed through instance
+        """
+        if instance is None:
+            return self
+        return self._value
 
     def __init__(
         self,

@@ -108,105 +108,105 @@ class SystemConfig(BaseModel):
     _listeners: ClassVar[List[ConfigListener]] = []
 
     # Version and timestamps
-    version: StringField = StringField(default="1.0.0")
-    created_at: DateTimeField = DateTimeField(auto_now_add=True)
-    updated_at: DateTimeField = DateTimeField(auto_now=True)
+    version = StringField(default="1.0.0")
+    created_at = DateTimeField(auto_now_add=True)
+    updated_at = DateTimeField(auto_now=True)
 
     # Database Configuration
-    database_backend: StringField = StringField(
+    database_backend = StringField(
         default="mongodb",
         choices=["mongodb", "mysql", "postgres"],
         description="Database backend type",
     )
-    database_uri: StringField = StringField(
+    database_uri = StringField(
         required=True,
         min_length=10,
         description="Database connection URI",
     )
-    database_name: StringField = StringField(
+    database_name = StringField(
         required=True,
         min_length=1,
         max_length=64,
         description="Database name",
     )
-    database_username: StringField = StringField(
+    database_username = StringField(
         required=False,
         description="Database username",
     )
-    database_password: StringField = StringField(
+    database_password = StringField(
         required=False,
         description="Database password",
     )
-    database_min_pool_size: IntegerField = IntegerField(
+    database_min_pool_size = IntegerField(
         default=5,
         min_value=1,
         max_value=100,
         description="Minimum database connection pool size",
     )
-    database_max_pool_size: IntegerField = IntegerField(
+    database_max_pool_size = IntegerField(
         default=20,
         min_value=5,
         max_value=1000,
         description="Maximum database connection pool size",
     )
-    database_pool_timeout: IntegerField = IntegerField(
+    database_pool_timeout = IntegerField(
         default=30,
         min_value=1,
         max_value=300,
         description="Database connection timeout in seconds",
     )
-    database_max_lifetime: IntegerField = IntegerField(
+    database_max_lifetime = IntegerField(
         default=3600,
         min_value=60,
         max_value=86400,  # 24 hours
         description="Maximum connection lifetime in seconds",
     )
-    database_idle_timeout: IntegerField = IntegerField(
+    database_idle_timeout = IntegerField(
         default=300,
         min_value=10,
         max_value=3600,
         description="Connection idle timeout in seconds",
     )
-    database_ssl: BooleanField = BooleanField(
+    database_ssl = BooleanField(
         default=False,
         description="Whether to use SSL for database connection",
     )
-    database_ssl_ca: StringField = StringField(
+    database_ssl_ca = StringField(
         required=False,
         description="SSL CA certificate path",
     )
-    database_ssl_cert: StringField = StringField(
+    database_ssl_cert = StringField(
         required=False,
         description="SSL certificate path",
     )
-    database_ssl_key: StringField = StringField(
+    database_ssl_key = StringField(
         required=False,
         description="SSL key path",
     )
 
     # Redis Configuration
-    redis_host: StringField = StringField(
+    redis_host = StringField(
         required=True, min_length=1, max_length=255, description="Redis server host"
     )
-    redis_port: IntegerField = IntegerField(
+    redis_port = IntegerField(
         default=6379, min_value=1, max_value=65535, description="Redis server port"
     )
-    redis_db: IntegerField = IntegerField(
+    redis_db = IntegerField(
         default=0, min_value=0, max_value=15, description="Redis database number"
     )
-    redis_min_pool_size: IntegerField = IntegerField(
+    redis_min_pool_size = IntegerField(
         default=5,
         min_value=1,
         max_value=100,
         description="Minimum Redis connection pool size",
     )
-    redis_max_pool_size: IntegerField = IntegerField(
+    redis_max_pool_size = IntegerField(
         default=20,
         min_value=5,
         max_value=1000,
         description="Maximum Redis connection pool size",
     )
-    redis_pool_timeout: IntegerField = IntegerField(
+    redis_pool_timeout = IntegerField(
         default=30,
         min_value=1,
         max_value=300,
@@ -214,10 +214,10 @@ class SystemConfig(BaseModel):
     )
 
     # Cache Configuration
-    cache_backend: StringField = StringField(
+    cache_backend = StringField(
         default="redis", choices=["redis", "memory"], description="Cache backend type"
     )
-    cache_ttl: IntegerField = IntegerField(
+    cache_ttl = IntegerField(
         default=3600,
         min_value=1,
         max_value=86400,  # 24 hours
@@ -262,9 +262,9 @@ class SystemConfig(BaseModel):
             if not instances:
                 instance = cls()
                 await instance.save()
-                cls.set_current(instance)
+                cls._set_instance(instance)
             else:
-                cls.set_current(instances)
+                cls._set_instance(instances)
 
                 if len(instances) > 1:
                     for other in instances[1:]:
@@ -296,26 +296,34 @@ class SystemConfig(BaseModel):
             )
 
         # Validate pool sizes
-        min_size = int(self.database_min_pool_size)
-        max_size = int(self.database_max_pool_size)
-        if min_size > max_size:
+        min_size = self.database_min_pool_size
+        max_size = self.database_max_pool_size
+        if min_size is not None and max_size is not None and min_size > max_size:
             raise ConfigValidationError(
                 f"Minimum database pool size ({min_size}) cannot be greater than "
                 f"maximum pool size ({max_size})"
             )
 
         # Validate timeouts
-        pool_timeout = int(self.database_pool_timeout)
-        idle_timeout = int(self.database_idle_timeout)
-        max_lifetime = int(self.database_max_lifetime)
+        pool_timeout = self.database_pool_timeout
+        idle_timeout = self.database_idle_timeout
+        max_lifetime = self.database_max_lifetime
 
-        if pool_timeout >= idle_timeout:
+        if (
+            pool_timeout is not None
+            and idle_timeout is not None
+            and pool_timeout >= idle_timeout
+        ):
             raise ConfigValidationError(
                 f"Pool timeout ({pool_timeout}s) must be less than "
                 f"idle timeout ({idle_timeout}s)"
             )
 
-        if idle_timeout >= max_lifetime:
+        if (
+            idle_timeout is not None
+            and max_lifetime is not None
+            and idle_timeout >= max_lifetime
+        ):
             raise ConfigValidationError(
                 f"Idle timeout ({idle_timeout}s) must be less than "
                 f"max lifetime ({max_lifetime}s)"
@@ -337,27 +345,28 @@ class SystemConfig(BaseModel):
             raise ConfigValidationError("Redis host cannot be empty")
 
         # Validate port range
-        port = int(self.redis_port)
-        if not 1 <= port <= 65535:
+        port = self.redis_port
+        if port is not None and not 1 <= port <= 65535:
             raise ConfigValidationError(
                 f"Invalid Redis port: {port}. Must be between 1 and 65535"
             )
 
         # Validate database number
-        db = int(self.redis_db)
-        if not 0 <= db <= 15:
+        db = self.redis_db
+        if db is not None and not 0 <= db <= 15:
             raise ConfigValidationError(
                 f"Invalid Redis database number: {db}. Must be between 0 and 15"
             )
 
         # Validate pool sizes
-        min_size = int(self.redis_min_pool_size)
-        max_size = int(self.redis_max_pool_size)
-        validate_pool_sizes(min_size, max_size)
+        min_size = self.redis_min_pool_size
+        max_size = self.redis_max_pool_size
+        if min_size is not None and max_size is not None:
+            validate_pool_sizes(min_size, max_size)
 
         # Validate timeout
-        timeout = int(self.redis_pool_timeout)
-        if timeout < 1:
+        timeout = self.redis_pool_timeout
+        if timeout is not None and timeout < 1:
             raise ConfigValidationError(
                 f"Invalid Redis connection timeout: {timeout}. Must be greater than 0"
             )
@@ -377,13 +386,13 @@ class SystemConfig(BaseModel):
             )
 
         # Validate TTL
-        ttl = int(self.cache_ttl)
-        if ttl <= 0:
+        ttl = self.cache_ttl
+        if ttl is not None and ttl <= 0:
             raise ConfigValidationError(
                 f"Invalid cache TTL: {ttl}. Must be greater than 0"
             )
 
-        if ttl > 86400:  # 24 hours
+        if ttl is not None and ttl > 86400:  # 24 hours
             raise ConfigValidationError(
                 f"Invalid cache TTL: {ttl}. Must not exceed 24 hours (86400 seconds)"
             )
@@ -426,7 +435,7 @@ class SystemConfig(BaseModel):
         for key, value in os.environ.items():
             if any(key.startswith(prefix) for prefix in CONFIG_PREFIXES):
                 field_name = key.lower()
-                if field_name in cls.__fields__:
+                if field_name in cls._fields:
                     data[field_name] = value
 
         return cls(**data)
@@ -460,7 +469,7 @@ class SystemConfig(BaseModel):
             >>> await config.to_yaml("config.yaml")
         """
         with open(path, "w", encoding="utf-8") as f:
-            yaml.dump(self.data, f)
+            yaml.dump(self.to_dict(), f)
 
     @classmethod
     async def load(cls) -> None:

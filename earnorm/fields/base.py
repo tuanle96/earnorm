@@ -21,6 +21,7 @@ from typing import (
     TypeVar,
     Union,
     cast,
+    overload,
 )
 
 from earnorm.exceptions import FieldValidationError
@@ -482,16 +483,28 @@ class BaseField(Generic[T]):
 
         return value
 
-    def __get__(self, instance: Any, owner: Any) -> Union["BaseField[T]", Optional[T]]:
+    @overload
+    def __get__(self, instance: None, owner: Any) -> "BaseField[T]": ...
+
+    @overload
+    def __get__(self, instance: Any, owner: Any) -> Optional[T]: ...
+
+    def __get__(
+        self, instance: Optional[Any], owner: Any
+    ) -> Union["BaseField[T]", Optional[T]]:
         """Get field value.
 
+        This method implements the descriptor protocol.
+        When accessed through the class, returns the field instance.
+        When accessed through an instance, returns the field value.
+
         Args:
-            instance: Model instance.
-            owner: Model class.
+            instance: Model instance or None
+            owner: Model class
 
         Returns:
-            Union[BaseField[T], Optional[T]]: Field instance if accessed on class,
-                or field value if accessed on instance.
+            Field instance when accessed through class,
+            field value when accessed through instance
         """
         if instance is None:
             return self

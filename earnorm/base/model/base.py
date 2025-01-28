@@ -99,6 +99,7 @@ from earnorm.base.database.query.interfaces.operations.join import (
 )
 from earnorm.base.database.query.interfaces.query import QueryProtocol as AsyncQuery
 from earnorm.base.env import Environment
+from earnorm.base.model.descriptors import FieldsDescriptor
 from earnorm.base.model.meta import MetaModel
 from earnorm.exceptions import (
     DatabaseError,
@@ -143,6 +144,7 @@ class BaseModel(DatabaseModel, metaclass=MetaModel):
 
     # Model fields
     _fields: Dict[str, BaseField[Any]]  # Set by metaclass
+    __fields__ = FieldsDescriptor()  # Descriptor for accessing fields
     id: int = 0  # Record ID with default value
 
     # Environment instance
