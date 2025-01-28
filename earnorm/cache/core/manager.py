@@ -137,7 +137,6 @@ class CacheManager:
                 # Create backend instance
                 if self._backend_type == "redis":
                     self._backend = RedisBackend(
-                        container=self._container,
                         serializer=serializer,
                         prefix=self._prefix,
                         ttl=self._ttl,

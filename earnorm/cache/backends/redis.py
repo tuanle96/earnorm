@@ -6,15 +6,9 @@ Examples:
     ```python
     from earnorm.cache.backends.redis import RedisBackend
     from earnorm.cache.serializers.json import JsonSerializer
-    from earnorm.di import Container
-
-    # Create container and register pool
-    container = Container()
-    container.register("redis_pool", lambda: RedisPool(...))
 
     # Create backend
     backend = RedisBackend(
-        container=container,
         serializer=JsonSerializer(),
         prefix="app",
         ttl=300
@@ -45,8 +39,7 @@ from redis.asyncio import Redis
 from earnorm.cache.core.backend import BaseCacheBackend
 from earnorm.cache.core.exceptions import CacheError
 from earnorm.cache.core.serializer import SerializerProtocol
-from earnorm.di import Container
-from earnorm.pool.registry import PoolRegistry
+from earnorm.di import container
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +57,6 @@ class RedisBackend(BaseCacheBackend):
 
     def __init__(
         self,
-        container: Container,
         serializer: SerializerProtocol,
         prefix: str = "app",
         ttl: int = 300,
@@ -72,13 +64,11 @@ class RedisBackend(BaseCacheBackend):
         """Initialize Redis cache backend.
 
         Args:
-            container: DI container
             serializer: Value serializer
             prefix: Key prefix
             ttl: Default TTL in seconds
         """
         super().__init__(serializer=serializer)
-        self._container = container
         self._prefix = prefix
         self._ttl = ttl
         self._pool: Optional[AsyncPoolProtocol[Redis]] = None
@@ -91,11 +81,11 @@ class RedisBackend(BaseCacheBackend):
             RedisPool: Redis connection pool
 
         Raises:
-            CacheError: If pool is not initialized
+            CacheError: If pool is not initialized or cannot be retrieved
         """
         if self._pool is None:
             try:
-                self._pool = cast(AsyncPoolProtocol[Redis], PoolRegistry.get("redis"))
+                self._pool = cast(AsyncPoolProtocol[Redis], container.get("redis_pool"))
             except Exception as e:
                 raise CacheError("Failed to get Redis pool") from e
         return self._pool
