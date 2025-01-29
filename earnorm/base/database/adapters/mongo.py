@@ -35,8 +35,6 @@ from motor.motor_asyncio import (
     AsyncIOMotorCollection,
     AsyncIOMotorDatabase,
 )
-from pymongo.collection import Collection
-from pymongo.database import Database
 from pymongo.operations import UpdateOne
 from pymongo.results import DeleteResult, InsertOneResult, UpdateResult
 
@@ -74,7 +72,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                 AsyncIOMotorDatabase[Dict[str, Any]], AsyncIOMotorCollection[JsonDict]
             ]
         ] = None
-        self._sync_db: Optional[Database[Dict[str, Any]]] = None
+        self._sync_db: Optional[AsyncIOMotorDatabase[Dict[str, Any]]] = None
 
     async def init(self) -> None:
         """Initialize the adapter.
@@ -128,7 +126,9 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
 
             # Get sync database for transactions
             client = AsyncIOMotorClient[Dict[str, Any]](getattr(self._pool, "_uri"))
-            self._sync_db = Database(client.delegate, getattr(self._pool, "_database"))
+            self._sync_db = AsyncIOMotorDatabase(
+                client, getattr(self._pool, "_database")
+            )
 
         except Exception as e:
             raise ConnectionError(f"Failed to connect to MongoDB: {e}") from e
@@ -187,7 +187,9 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             raise ValueError(f"Model {model_type} has no table or name")
         return str(table) if table else str(name)
 
-    def _get_collection(self, model_type: Type[ModelT]) -> Collection[Dict[str, Any]]:
+    def _get_collection(
+        self, model_type: Type[ModelT]
+    ) -> AsyncIOMotorCollection[Dict[str, Any]]:
         """Get MongoDB collection for model type.
 
         Args:
