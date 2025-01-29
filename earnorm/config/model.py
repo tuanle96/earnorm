@@ -38,7 +38,7 @@ ConfigData = Dict[str, Union[str, int, bool]]
 T = TypeVar("T", bound="SystemConfig")
 
 
-def validate_pool_sizes(min_size: int, max_size: int) -> None:
+def validate_pool_sizes(min_size: Optional[int], max_size: Optional[int]) -> None:
     """Validate pool size configuration.
 
     Args:
@@ -48,6 +48,9 @@ def validate_pool_sizes(min_size: int, max_size: int) -> None:
     Raises:
         ConfigValidationError: If validation fails
     """
+    if min_size is None or max_size is None:
+        return
+
     if min_size > max_size:
         raise ConfigValidationError(
             f"Minimum pool size ({min_size}) cannot be greater than "
@@ -270,13 +273,7 @@ class SystemConfig(BaseModel):
         Raises:
             ConfigValidationError: If validation fails
         """
-        if (
-            self.database_min_pool_size is not None
-            and self.database_max_pool_size is not None
-        ):
-            validate_pool_sizes(
-                self.database_min_pool_size, self.database_max_pool_size
-            )
+        validate_pool_sizes(self.database_min_pool_size, self.database_max_pool_size)
 
     def _validate_redis_config(self) -> None:
         """Validate Redis configuration.
@@ -284,11 +281,7 @@ class SystemConfig(BaseModel):
         Raises:
             ConfigValidationError: If validation fails
         """
-        if (
-            self.redis_min_pool_size is not None
-            and self.redis_max_pool_size is not None
-        ):
-            validate_pool_sizes(self.redis_min_pool_size, self.redis_max_pool_size)
+        validate_pool_sizes(self.redis_min_pool_size, self.redis_max_pool_size)
 
     def _validate_cache_config(self) -> None:
         """Validate cache configuration.
@@ -297,10 +290,7 @@ class SystemConfig(BaseModel):
             ConfigValidationError: If validation fails
         """
         if self.cache_backend == "redis":
-            if not self.redis_host:
-                raise ConfigValidationError(
-                    "Redis host is required for Redis cache backend"
-                )
+            self._validate_redis_config()
 
     @classmethod
     async def load_env(cls, env_file: Optional[Union[str, Path]] = None) -> Self:
@@ -313,10 +303,10 @@ class SystemConfig(BaseModel):
             SystemConfig instance
 
         Raises:
-            ConfigError: If failed to load configuration
+            ConfigError: If loading fails
         """
         try:
-            # Load environment variables from file
+            # Load .env file if provided
             if env_file:
                 load_dotenv(env_file)
 
@@ -327,9 +317,10 @@ class SystemConfig(BaseModel):
                     config_data[key.lower()] = value
 
             # Create config instance
-            return await cls.create(values=config_data)
+            return cls(**config_data)
+
         except Exception as e:
-            raise ConfigError("Failed to load configuration from environment") from e
+            raise ConfigError(f"Failed to load config from environment: {e}") from e
 
     @classmethod
     async def load_yaml(cls, yaml_file: Union[str, Path]) -> Self:
@@ -342,14 +333,15 @@ class SystemConfig(BaseModel):
             SystemConfig instance
 
         Raises:
-            ConfigError: If failed to load configuration
+            ConfigError: If loading fails
         """
         try:
-            # Load YAML file
+            # Read YAML file
             with open(yaml_file, "r", encoding="utf-8") as f:
                 config_data = yaml.safe_load(f)
 
             # Create config instance
-            return await cls.create(**config_data)
+            return cls(**config_data)
+
         except Exception as e:
-            raise ConfigError("Failed to load configuration from YAML file") from e
+            raise ConfigError(f"Failed to load config from YAML: {e}") from e

@@ -5,14 +5,15 @@ It integrates with the DI container and provides access to all services.
 """
 
 import logging
-from typing import Any, Optional, Type, TypeVar
+from typing import TYPE_CHECKING, Any, Optional, Type, TypeVar
 
 from earnorm.base.database.adapter import DatabaseAdapter
 from earnorm.base.model.meta import BaseModel
-from earnorm.cache import CacheManager
-from earnorm.config import SystemConfig
-from earnorm.di import container
 from earnorm.types import DatabaseModel
+
+if TYPE_CHECKING:
+    from earnorm.cache import CacheManager
+    from earnorm.config import SystemConfig
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ class Environment:
             raise RuntimeError("Environment already initialized")
 
         self._initialized = False
-        self._cache_manager: Optional[CacheManager] = None
+        self._cache_manager: Optional["CacheManager"] = None
         self._adapter: Optional[DatabaseAdapter[DatabaseModel]] = None
         Environment._instance = self
 
@@ -65,7 +66,7 @@ class Environment:
             cls._instance = cls()
         return cls._instance
 
-    async def init(self, config: SystemConfig) -> None:
+    async def init(self, config: "SystemConfig") -> None:
         """Initialize environment.
 
         Args:
@@ -81,6 +82,8 @@ class Environment:
             return
 
         try:
+            from earnorm.di import container
+
             # Register config
             container.register("config", config)
 
@@ -110,6 +113,8 @@ class Environment:
             return
 
         try:
+            from earnorm.di import container
+
             # Get services from DI container
             adapter = await container.get("database_adapter")
             cache = await container.get("cache_manager")
@@ -146,13 +151,15 @@ class Environment:
         Raises:
             RuntimeError: If service not found and required=True
         """
+        from earnorm.di import container
+
         service = await container.get(name)
         if service is None and required:
             raise RuntimeError(f"Service {name} not found in DI container")
         return service
 
     @property
-    async def cache_manager(self) -> CacheManager:
+    async def cache_manager(self) -> "CacheManager":
         """Get cache manager.
 
         Returns:

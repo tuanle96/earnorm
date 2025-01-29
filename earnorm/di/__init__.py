@@ -46,13 +46,17 @@ Example:
     >>> factory_service = await container.get("my_factory")
 """
 
-from earnorm.config.model import SystemConfig
+from typing import TYPE_CHECKING
+
 from earnorm.di.container.base import Container, ContainerInterface
 from earnorm.di.container.factory import FactoryManager
 from earnorm.di.container.service import ServiceManager
 from earnorm.di.lifecycle import LifecycleAware, LifecycleEvents, LifecycleManager
 from earnorm.di.resolver.dependency import DependencyResolver
 from earnorm.pool.registry import PoolRegistry
+
+if TYPE_CHECKING:
+    from earnorm.config.model import SystemConfig
 
 # Global container instance
 container: ContainerInterface = Container()
@@ -68,7 +72,7 @@ container.register("pool_registry", PoolRegistry())
 lifecycle: LifecycleManager | None = None
 
 
-async def init_container(config: SystemConfig) -> None:
+async def init_container(config: "SystemConfig") -> None:
     """Initialize the dependency injection container and all managers.
 
     This function performs the following steps:

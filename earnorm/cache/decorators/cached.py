@@ -39,11 +39,21 @@ import hashlib
 import inspect
 import json
 import logging
-from typing import Any, Callable, Coroutine, Optional, TypeVar, Union, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Coroutine,
+    Optional,
+    TypeVar,
+    Union,
+    overload,
+)
 
 from earnorm.cache.core.exceptions import CacheError
-from earnorm.cache.core.manager import CacheManager
-from earnorm.di import container
+
+if TYPE_CHECKING:
+    from earnorm.cache.core.manager import CacheManager
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +63,7 @@ F = TypeVar("F", bound=Callable[..., Coroutine[Any, Any, Any]])
 def _make_cached_decorator(
     ttl: Optional[int] = None,
     key_prefix: Optional[str] = None,
-    manager: Optional[CacheManager] = None,
+    manager: Optional["CacheManager"] = None,
 ) -> Callable[[F], F]:
     """Creates the actual decorator function.
 
@@ -93,6 +103,8 @@ def _make_cached_decorator(
             cache_manager = manager
             if cache_manager is None:
                 try:
+                    from earnorm.di import container
+
                     cache_manager = await container.get("cache_manager")
                 except (ImportError, AttributeError, ValueError) as e:
                     # Log error but continue without caching
@@ -163,7 +175,7 @@ def cached(
     *,
     ttl: Optional[int] = None,
     key_prefix: Optional[str] = None,
-    manager: Optional[CacheManager] = None,
+    manager: Optional["CacheManager"] = None,
 ) -> Callable[[F], F]: ...
 
 
@@ -172,7 +184,7 @@ def cached(
     *,
     ttl: Optional[int] = None,
     key_prefix: Optional[str] = None,
-    manager: Optional[CacheManager] = None,
+    manager: Optional["CacheManager"] = None,
 ) -> Union[F, Callable[[F], F]]:
     """Cache decorator for async functions.
 

@@ -29,7 +29,6 @@ Examples:
 import logging
 from typing import Any, Dict, List, Optional, Type
 
-from earnorm.cache.backends.redis import RedisBackend
 from earnorm.cache.core.backend import BaseCacheBackend
 from earnorm.cache.core.exceptions import CacheError
 from earnorm.cache.core.serializer import SerializerProtocol
@@ -132,14 +131,7 @@ class CacheManager:
                 serializer = self._get_serializer()
 
                 # Create backend instance
-                if self._backend_type == "redis":
-                    self._backend = RedisBackend(
-                        serializer=serializer,
-                        prefix=self._prefix,
-                        ttl=self._ttl,
-                    )
-                else:
-                    self._backend = backend_class(serializer=serializer)
+                self._backend = backend_class(serializer=serializer)
             except Exception as e:
                 raise CacheError("Failed to initialize backend") from e
         return self._backend
@@ -154,6 +146,8 @@ class CacheManager:
             CacheError: If backend type is not supported
         """
         if self._backend_type == "redis":
+            from earnorm.cache.backends.redis import RedisBackend
+
             return RedisBackend
         raise CacheError(f"Unsupported backend type: {self._backend_type}")
 

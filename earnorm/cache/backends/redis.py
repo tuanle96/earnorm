@@ -39,7 +39,6 @@ from redis.asyncio import Redis
 from earnorm.cache.core.backend import BaseCacheBackend
 from earnorm.cache.core.exceptions import CacheError
 from earnorm.cache.core.serializer import SerializerProtocol
-from earnorm.di import container
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +84,8 @@ class RedisBackend(BaseCacheBackend):
         """
         if self._pool is None:
             try:
+                from earnorm.di import container
+
                 self._pool = cast(AsyncPoolProtocol[Redis], container.get("redis_pool"))
             except Exception as e:
                 raise CacheError("Failed to get Redis pool") from e
