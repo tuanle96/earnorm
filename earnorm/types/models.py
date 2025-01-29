@@ -12,6 +12,8 @@ from typing import (
     runtime_checkable,
 )
 
+from earnorm.base.database.transaction.base import Transaction
+
 
 @runtime_checkable
 class ModelProtocol(Protocol):
@@ -100,7 +102,9 @@ class ModelProtocol(Protocol):
         """
         ...
 
-    async def with_transaction(self) -> AsyncContextManager["ModelProtocol"]:
+    async def with_transaction(
+        self,
+    ) -> AsyncContextManager[Transaction["ModelProtocol"]]:
         """Get transaction context manager.
 
         Returns:

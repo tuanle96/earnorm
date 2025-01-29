@@ -26,8 +26,8 @@ from typing import Any, Final, Optional, Union, overload
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 from earnorm.fields.validators.base import TypeValidator, Validator
+from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 
 # Constants
 DEFAULT_MIN_LENGTH: Final[int] = 0
@@ -137,7 +137,10 @@ class StringField(BaseField[str], FieldComparisonMixin):
             raise ValueError("Cannot set both lower and upper to True")
 
         field_validators: list[Validator[Any]] = [TypeValidator(str)]
-        super().__init__(validators=field_validators, **options)
+        options_without_validators = {
+            k: v for k, v in options.items() if k != "validators"
+        }
+        super().__init__(validators=field_validators, **options_without_validators)
 
         self.min_length = min_length
         self.max_length = max_length

@@ -11,6 +11,7 @@ It handles:
 - Inheritance tracking
 """
 
+from abc import ABCMeta
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Dict, List, Set, Type, TypeVar, cast
@@ -77,7 +78,7 @@ class BaseModel:
 ValueT = TypeVar("ValueT")
 
 
-class MetaModel(type):
+class MetaModel(ABCMeta):
     """Metaclass for all database models.
 
     This metaclass handles:
@@ -124,6 +125,19 @@ class MetaModel(type):
         ),
     }
 
+    # Class variables that should not be in slots
+    CLASS_VARIABLES = {
+        "_name",
+        "_store",
+        "_description",
+        "_table",
+        "_sequence",
+        "_skip_default_fields",
+        "_abstract",
+        "_fields",
+        "fields",
+    }
+
     def __new__(
         mcs, name: str, bases: tuple[Type[Any], ...], attrs: Dict[str, Any]
     ) -> Type[BaseModel]:
@@ -151,54 +165,62 @@ class MetaModel(type):
             if hasattr(base, "fields"):
                 inherited_fields.update(getattr(base, "fields", {}))
 
-        # Add default fields first
+        # Add default fields first (unless _skip_default_fields is True)
         fields: Dict[str, BaseField[Any]] = {}
-        for field_name, field in mcs.DEFAULT_FIELDS.items():
-            # Create a new instance of the field for each model
-            new_field = field.__class__(**field.__dict__)
-            fields[field_name] = new_field
-            new_field.name = field_name
-            slots.add(f"_{field_name}")
+        if not attrs.get("_skip_default_fields", False):
+            for field_name, field in mcs.DEFAULT_FIELDS.items():
+                # Create a new instance of the field for each model
+                field_dict = field.__dict__.copy()
+                field_dict.pop(
+                    "validators", None
+                )  # Remove validators to avoid duplication
+                new_field = field.__class__(**field_dict)
+                fields[field_name] = new_field
+                new_field.name = field_name
+                # Don't add class variables to slots
+                if field_name not in mcs.CLASS_VARIABLES:
+                    slots.add(f"_{field_name}")
 
         # Add user-defined fields
         for key, value in attrs.items():
             if isinstance(value, BaseField):
-                if key in fields:
+                if key in fields and not attrs.get("_skip_default_fields", False):
                     raise ValueError(f"Cannot override default field '{key}'")
-                slots.add(f"_{key}")
+                # Don't add class variables to slots
+                if key not in mcs.CLASS_VARIABLES:
+                    slots.add(f"_{key}")
                 fields[key] = value
                 value.name = key
 
-        # Add recordset slots
-        recordset_slots = {
-            "_domain",
-            "_limit",
-            "_offset",
-            "_order",
-            "_group_by",
-            "_having",
-            "_distinct",
-            "_env",
-            "_data",
-            "_changed",
-        }
-        slots.update(recordset_slots)
-
+        # Use slots from BaseModel
+        if "__slots__" in attrs:
+            slots.update(attrs["__slots__"])
         attrs["__slots__"] = tuple(slots)
 
         # Combine inherited and current fields
         all_fields = {**inherited_fields, **fields}
         attrs["fields"] = all_fields
 
+        # Handle model name before creating class
+        model_name = attrs.get("_name")
+        if model_name is None:
+            model_name = name.lower()
+            attrs["_name"] = model_name
+
+        # Remove class variables from attrs to avoid them being added to slots
+        class_vars: Dict[str, Any] = {}
+        for var in mcs.CLASS_VARIABLES:
+            if var in attrs:
+                class_vars[var] = attrs.pop(var)
+
         # Create new class
         cls = super().__new__(mcs, name, bases, attrs)
 
-        # Set model name if not defined
-        if "_name" not in attrs:
-            attrs["_name"] = name.lower()
+        # Restore class variables after class creation
+        for var_name, var_value in class_vars.items():
+            setattr(cls, var_name, var_value)
 
         # Validate model name
-        model_name = attrs["_name"]
         mcs.validate_model_name(model_name)
 
         # Register model
@@ -218,14 +240,32 @@ class MetaModel(type):
     def validate_model_name(cls, name: str) -> None:
         """Validate model name format.
 
+        The model name can be in two formats:
+        1. Simple format: just the model name (e.g. "users")
+        2. Full format: module.model (e.g. "res.users")
+
         Args:
             name: Model name to validate
 
         Raises:
             ValueError: If model name is invalid
         """
-        if not name or "." not in name:
-            raise ValueError("Model name must be in format: 'module.model'")
+        if not name:
+            raise ValueError("Model name cannot be empty")
+
+        # Allow both simple format (users) and full format (res.users)
+        if "." in name:
+            module, model = name.split(".")
+            if not module or not model:
+                raise ValueError(
+                    "Invalid model name format. Must be 'module.model' or 'model'"
+                )
+        else:
+            # Simple format validation
+            if not name.replace("_", "").isalnum():
+                raise ValueError(
+                    "Model name can only contain letters, numbers and underscores"
+                )
 
     @classmethod
     def get_model(cls, name: str) -> Type["BaseModel"]:

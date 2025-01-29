@@ -15,9 +15,11 @@ from types import TracebackType
 from typing import Any, Dict, List, Optional, Type, TypeVar, cast
 
 from bson import ObjectId
-from pymongo.client_session import ClientSession
-from pymongo.collection import Collection
-from pymongo.database import Database
+from motor.motor_asyncio import (
+    AsyncIOMotorClientSession,
+    AsyncIOMotorCollection,
+    AsyncIOMotorDatabase,
+)
 from pymongo.errors import PyMongoError
 from pymongo.read_concern import ReadConcern
 from pymongo.read_preferences import ReadPreference
@@ -43,7 +45,9 @@ class MongoTransaction(Transaction[ModelT]):
     """MongoDB transaction implementation."""
 
     def __init__(
-        self, collection: Collection[Dict[str, Any]], session: ClientSession
+        self,
+        collection: AsyncIOMotorCollection[Dict[str, Any]],
+        session: AsyncIOMotorClientSession,
     ) -> None:
         """Initialize transaction.
 
@@ -55,7 +59,7 @@ class MongoTransaction(Transaction[ModelT]):
         self._session = session
         self._inserted_ids: List[ObjectId] = []
 
-    def __enter__(self) -> "MongoTransaction[ModelT]":
+    async def __aenter__(self) -> "MongoTransaction[ModelT]":
         """Enter transaction context.
 
         Returns:
@@ -63,7 +67,7 @@ class MongoTransaction(Transaction[ModelT]):
         """
         return self
 
-    def __exit__(
+    async def __aexit__(
         self,
         exc_type: Optional[Type[BaseException]],
         exc_val: Optional[BaseException],
@@ -78,13 +82,13 @@ class MongoTransaction(Transaction[ModelT]):
         """
         try:
             if exc_type is not None:
-                self.rollback()
+                await self.rollback()
             else:
-                self.commit()
+                await self.commit()
         finally:
-            self._session.end_session()
+            await self._session.end_session()
 
-    def insert(self, model: ModelT) -> ModelT:
+    async def insert(self, model: ModelT) -> ModelT:
         """Insert model into database.
 
         Args:
@@ -98,14 +102,14 @@ class MongoTransaction(Transaction[ModelT]):
         """
         try:
             values = cast(JsonDict, model.to_dict())
-            result = self._collection.insert_one(values, session=self._session)
+            result = await self._collection.insert_one(values, session=self._session)
             model.id = result.inserted_id
             self._inserted_ids.append(cast(ObjectId, result.inserted_id))
             return model
         except PyMongoError as e:
             raise MongoTransactionError(f"Failed to insert model: {e}") from e
 
-    def insert_many(self, models: List[ModelT]) -> List[ModelT]:
+    async def insert_many(self, models: List[ModelT]) -> List[ModelT]:
         """Insert multiple models into database.
 
         Args:
@@ -119,7 +123,7 @@ class MongoTransaction(Transaction[ModelT]):
         """
         try:
             values = [cast(JsonDict, model.to_dict()) for model in models]
-            result = self._collection.insert_many(values, session=self._session)
+            result = await self._collection.insert_many(values, session=self._session)
             for model, id_ in zip(models, result.inserted_ids):
                 model.id = id_
                 self._inserted_ids.append(cast(ObjectId, id_))
@@ -127,7 +131,7 @@ class MongoTransaction(Transaction[ModelT]):
         except PyMongoError as e:
             raise MongoTransactionError(f"Failed to insert models: {e}") from e
 
-    def update(self, model: ModelT) -> ModelT:
+    async def update(self, model: ModelT) -> ModelT:
         """Update model in database.
 
         Args:
@@ -144,14 +148,14 @@ class MongoTransaction(Transaction[ModelT]):
             raise ValueError("Model has no ID")
         try:
             values = cast(JsonDict, model.to_dict())
-            self._collection.update_one(
+            await self._collection.update_one(
                 {"_id": model.id}, {"$set": values}, session=self._session
             )
             return model
         except PyMongoError as e:
             raise MongoTransactionError(f"Failed to update model: {e}") from e
 
-    def update_many(self, models: List[ModelT]) -> List[ModelT]:
+    async def update_many(self, models: List[ModelT]) -> List[ModelT]:
         """Update multiple models in database.
 
         Args:
@@ -169,14 +173,14 @@ class MongoTransaction(Transaction[ModelT]):
                 if not model.id:
                     raise ValueError("Model has no ID")
                 values = cast(JsonDict, model.to_dict())
-                self._collection.update_one(
+                await self._collection.update_one(
                     {"_id": model.id}, {"$set": values}, session=self._session
                 )
             return models
         except PyMongoError as e:
             raise MongoTransactionError(f"Failed to update models: {e}") from e
 
-    def delete(self, model: ModelT) -> None:
+    async def delete(self, model: ModelT) -> None:
         """Delete model from database.
 
         Args:
@@ -189,11 +193,11 @@ class MongoTransaction(Transaction[ModelT]):
         if not model.id:
             raise ValueError("Model has no ID")
         try:
-            self._collection.delete_one({"_id": model.id}, session=self._session)
+            await self._collection.delete_one({"_id": model.id}, session=self._session)
         except PyMongoError as e:
             raise MongoTransactionError(f"Failed to delete model: {e}") from e
 
-    def delete_many(self, models: List[ModelT]) -> None:
+    async def delete_many(self, models: List[ModelT]) -> None:
         """Delete multiple models from database.
 
         Args:
@@ -209,29 +213,31 @@ class MongoTransaction(Transaction[ModelT]):
                 if not model.id:
                     raise ValueError("Model has no ID")
                 ids.append(cast(ObjectId, model.id))
-            self._collection.delete_many({"_id": {"$in": ids}}, session=self._session)
+            await self._collection.delete_many(
+                {"_id": {"$in": ids}}, session=self._session
+            )
         except PyMongoError as e:
             raise MongoTransactionError(f"Failed to delete models: {e}") from e
 
-    def commit(self) -> None:
+    async def commit(self) -> None:
         """Commit transaction.
 
         Raises:
             MongoTransactionError: If transaction cannot be committed
         """
         try:
-            self._session.commit_transaction()
+            await self._session.commit_transaction()
         except PyMongoError as e:
             raise MongoTransactionError(f"Failed to commit transaction: {e}") from e
 
-    def rollback(self) -> None:
+    async def rollback(self) -> None:
         """Rollback transaction.
 
         Raises:
             MongoTransactionError: If transaction cannot be rolled back
         """
         try:
-            self._session.abort_transaction()
+            await self._session.abort_transaction()
         except PyMongoError as e:
             raise MongoTransactionError(f"Failed to rollback transaction: {e}") from e
 
@@ -239,7 +245,7 @@ class MongoTransaction(Transaction[ModelT]):
 class MongoTransactionManager(TransactionManager[ModelT]):
     """MongoDB transaction manager."""
 
-    def __init__(self, db: Database[Dict[str, Any]]) -> None:
+    def __init__(self, db: AsyncIOMotorDatabase[Dict[str, Any]]) -> None:
         """Initialize transaction manager.
 
         Args:
@@ -257,7 +263,7 @@ class MongoTransactionManager(TransactionManager[ModelT]):
         """
         self._model_type = model_type
 
-    def _begin_transaction(self) -> Transaction[ModelT]:
+    async def _begin_transaction(self) -> Transaction[ModelT]:
         """Begin new transaction.
 
         Returns:
@@ -276,10 +282,10 @@ class MongoTransactionManager(TransactionManager[ModelT]):
                 raise MongoTransactionError("Model has no collection name")
 
             collection = self._db[collection_name]
-            session = self._db.client.start_session()
+            session = await self._db.client.start_session()
 
             # Ignore type error for start_transaction
-            session.start_transaction(  # type: ignore
+            await session.start_transaction(  # type: ignore
                 read_concern=ReadConcern("majority"),
                 write_concern=WriteConcern("majority"),
                 read_preference=ReadPreference.PRIMARY,

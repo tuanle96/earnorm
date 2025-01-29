@@ -74,8 +74,9 @@ class SystemConfig(BaseModel):
         >>> print(config.redis_host)
     """
 
-    # Collection configuration
-    _name = "system_config"
+    _name = "system.config"
+    _description = "System Configuration"
+    _skip_default_fields = True  # Skip default fields like created_at, updated_at
 
     # Singleton instance
     _instance: ClassVar[Optional["SystemConfig"]] = None

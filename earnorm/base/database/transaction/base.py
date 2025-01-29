@@ -1,24 +1,21 @@
-"""Base transaction interface.
-
-This module provides the base interface for database transactions.
-
-Examples:
-    >>> with adapter.transaction() as tx:
-    ...     user = User(name="John", age=25)
-    ...     tx.insert(user)
-    ...     tx.update(user)
-    ...     tx.delete(user)
-    ...     tx.commit()
-"""
+"""Base transaction implementation."""
 
 from abc import ABC, abstractmethod
-from contextlib import AbstractContextManager
 from types import TracebackType
-from typing import Generic, List, Optional, Type, TypeVar
+from typing import (
+    TYPE_CHECKING,
+    AsyncContextManager,
+    Generic,
+    List,
+    Optional,
+    Type,
+    TypeVar,
+)
 
-from earnorm.types import DatabaseModel
+if TYPE_CHECKING:
+    from earnorm.types import DatabaseModel
 
-ModelT = TypeVar("ModelT", bound=DatabaseModel)
+ModelT = TypeVar("ModelT", bound="DatabaseModel")
 
 
 class TransactionError(Exception):
@@ -35,7 +32,7 @@ class Transaction(ABC, Generic[ModelT]):
     """
 
     @abstractmethod
-    def __enter__(self) -> "Transaction[ModelT]":
+    async def __aenter__(self) -> "Transaction[ModelT]":
         """Enter transaction context.
 
         Returns:
@@ -44,7 +41,7 @@ class Transaction(ABC, Generic[ModelT]):
         pass
 
     @abstractmethod
-    def __exit__(
+    async def __aexit__(
         self,
         exc_type: Optional[Type[BaseException]],
         exc_val: Optional[BaseException],
@@ -60,7 +57,7 @@ class Transaction(ABC, Generic[ModelT]):
         pass
 
     @abstractmethod
-    def insert(self, model: ModelT) -> ModelT:
+    async def insert(self, model: ModelT) -> ModelT:
         """Insert model into database.
 
         Args:
@@ -72,7 +69,7 @@ class Transaction(ABC, Generic[ModelT]):
         pass
 
     @abstractmethod
-    def insert_many(self, models: List[ModelT]) -> List[ModelT]:
+    async def insert_many(self, models: List[ModelT]) -> List[ModelT]:
         """Insert multiple models into database.
 
         Args:
@@ -84,7 +81,7 @@ class Transaction(ABC, Generic[ModelT]):
         pass
 
     @abstractmethod
-    def update(self, model: ModelT) -> ModelT:
+    async def update(self, model: ModelT) -> ModelT:
         """Update model in database.
 
         Args:
@@ -99,7 +96,7 @@ class Transaction(ABC, Generic[ModelT]):
         pass
 
     @abstractmethod
-    def update_many(self, models: List[ModelT]) -> List[ModelT]:
+    async def update_many(self, models: List[ModelT]) -> List[ModelT]:
         """Update multiple models in database.
 
         Args:
@@ -114,7 +111,7 @@ class Transaction(ABC, Generic[ModelT]):
         pass
 
     @abstractmethod
-    def delete(self, model: ModelT) -> None:
+    async def delete(self, model: ModelT) -> None:
         """Delete model from database.
 
         Args:
@@ -126,7 +123,7 @@ class Transaction(ABC, Generic[ModelT]):
         pass
 
     @abstractmethod
-    def delete_many(self, models: List[ModelT]) -> None:
+    async def delete_many(self, models: List[ModelT]) -> None:
         """Delete multiple models from database.
 
         Args:
@@ -138,7 +135,7 @@ class Transaction(ABC, Generic[ModelT]):
         pass
 
     @abstractmethod
-    def commit(self) -> None:
+    async def commit(self) -> None:
         """Commit transaction.
 
         Raises:
@@ -147,7 +144,7 @@ class Transaction(ABC, Generic[ModelT]):
         pass
 
     @abstractmethod
-    def rollback(self) -> None:
+    async def rollback(self) -> None:
         """Rollback transaction.
 
         Raises:
@@ -156,7 +153,7 @@ class Transaction(ABC, Generic[ModelT]):
         pass
 
 
-class TransactionManager(AbstractContextManager[Transaction[ModelT]]):
+class TransactionManager(AsyncContextManager[Transaction[ModelT]]):
     """Context manager for database transactions.
 
     This class provides a context manager interface for managing transactions.
@@ -175,16 +172,16 @@ class TransactionManager(AbstractContextManager[Transaction[ModelT]]):
         """Initialize transaction manager."""
         self._transaction: Optional[Transaction[ModelT]] = None
 
-    def __enter__(self) -> Transaction[ModelT]:
+    async def __aenter__(self) -> Transaction[ModelT]:
         """Enter transaction context.
 
         Returns:
             Transaction instance
         """
-        self._transaction = self._begin_transaction()
+        self._transaction = await self._begin_transaction()
         return self._transaction
 
-    def __exit__(
+    async def __aexit__(
         self,
         exc_type: Optional[Type[BaseException]],
         exc_val: Optional[BaseException],
@@ -199,10 +196,10 @@ class TransactionManager(AbstractContextManager[Transaction[ModelT]]):
         """
         if exc_type is not None:
             if self._transaction is not None:
-                self._transaction.rollback()
+                await self._transaction.rollback()
         else:
             if self._transaction is not None:
-                self._transaction.commit()
+                await self._transaction.commit()
 
     @abstractmethod
     def set_model_type(self, model_type: Type[ModelT]) -> None:
@@ -217,7 +214,7 @@ class TransactionManager(AbstractContextManager[Transaction[ModelT]]):
         pass
 
     @abstractmethod
-    def _begin_transaction(self) -> Transaction[ModelT]:
+    async def _begin_transaction(self) -> Transaction[ModelT]:
         """Begin new transaction.
 
         Returns:

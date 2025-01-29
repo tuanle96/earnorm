@@ -21,8 +21,8 @@ from typing import Any, Final, Generic, Optional, TypeVar, Union
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 from earnorm.fields.validators.base import RangeValidator, TypeValidator, Validator
+from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 
 # Type variables
 N = TypeVar("N", int, float, Decimal)  # Numeric type
@@ -97,7 +97,10 @@ class NumberField(Generic[N], BaseField[N], FieldComparisonMixin):
                 )
             )
 
-        super().__init__(validators=field_validators, **options)
+        options_without_validators = {
+            k: v for k, v in options.items() if k != "validators"
+        }
+        super().__init__(validators=field_validators, **options_without_validators)
 
         self.min_value = min_value
         self.max_value = max_value
@@ -267,13 +270,16 @@ class IntegerField(NumberField[int]):
             FieldValidationError: If validation fails
         """
         field_validators: list[Validator[Any]] = [TypeValidator(int)]
+        options_without_validators = {
+            k: v for k, v in options.items() if k != "validators"
+        }
         super().__init__(
             min_value=min_value,
             max_value=max_value,
             step=step,
             unit=unit,
             validators=field_validators,
-            **options,
+            **options_without_validators,
         )
 
         # Initialize backend options
@@ -396,13 +402,16 @@ class FloatField(NumberField[float]):
             FieldValidationError: If validation fails
         """
         field_validators: list[Validator[Any]] = [TypeValidator(float)]
+        options_without_validators = {
+            k: v for k, v in options.items() if k != "validators"
+        }
         super().__init__(
             min_value=min_value,
             max_value=max_value,
             step=step,
             unit=unit,
             validators=field_validators,
-            **options,
+            **options_without_validators,
         )
 
         self.precision = precision
@@ -548,13 +557,16 @@ class DecimalField(NumberField[Decimal]):
         step_dec = Decimal(str(step)) if step is not None else None
 
         field_validators: list[Validator[Any]] = [TypeValidator(Decimal)]
+        options_without_validators = {
+            k: v for k, v in options.items() if k != "validators"
+        }
         super().__init__(
             min_value=min_value_dec,
             max_value=max_value_dec,
             step=step_dec,
             unit=unit,
             validators=field_validators,
-            **options,
+            **options_without_validators,
         )
 
         self.max_digits = max_digits

@@ -76,6 +76,7 @@ import logging
 from datetime import UTC, datetime
 from typing import (
     Any,
+    AsyncContextManager,
     Callable,
     ClassVar,
     Dict,
@@ -98,6 +99,7 @@ from earnorm.base.database.query.interfaces.operations.join import (
     JoinProtocol as JoinQuery,
 )
 from earnorm.base.database.query.interfaces.query import QueryProtocol as AsyncQuery
+from earnorm.base.database.transaction.base import Transaction
 from earnorm.base.env import Environment
 from earnorm.base.model.descriptors import FieldsDescriptor
 from earnorm.base.model.meta import MetaModel
@@ -108,11 +110,12 @@ from earnorm.exceptions import (
 )
 from earnorm.fields import BaseField
 from earnorm.types import DatabaseModel, ValueType
+from earnorm.types.models import ModelProtocol
 
 logger = logging.getLogger(__name__)
 
 
-class BaseModel(DatabaseModel, metaclass=MetaModel):
+class BaseModel(metaclass=MetaModel):
     """Base class for all database models.
 
     Features:
@@ -133,17 +136,33 @@ class BaseModel(DatabaseModel, metaclass=MetaModel):
         >>> users = await User.filter([('name', 'like', 'J%')]).all()
     """
 
-    __slots__ = ("_env", "_ids", "_prefetch_ids")
+    # Define slots for instance variables only
+    __slots__ = (
+        "_env",
+        "_ids",
+        "_prefetch_ids",
+        "_domain",
+        "_limit",
+        "_offset",
+        "_order",
+        "_group_by",
+        "_having",
+        "_distinct",
+        "_data",
+        "_changed",
+    )
 
-    # Class variables from ModelProtocol
+    # Class variables (metadata)
     _store: ClassVar[bool] = True
     _name: ClassVar[str]  # Set by metaclass
     _description: ClassVar[Optional[str]] = None
     _table: ClassVar[Optional[str]] = None
     _sequence: ClassVar[Optional[str]] = None
+    _skip_default_fields: ClassVar[bool] = False
+    _abstract: ClassVar[bool] = False
 
-    # Model fields
-    _fields: Dict[str, BaseField[Any]]  # Set by metaclass
+    # Model fields (will be set by metaclass)
+    _fields: ClassVar[Dict[str, BaseField[Any]]]
     __fields__ = FieldsDescriptor()  # Descriptor for accessing fields
     id: int = 0  # Record ID with default value
 
@@ -198,20 +217,20 @@ class BaseModel(DatabaseModel, metaclass=MetaModel):
         return records
 
     @classmethod
-    async def browse(cls, ids: Optional[Union[int, Sequence[int]]] = None) -> Self:
+    async def browse(
+        cls, ids: Union[int, List[int]]
+    ) -> Union[DatabaseModel, List[DatabaseModel]]:
         """Browse records by IDs.
 
         Args:
             ids: Record ID or list of record IDs
 
         Returns:
-            Recordset containing records
+            Single record or list of records
         """
-        if ids is None:
-            ids = []
-        elif isinstance(ids, (int, str)):
-            ids = [ids]
-        return cls._browse(cls._env, cast(Sequence[int], ids), cast(Sequence[int], ids))
+        if isinstance(ids, int):
+            return cls._browse(cls._env, [ids])
+        return [cls._browse(cls._env, [id]) for id in ids]
 
     @classmethod
     async def _where_calc(
@@ -966,3 +985,35 @@ class BaseModel(DatabaseModel, metaclass=MetaModel):
         await record._create(values)
 
         return record
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert model to dictionary.
+
+        Returns:
+            Dictionary representation of model
+        """
+        result: Dict[str, Any] = {}
+        for name, field in self._fields.items():
+            if not field.readonly:
+                result[name] = getattr(self, name)
+        return result
+
+    def from_dict(self, data: Dict[str, Any]) -> None:
+        """Update model from dictionary.
+
+        Args:
+            data: Dictionary data to update from
+        """
+        for name, value in data.items():
+            if name in self._fields and not self._fields[name].readonly:
+                setattr(self, name, value)
+
+    async def with_transaction(
+        self,
+    ) -> "AsyncContextManager[Transaction[ModelProtocol]]":
+        """Get transaction context manager.
+
+        Returns:
+            Transaction context manager
+        """
+        return await self._env.adapter.transaction(model_type=type(self))
