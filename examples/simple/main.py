@@ -1,8 +1,10 @@
 """Simple example usage with detailed logging."""
 
+import asyncio
 import logging
 from typing import Self
 
+import earnorm
 from earnorm import fields
 from earnorm.base.model import BaseModel
 
@@ -37,8 +39,18 @@ class User(BaseModel):
             domain=[("age", ">", 18)],
             limit=10,
         )
-        users.filtered(lambda user: user.age > 18)
+        users.filtered(lambda user: user.age is not None and user.age > 18)
 
         for user in users:
             print(user.name)
         return users
+
+
+async def main():
+    await earnorm.init(
+        "./config.yaml",
+    )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

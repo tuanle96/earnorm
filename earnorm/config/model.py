@@ -198,10 +198,6 @@ class SystemConfig(BaseModel):
         description="Default cache TTL in seconds",
     )
 
-    def __init__(self, **data: Any) -> None:
-        """Initialize config instance."""
-        super().__init__(**data)
-
     def validate(self) -> None:
         """Validate all configuration settings.
 
@@ -318,7 +314,7 @@ class SystemConfig(BaseModel):
                     config_data[key.lower()] = value
 
             # Create config instance
-            return cls(**config_data)
+            return await cls.create(values=config_data)
 
         except Exception as e:
             raise ConfigError(f"Failed to load config from environment: {e}") from e
@@ -342,7 +338,7 @@ class SystemConfig(BaseModel):
                 config_data = yaml.safe_load(f)
 
             # Create config instance
-            return cls(**config_data)
+            return await cls.create(values=config_data)
 
         except Exception as e:
             raise ConfigError(f"Failed to load config from YAML: {e}") from e
