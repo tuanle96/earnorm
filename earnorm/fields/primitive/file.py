@@ -39,7 +39,7 @@ from motor.motor_asyncio import AsyncIOMotorGridFSBucket
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.fields.types import ComparisonOperator, DatabaseValue, FieldComparisonMixin
+from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 from earnorm.fields.validators.base import TypeValidator, Validator
 
 

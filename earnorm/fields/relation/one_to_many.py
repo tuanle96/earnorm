@@ -21,24 +21,17 @@ Examples:
     ...     )
 """
 
-from typing import TYPE_CHECKING, Any, Final, List, Optional, Type, TypeVar, Union, cast
+from typing import Any, Final, List, Optional, Type, Union, cast
 
-from earnorm.base.env import Environment
-from earnorm.base.model.meta import BaseModel
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.relation.base import Context, Domain, ModelList, RelationField
-from earnorm.fields.types import ComparisonOperator
-
-if TYPE_CHECKING:
-    from earnorm.fields.relation.many_to_one import ManyToOneField
-
-M = TypeVar("M", bound=BaseModel)  # Model type
+from earnorm.types.fields import ComparisonOperator
 
 # Constants
 DEFAULT_CASCADE: Final[bool] = True
 
 
-class OneToManyField(RelationField[ModelList[M]]):
+class OneToManyField(RelationField[Any]):
     """Field for one-to-many relationships.
 
     This field type handles one-to-many relationships, with support for:
@@ -63,7 +56,7 @@ class OneToManyField(RelationField[ModelList[M]]):
 
     def __init__(
         self,
-        model_ref: Union[str, Type[M]],
+        model_ref: Union[str, Type[Any]],
         *,
         back_populates: Optional[str] = None,
         cascade: bool = DEFAULT_CASCADE,
@@ -84,7 +77,7 @@ class OneToManyField(RelationField[ModelList[M]]):
             **kwargs: Additional field options
         """
         super().__init__(
-            cast(Union[str, Type[ModelList[M]]], model_ref),
+            model_ref,
             back_populates=back_populates,
             cascade=cascade,
             lazy_load=lazy_load,
@@ -109,7 +102,7 @@ class OneToManyField(RelationField[ModelList[M]]):
         """
         return ComparisonOperator(self.name, "size_>", 0)
 
-    def contains(self, value: Union[str, BaseModel]) -> ComparisonOperator:
+    def contains(self, value: Any) -> ComparisonOperator:
         """Check if relation contains a specific value.
 
         Args:
@@ -118,7 +111,7 @@ class OneToManyField(RelationField[ModelList[M]]):
         Returns:
             ComparisonOperator: Comparison operator for contains check
         """
-        if isinstance(value, BaseModel):
+        if hasattr(value, "id"):
             value = str(value.id)  # type: ignore
         return ComparisonOperator(self.name, "contains", value)
 
@@ -165,7 +158,7 @@ class OneToManyField(RelationField[ModelList[M]]):
         """
         return ComparisonOperator(self.name, "all", (field, operator, value))
 
-    async def convert(self, value: Any) -> Optional[ModelList[M]]:
+    async def convert(self, value: Any) -> Optional[ModelList[Any]]:
         """Convert value to list of model instances.
 
         Args:
@@ -187,18 +180,20 @@ class OneToManyField(RelationField[ModelList[M]]):
             )
 
         model_class = self.get_model_class()
-        result: List[M] = []
+        result: List[Any] = []
 
         try:
+            from earnorm.base.env import Environment
+
             env = Environment.get_instance()
-            for item in cast(List[Union[M, str]], value):
+            for item in cast(List[Union[Any, str]], value):
                 if isinstance(item, model_class):
-                    result.append(cast(M, item))
+                    result.append(item)
                 elif isinstance(item, str):
                     # Try to load by ID
                     try:
                         instance = await model_class.get(env, item)  # type: ignore
-                        result.append(cast(M, instance))
+                        result.append(instance)
                     except Exception as e:
                         raise FieldValidationError(
                             message=f"Failed to load {model_class.__name__} with id {item}: {e}",
@@ -221,7 +216,7 @@ class OneToManyField(RelationField[ModelList[M]]):
         return ModelList(items=result)
 
     async def to_db(
-        self, value: Optional[ModelList[M]], backend: str
+        self, value: Optional[ModelList[Any]], backend: str
     ) -> Optional[List[str]]:
         """Convert list of model instances to database format.
 
@@ -249,7 +244,7 @@ class OneToManyField(RelationField[ModelList[M]]):
 
         return result
 
-    async def from_db(self, value: Any, backend: str) -> Optional[ModelList[M]]:
+    async def from_db(self, value: Any, backend: str) -> Optional[ModelList[Any]]:
         """Convert database value to list of model instances.
 
         Args:
@@ -272,21 +267,23 @@ class OneToManyField(RelationField[ModelList[M]]):
             )
 
         model_class = self.get_model_class()
-        result: List[M] = []
+        result: List[Any] = []
 
         try:
+            from earnorm.base.env import Environment
+
             env = Environment.get_instance()
             for item_id in cast(List[str], value):
                 if self.lazy_load:
                     # Create model instance without loading
                     instance = model_class(env)  # type: ignore
                     instance.id = item_id  # type: ignore
-                    result.append(cast(M, instance))
+                    result.append(instance)
                 else:
                     # Load and validate model instance
                     instance = await model_class.get(env, item_id)  # type: ignore
                     await instance.validate()  # type: ignore
-                    result.append(cast(M, instance))
+                    result.append(instance)
         except Exception as e:
             raise FieldValidationError(
                 message=f"Failed to load {model_class.__name__} instances: {e}",
@@ -295,19 +292,22 @@ class OneToManyField(RelationField[ModelList[M]]):
 
         return ModelList(items=result)
 
-    def _create_back_reference(self) -> "ManyToOneField[M]":
+    def _create_back_reference(self) -> RelationField[Any]:
         """Create back reference field.
 
         Returns:
-            ManyToOneField: Back reference field instance
+            RelationField: Back reference field instance
         """
         from earnorm.fields.relation.many_to_one import ManyToOneField
 
-        return ManyToOneField(
-            self.model_name,  # type: ignore
-            back_populates=self.name,
-            cascade=self.cascade,
-            lazy_load=self.lazy_load,
-            domain=self.domain,
-            context=self.context,
+        return cast(
+            RelationField[Any],
+            ManyToOneField(
+                self.model_name,  # type: ignore
+                back_populates=self.name,
+                cascade=self.cascade,
+                lazy_load=self.lazy_load,
+                domain=self.domain,
+                context=self.context,
+            ),
         )

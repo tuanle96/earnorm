@@ -12,7 +12,7 @@ from typing import Optional, TypeVar
 from bson.decimal128 import Decimal128
 
 from earnorm.fields.adapters.base import BaseAdapter
-from earnorm.fields.types import DatabaseValue
+from earnorm.types.fields import DatabaseValue
 
 T = TypeVar("T")  # Field value type
 

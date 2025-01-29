@@ -25,16 +25,12 @@ Examples:
     ...     )
 """
 
-from typing import Any, Final, Literal, Optional, Type, TypeVar, Union, cast
+from typing import Any, Final, Literal, Optional, Type, Union, cast
 
-from earnorm.base.env import Environment
-from earnorm.base.model.meta import BaseModel
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.relation.base import Context, Domain, RelationField
 from earnorm.fields.relation.one_to_many import OneToManyField
-from earnorm.fields.types import ComparisonOperator
-
-M = TypeVar("M", bound=BaseModel)
+from earnorm.types.fields import ComparisonOperator
 
 # Constants
 OnDeleteAction = Literal["cascade", "set null", "restrict"]
@@ -42,7 +38,7 @@ DEFAULT_ONDELETE: Final[OnDeleteAction] = "set null"
 DEFAULT_CONTEXT: Final[Context] = {}
 
 
-class ManyToOneField(RelationField[M]):
+class ManyToOneField(RelationField[Any]):
     """Field for many-to-one relationships.
 
     This field type handles many-to-one relationships, with support for:
@@ -69,7 +65,7 @@ class ManyToOneField(RelationField[M]):
 
     def __init__(
         self,
-        model_ref: Union[str, Type[M]],
+        model_ref: Union[str, Type[Any]],
         *,
         ondelete: OnDeleteAction = DEFAULT_ONDELETE,
         back_populates: Optional[str] = None,
@@ -118,7 +114,7 @@ class ManyToOneField(RelationField[M]):
         """
         return ComparisonOperator(self.name, "is_not_null", None)
 
-    def contains(self, value: Union[str, BaseModel]) -> ComparisonOperator:
+    def contains(self, value: Any) -> ComparisonOperator:
         """Check if relation points to a specific value.
 
         Args:
@@ -127,7 +123,7 @@ class ManyToOneField(RelationField[M]):
         Returns:
             ComparisonOperator: Comparison operator for equality check
         """
-        if isinstance(value, BaseModel):
+        if hasattr(value, "id"):
             value = str(value.id)  # type: ignore
         return ComparisonOperator(self.name, "=", value)
 
@@ -161,22 +157,25 @@ class ManyToOneField(RelationField[M]):
             "All comparison not supported for many-to-one relations"
         )
 
-    def _create_back_reference(self) -> OneToManyField[M]:
+    def _create_back_reference(self) -> RelationField[Any]:
         """Create back reference field.
 
         Returns:
-            OneToManyField: Back reference field instance
+            RelationField: Back reference field instance
         """
-        return OneToManyField(
-            self.model_name,  # type: ignore
-            back_populates=self.name,
-            cascade=self.cascade,
-            lazy_load=self.lazy_load,
-            domain=self.domain,
-            context=self.context,
+        return cast(
+            RelationField[Any],
+            OneToManyField(
+                self.model_name,  # type: ignore
+                back_populates=self.name,
+                cascade=self.cascade,
+                lazy_load=self.lazy_load,
+                domain=self.domain,
+                context=self.context,
+            ),
         )
 
-    async def convert(self, value: Any) -> Optional[M]:
+    async def convert(self, value: Any) -> Optional[Any]:
         """Convert value to model instance.
 
         Args:
@@ -195,7 +194,7 @@ class ManyToOneField(RelationField[M]):
 
         try:
             if isinstance(value, model_class):
-                return value  # type: ignore
+                return value
             elif isinstance(value, str):
                 # Try to load by ID
                 if not hasattr(self, "model"):
@@ -208,9 +207,11 @@ class ManyToOneField(RelationField[M]):
                     )
 
                 try:
+                    from earnorm.base.env import Environment
+
                     env = Environment.get_instance()
                     instance = await model_class.get(env, value)  # type: ignore
-                    return cast(M, instance)
+                    return instance
                 except Exception as e:
                     raise FieldValidationError(
                         message=f"Failed to load {model_class.__name__} with id {value}: {e}",
@@ -230,14 +231,14 @@ class ManyToOneField(RelationField[M]):
                 field_name=self.name,
             ) from e
 
-    async def validate(self, value: Optional[M]) -> Optional[M]:
+    async def validate(self, value: Optional[Any]) -> Optional[Any]:
         """Validate field value.
 
         Args:
             value: Value to validate
 
         Returns:
-            Optional[M]: Validated value
+            Optional[Any]: Validated value
 
         Raises:
             FieldValidationError: If validation fails
@@ -256,7 +257,7 @@ class ManyToOneField(RelationField[M]):
             )
 
         # Check domain if specified
-        if self.domain and not await self._check_domain(value):  # type: ignore
+        if self.domain and not await self._check_domain(value):
             constraints = [
                 f"{field} {op} {expected}" for field, op, expected in self.domain
             ]
@@ -270,18 +271,15 @@ class ManyToOneField(RelationField[M]):
 
         return value
 
-    async def to_db(self, value: Optional[M], backend: str) -> Optional[str]:
-        """Convert model instance to database format.
+    async def to_db(self, value: Optional[Any], backend: str) -> Optional[str]:
+        """Convert value to database format.
 
         Args:
-            value: Model instance
+            value: Value to convert
             backend: Database backend type
 
         Returns:
             Database value or None
-
-        Raises:
-            FieldValidationError: If conversion fails
         """
         if value is None:
             return None
@@ -291,9 +289,10 @@ class ManyToOneField(RelationField[M]):
                 message=f"Model instance {value} has no id attribute",
                 field_name=self.name,
             )
+
         return str(value.id)  # type: ignore
 
-    async def from_db(self, value: Any, backend: str) -> Optional[M]:
+    async def from_db(self, value: Any, backend: str) -> Optional[Any]:
         """Convert database value to model instance.
 
         Args:
@@ -311,27 +310,23 @@ class ManyToOneField(RelationField[M]):
 
         model_class = self.get_model_class()
 
-        if not hasattr(self, "model"):
-            raise FieldValidationError(
-                message=(
-                    f"Cannot load related model for field {self.name} "
-                    "without parent model"
-                ),
-                field_name=self.name,
-            )
-
         try:
-            env = Environment.get_instance()
             if self.lazy_load:
                 # Create model instance without loading
+                from earnorm.base.env import Environment
+
+                env = Environment.get_instance()
                 instance = model_class(env)  # type: ignore
                 instance.id = value  # type: ignore
-                return instance  # type: ignore
+                return instance
             else:
                 # Load and validate model instance
+                from earnorm.base.env import Environment
+
+                env = Environment.get_instance()
                 instance = await model_class.get(env, value)  # type: ignore
                 await instance.validate()  # type: ignore
-                return instance  # type: ignore
+                return instance
         except Exception as e:
             raise FieldValidationError(
                 message=f"Failed to load {model_class.__name__} with id {value}: {e}",

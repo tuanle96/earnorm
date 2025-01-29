@@ -29,7 +29,7 @@ from typing import (
 )
 
 from earnorm.fields.adapters.base import DatabaseAdapter
-from earnorm.fields.types import DatabaseValue
+from earnorm.types.fields import DatabaseValue
 
 # Type for field values (None or actual value)
 FieldValue = Union[None, bool, int, float, str, Dict[str, Any], List[Any], Any]

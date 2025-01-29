@@ -27,7 +27,7 @@ from typing import Any, Generic, List, Optional, Sequence, Set, TypeVar, Union, 
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.fields.types import ComparisonOperator, DatabaseValue, FieldComparisonMixin
+from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 
 # Type variable for set items
 T = TypeVar("T")

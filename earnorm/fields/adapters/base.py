@@ -22,7 +22,7 @@ Examples:
 
 from typing import Any, Generic, Optional, Protocol, TypeVar
 
-from earnorm.fields.types import DatabaseValue
+from earnorm.types.fields import DatabaseValue
 
 # Type variable for field value type
 T = TypeVar("T")

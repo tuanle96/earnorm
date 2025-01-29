@@ -26,7 +26,7 @@ from typing import (
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.adapters.base import DatabaseAdapter
-from earnorm.fields.types import ComparisonOperator, DatabaseValue
+from earnorm.types.fields import ComparisonOperator, DatabaseValue
 
 T = TypeVar("T")  # Field value type
 

@@ -38,7 +38,7 @@ from jsonschema import Draft202012Validator, ValidationError, validate
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.fields.types import ComparisonOperator, DatabaseValue, FieldComparisonMixin
+from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 
 # Type variables for key and value types
 K = TypeVar("K")

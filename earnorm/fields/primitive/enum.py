@@ -30,7 +30,7 @@ from typing import Any, Final, Generic, List, Optional, Type, TypeVar, Union
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.fields.types import ComparisonOperator, DatabaseValue, FieldComparisonMixin
+from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 from earnorm.fields.validators.base import TypeValidator, Validator
 
 # Type variable for enum type

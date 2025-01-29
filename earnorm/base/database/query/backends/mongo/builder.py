@@ -22,8 +22,8 @@ from typing import Any, List, Literal, Protocol, Tuple, Type, TypeVar, Union
 
 from motor.motor_asyncio import AsyncIOMotorCollection
 
-from earnorm.fields.types import ComparisonOperator
 from earnorm.types import DatabaseModel, JsonDict, ValueType
+from earnorm.types.fields import ComparisonOperator
 
 from .converter import MongoConverter
 from .query import MongoQuery

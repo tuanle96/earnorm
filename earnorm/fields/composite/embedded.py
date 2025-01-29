@@ -25,15 +25,18 @@ Examples:
     ...     has_address = User.find(User.home_address.is_not_null())
 """
 
-from typing import Any, Dict, Generic, List, Optional, Type, TypeVar
+from typing import TYPE_CHECKING, Any, Dict, Generic, List, Optional, Type, TypeVar
 
-from earnorm.base.model.base import BaseModel
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.fields.types import ComparisonOperator, DatabaseValue, FieldComparisonMixin
+from earnorm.types import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 
-# Type variable for embedded model
-M = TypeVar("M", bound=BaseModel)
+if TYPE_CHECKING:
+    from earnorm.base.model.base import BaseModel
+
+    M = TypeVar("M", bound="BaseModel")  # Type variable for embedded model
+else:
+    M = TypeVar("M")  # Type variable for runtime
 
 
 class EmbeddedField(BaseField[M], FieldComparisonMixin, Generic[M]):

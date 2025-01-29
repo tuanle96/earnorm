@@ -37,15 +37,14 @@ from typing import (
     runtime_checkable,
 )
 
-from earnorm.base.env import Environment
-from earnorm.base.model.meta import BaseModel
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.fields.types import ComparisonOperator
+from earnorm.types.fields import ComparisonOperator
 
 # Type variables with constraints
-M_co = TypeVar("M_co", bound=BaseModel, covariant=True)
-M = TypeVar("M", bound=BaseModel)
+M_co = TypeVar("M_co", covariant=True)  # Covariant type variable for model protocol
+M = TypeVar("M")  # Invariant type variable for model types
+V = TypeVar("V")  # Invariant type variable for field value types
 
 # Type aliases with better type hints
 DomainOperator = Literal["=", "!=", ">", ">=", "<", "<=", "in", "not in"]
@@ -87,7 +86,7 @@ class RelationComparisonMixin(Protocol):
         """
         return ComparisonOperator(self.name, "is_not_empty", None)
 
-    def contains(self, value: Union[str, BaseModel]) -> ComparisonOperator:
+    def contains(self, value: Any) -> ComparisonOperator:
         """Check if relation contains a specific value.
 
         Args:
@@ -96,7 +95,7 @@ class RelationComparisonMixin(Protocol):
         Returns:
             ComparisonOperator: Comparison operator for contains check
         """
-        if isinstance(value, BaseModel):
+        if hasattr(value, "id"):
             value = str(value.id)  # type: ignore
         return ComparisonOperator(self.name, "contains", value)
 
@@ -151,16 +150,16 @@ class RelationComparisonMixin(Protocol):
 class ModelProtocol(Protocol[M_co]):
     """Protocol for model interface."""
 
-    env: Environment
+    env: Any  # Type will be Environment
     id: str
 
     @classmethod
-    async def get(cls, env: Environment, _id: str) -> "ModelProtocol[M_co]":
+    async def get(cls, env: Any, _id: str) -> "ModelProtocol[M_co]":
         """Get model by ID."""
         ...
 
 
-class ModelList(BaseModel, Generic[M]):
+class ModelList(Generic[M]):
     """Container for list of model instances.
 
     This class wraps a list of model instances to make it compatible
@@ -178,11 +177,10 @@ class ModelList(BaseModel, Generic[M]):
         Args:
             items: List of model instances
         """
-        super().__init__()
         self.items = items
 
 
-class RelationField(BaseField[M], RelationComparisonMixin):
+class RelationField(BaseField[V], RelationComparisonMixin, Generic[V]):
     """Base class for relation fields.
 
     This class provides common functionality for relation fields:
@@ -204,7 +202,7 @@ class RelationField(BaseField[M], RelationComparisonMixin):
 
     def __init__(
         self,
-        model_ref: Union[str, Type[M]],
+        model_ref: Union[str, Type[Any]],
         *,
         back_populates: Optional[str] = None,
         cascade: bool = False,
@@ -223,7 +221,7 @@ class RelationField(BaseField[M], RelationComparisonMixin):
         self.context = context or DEFAULT_CONTEXT.copy()
 
         # Internal state
-        self._model_class: Optional[Type[M]] = None
+        self._model_class: Optional[Type[Any]] = None
         self._resolved_model = False
 
     async def setup(self, name: str, model_name: str) -> None:
@@ -237,8 +235,10 @@ class RelationField(BaseField[M], RelationComparisonMixin):
 
         # Resolve model reference if string
         if isinstance(self.model_ref, str):
+            from earnorm.base.env import Environment
+
             env = Environment.get_instance()
-            self._model_class = cast(Type[M], env.get_model(self.model_ref))
+            self._model_class = cast(Type[Any], await env.get_model(self.model_ref))
             self._resolved_model = True
 
         # Set up back reference if needed
@@ -262,7 +262,7 @@ class RelationField(BaseField[M], RelationComparisonMixin):
         # Set up back reference field
         await back_field.setup(self.back_populates, model_class.__name__)
 
-    def _create_back_reference(self) -> "RelationField[Any]":
+    def _create_back_reference(self) -> "RelationField[V]":
         """Create back reference field.
 
         This method should be overridden by subclasses to create the appropriate
@@ -276,11 +276,11 @@ class RelationField(BaseField[M], RelationComparisonMixin):
         """
         raise NotImplementedError("Subclasses must implement _create_back_reference()")
 
-    def get_model_class(self) -> Type[M]:
+    def get_model_class(self) -> Type[Any]:
         """Get referenced model class.
 
         Returns:
-            Type[M]: Model class
+            Type[Any]: Model class
 
         Raises:
             RuntimeError: If model reference is not resolved
@@ -297,14 +297,14 @@ class RelationField(BaseField[M], RelationComparisonMixin):
             )
         return self._model_class
 
-    async def validate(self, value: Optional[M]) -> Optional[M]:
+    async def validate(self, value: Optional[V]) -> Optional[V]:
         """Validate field value.
 
         Args:
             value: Value to validate
 
         Returns:
-            Optional[M]: Validated value
+            Optional[V]: Validated value
 
         Raises:
             FieldValidationError: If validation fails
@@ -339,7 +339,7 @@ class RelationField(BaseField[M], RelationComparisonMixin):
 
         return value
 
-    async def _check_domain(self, value: M) -> bool:
+    async def _check_domain(self, value: V) -> bool:
         """Check if value matches domain constraints.
 
         Args:
@@ -380,13 +380,13 @@ class RelationField(BaseField[M], RelationComparisonMixin):
 
         return True
 
-    def copy(self) -> "RelationField[M]":
+    def copy(self) -> "RelationField[V]":
         """Create copy of field.
 
         Returns:
-            RelationField[M]: New field instance with same configuration
+            RelationField: New field instance with same configuration
         """
-        return cast(RelationField[M], super().copy())
+        return cast("RelationField[V]", super().copy())
 
 
 class OneToManyRelationField(RelationField[ModelList[M]]):
@@ -411,7 +411,7 @@ class OneToManyRelationField(RelationField[ModelList[M]]):
 
     def __init__(
         self,
-        model_ref: Union[str, Type[ModelList[M]]],
+        model_ref: Union[str, Type[M]],
         *,
         back_populates: Optional[str] = None,
         cascade: bool = True,
@@ -429,6 +429,19 @@ class OneToManyRelationField(RelationField[ModelList[M]]):
             domain=domain,
             context=context,
             **kwargs,
+        )
+
+    def _create_back_reference(self) -> "RelationField[ModelList[M]]":
+        """Create back reference field.
+
+        Returns:
+            RelationField: Back reference field instance
+        """
+        return self.__class__(
+            self.model_name,
+            back_populates=self.name,
+            cascade=self.cascade,
+            lazy_load=self.lazy_load,
         )
 
     async def validate(self, value: Optional[ModelList[M]]) -> Optional[ModelList[M]]:

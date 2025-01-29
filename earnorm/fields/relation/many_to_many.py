@@ -32,15 +32,18 @@ Examples:
     ...     courses = ManyToManyField("Course", through="Enrollment", reverse_name="students")
 """
 
-from typing import Any, Final, List, Optional, Type, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Final, List, Optional, Type, TypeVar, Union, cast
 
-from earnorm.base.env import Environment
-from earnorm.base.model.meta import BaseModel
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.relation.base import Context, Domain, ModelList, RelationField
-from earnorm.fields.types import ComparisonOperator
+from earnorm.types.fields import ComparisonOperator
 
-M = TypeVar("M", bound=BaseModel)  # Model type
+if TYPE_CHECKING:
+    from earnorm.base.model.meta import BaseModel
+
+    M = TypeVar("M", bound="BaseModel")  # Model type
+else:
+    M = TypeVar("M")  # Type variable for runtime
 
 # Constants
 DEFAULT_CASCADE: Final[bool] = True
@@ -76,7 +79,7 @@ class ManyToManyField(RelationField[ModelList[M]]):
         self,
         model_ref: Union[str, Type[M]],
         *,
-        through: Optional[Union[str, Type[BaseModel]]] = None,
+        through: Optional[Union[str, "Type[BaseModel]"]] = None,
         back_populates: Optional[str] = None,
         cascade: bool = DEFAULT_CASCADE,
         lazy_load: bool = True,
@@ -106,7 +109,7 @@ class ManyToManyField(RelationField[ModelList[M]]):
             **kwargs,
         )
         self.through = through
-        self._through_class: Optional[Type[BaseModel]] = None
+        self._through_class: Optional["Type[BaseModel]"] = None
 
     def is_empty(self) -> ComparisonOperator:
         """Check if relation is empty (no related records).
@@ -124,7 +127,7 @@ class ManyToManyField(RelationField[ModelList[M]]):
         """
         return ComparisonOperator(self.name, "size_>", 0)
 
-    def contains(self, value: Union[str, BaseModel]) -> ComparisonOperator:
+    def contains(self, value: Union[str, "BaseModel"]) -> ComparisonOperator:
         """Check if relation contains a specific value.
 
         Args:
@@ -133,9 +136,9 @@ class ManyToManyField(RelationField[ModelList[M]]):
         Returns:
             ComparisonOperator: Comparison operator for contains check
         """
-        if isinstance(value, BaseModel):
-            value = str(value.id)  # type: ignore
-        return ComparisonOperator(self.name, "contains", value)
+        if isinstance(value, str):
+            return ComparisonOperator(self.name, "contains", value)
+        return ComparisonOperator(self.name, "contains", str(value.id))  # type: ignore
 
     def size(self, operator: str, value: int) -> ComparisonOperator:
         """Compare the size of the relation.
@@ -191,6 +194,8 @@ class ManyToManyField(RelationField[ModelList[M]]):
 
         # Resolve through model reference if string
         if isinstance(self.through, str):
+            from earnorm.base.env import Environment
+
             env = Environment.get_instance()
             self._through_class = await env.get_model(self.through)
 
@@ -233,6 +238,8 @@ class ManyToManyField(RelationField[ModelList[M]]):
         result: List[M] = []
 
         try:
+            from earnorm.base.env import Environment
+
             env = Environment.get_instance()
             for item in cast(List[Union[M, str]], value):
                 if isinstance(item, model_class):
@@ -249,19 +256,16 @@ class ManyToManyField(RelationField[ModelList[M]]):
                         ) from e
                 else:
                     raise FieldValidationError(
-                        message=(
-                            f"Cannot convert {type(item).__name__} to {model_class.__name__} "
-                            f"for field {self.name}"
-                        ),
+                        message=f"Expected {model_class.__name__} instance or string ID, got {type(item).__name__}",
                         field_name=self.name,
                     )
+
+            return ModelList(result)
         except Exception as e:
             raise FieldValidationError(
-                message=str(e),
+                message=f"Failed to convert value: {e}",
                 field_name=self.name,
             ) from e
-
-        return ModelList(items=result)
 
     async def to_db(
         self, value: Optional[ModelList[M]], backend: str
@@ -318,6 +322,8 @@ class ManyToManyField(RelationField[ModelList[M]]):
         result: List[M] = []
 
         try:
+            from earnorm.base.env import Environment
+
             env = Environment.get_instance()
             for item_id in cast(List[str], value):
                 if self.lazy_load:

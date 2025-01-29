@@ -21,7 +21,7 @@ from typing import Any, Final, Generic, Optional, TypeVar, Union
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.fields.types import ComparisonOperator, DatabaseValue, FieldComparisonMixin
+from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 from earnorm.fields.validators.base import RangeValidator, TypeValidator, Validator
 
 # Type variables
@@ -37,7 +37,7 @@ DEFAULT_MAX_DIGITS: Final[Optional[int]] = None
 DEFAULT_DECIMAL_PLACES: Final[Optional[int]] = None
 
 
-class NumberField(BaseField[N], Generic[N], FieldComparisonMixin):
+class NumberField(Generic[N], BaseField[N], FieldComparisonMixin):
     """Base field for numeric values.
 
     This field type handles numeric values, with support for:

@@ -90,7 +90,7 @@ from earnorm.fields.primitive import (
 from earnorm.fields.relation import ManyToManyField, ManyToOneField, OneToManyField
 
 # Types
-from earnorm.fields.types import FieldProtocol, RelationProtocol
+from earnorm.types.fields import FieldProtocol, RelationProtocol
 
 # Validators
 from earnorm.fields.validators.base import (
