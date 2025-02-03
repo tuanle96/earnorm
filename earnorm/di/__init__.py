@@ -46,6 +46,7 @@ Example:
     >>> factory_service = await container.get("my_factory")
 """
 
+import logging
 from typing import TYPE_CHECKING
 
 from earnorm.di.container.base import Container, ContainerInterface
@@ -70,6 +71,8 @@ container.register("pool_registry", PoolRegistry())
 
 # Global lifecycle manager instance
 lifecycle: LifecycleManager | None = None
+
+logger = logging.getLogger(__name__)
 
 
 async def init_container(config: "SystemConfig") -> None:
@@ -98,11 +101,23 @@ async def init_container(config: "SystemConfig") -> None:
     """
     global lifecycle  # pylint: disable=global-statement
 
-    # Initialize container
-    await container.init(config=config)
+    logger.debug("Starting DI container initialization")
+    logger.debug(f"Config: {config}")
 
-    # Get lifecycle manager
-    lifecycle = await container.get("lifecycle_manager")
+    try:
+        # Initialize container
+        logger.debug("Initializing container with config")
+        await container.init(config=config)
+        logger.debug("Container initialized successfully")
+
+        # Get lifecycle manager
+        logger.debug("Getting lifecycle manager")
+        lifecycle = await container.get("lifecycle_manager")
+        logger.debug("Lifecycle manager retrieved successfully")
+
+    except Exception as e:
+        logger.error(f"Failed to initialize DI container: {str(e)}")
+        raise
 
 
 __all__ = [

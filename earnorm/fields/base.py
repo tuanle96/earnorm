@@ -26,6 +26,7 @@ from typing import (
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.adapters.base import DatabaseAdapter
+from earnorm.fields.types import ValidationContext
 from earnorm.types.fields import ComparisonOperator, DatabaseValue
 
 T = TypeVar("T")  # Field value type
@@ -453,33 +454,41 @@ class BaseField(Generic[T]):
         """Validate field value.
 
         Args:
-            value: Value to validate.
+            value: Value to validate
 
         Returns:
-            The validated value.
+            Optional[T]: Validated value
 
         Raises:
-            FieldValidationError: If validation fails.
+            FieldValidationError: If validation fails
         """
-        if value is None and self.required:
-            raise FieldValidationError(
-                message="Field is required",
-                field_name=self.name,
-            )
+        # Skip validation for None values if field is not required
+        if value is None:
+            if self.required:
+                raise FieldValidationError(
+                    message=f"Field '{self.name}' is required",
+                    field_name=self.name,
+                    code="validation_error",
+                )
+            return None
+
+        # Create validation context
+        context = ValidationContext(
+            field=self,
+            value=value,
+            metadata={},
+        )
 
         # Run validators
         for validator in self.validators:
-            result: ValidatorResult = await validator(value)
-            if isinstance(result, tuple):
-                valid, message = result
-            else:
-                valid, message = bool(result), "Validation failed"
-
-            if not valid:
+            try:
+                await validator.validate(value, context)
+            except FieldValidationError as e:
                 raise FieldValidationError(
-                    message=str(message),
+                    message=f"{self.name}: {e.message}",
                     field_name=self.name,
-                )
+                    code=e.code or "validation_error",
+                ) from e
 
         return value
 

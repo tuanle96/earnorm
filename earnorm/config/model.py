@@ -1,7 +1,6 @@
-"""Config model module.
+"""System configuration model.
 
-This module defines the SystemConfig model that represents system-wide configuration.
-It follows the singleton pattern - only one instance exists in the database.
+This module provides the SystemConfig model for storing system-wide configuration.
 
 Examples:
     >>> from earnorm.di import container
@@ -19,12 +18,15 @@ from typing import Any, ClassVar, Dict, Optional, Self, TypeVar, Union
 import yaml
 from dotenv import load_dotenv
 
-from earnorm.base import BaseModel
+from earnorm.base.env import Environment
+from earnorm.base.model import BaseModel
+from earnorm.config.data import SystemConfigData
 from earnorm.exceptions import ConfigError, ConfigValidationError
+from earnorm.fields import BaseField, DictField, StringField
 from earnorm.fields.primitive.boolean import BooleanField
 from earnorm.fields.primitive.datetime import DateTimeField
+from earnorm.fields.primitive.json import JSONField
 from earnorm.fields.primitive.number import IntegerField
-from earnorm.fields.primitive.string import StringField
 
 logger = logging.getLogger(__name__)
 
@@ -74,17 +76,33 @@ class SystemConfig(BaseModel):
         >>> print(config.redis_host)
     """
 
-    _name = "system.config"
+    _name = "earnorm.config"
     _description = "System Configuration"
     _skip_default_fields = True  # Skip default fields like created_at, updated_at
 
     # Singleton instance
     _instance: ClassVar[Optional["SystemConfig"]] = None
 
+    @classmethod
+    def __init_subclass__(cls) -> None:
+        """Initialize subclass.
+
+        This method ensures fields are properly initialized when subclassing SystemConfig.
+        It copies all field definitions from the class to _fields for backward compatibility.
+        """
+        super().__init_subclass__()
+        # Get all class attributes that are BaseField instances
+        fields: Dict[str, BaseField[Any]] = {
+            name: field
+            for name, field in cls.__dict__.items()
+            if isinstance(field, BaseField)
+        }
+        cls._fields = fields
+
     # Version and timestamps
     version = StringField(default="1.0.0")
-    created_at = DateTimeField(auto_now_add=True)
-    updated_at = DateTimeField(auto_now=True)
+    created_at = DateTimeField(auto_now_add=True, required=False)
+    updated_at = DateTimeField(auto_now=True, required=False)
 
     # Database Configuration
     database_backend = StringField(
@@ -94,7 +112,7 @@ class SystemConfig(BaseModel):
     )
     database_uri = StringField(
         required=True,
-        min_length=10,
+        pattern=r"^(mongodb|mysql|postgres)://[^/\s]+(/[^/\s]*)?$",  # Validate URI format
         description="Database connection URI",
     )
     database_name = StringField(
@@ -157,6 +175,21 @@ class SystemConfig(BaseModel):
         required=False,
         description="SSL key path",
     )
+    database_options = DictField(
+        key_field=StringField(),
+        value_field=JSONField(),
+        required=False,
+        default={
+            "server_selection_timeout_ms": 5000,
+            "connect_timeout_ms": 10000,
+            "socket_timeout_ms": 20000,
+            "retry_writes": True,
+            "retry_reads": True,
+            "w": 1,
+            "j": True,
+        },
+        description="Additional database connection options",
+    )
 
     # Redis Configuration
     redis_host = StringField(
@@ -197,6 +230,77 @@ class SystemConfig(BaseModel):
         max_value=86400,  # 24 hours
         description="Default cache TTL in seconds",
     )
+
+    # Event Configuration
+    event_enabled = BooleanField(
+        default=True,
+        description="Whether to enable event system",
+    )
+    event_queue = StringField(
+        default="earnorm:events",
+        min_length=1,
+        max_length=255,
+        description="Event queue name",
+    )
+    event_batch_size = IntegerField(
+        default=100,
+        min_value=1,
+        max_value=10000,
+        description="Event batch size",
+    )
+
+    @classmethod
+    async def create_temp(
+        cls, env: Environment, database_uri: str, database_name: str
+    ) -> "SystemConfig":
+        """Create a temporary SystemConfig instance with minimal required fields.
+
+        This method is used to create a temporary SystemConfig instance for initializing
+        the DI container. It only validates the required fields for database connection.
+
+        Args:
+            env: Environment instance
+            database_uri: Database connection URI
+            database_name: Database name
+
+        Returns:
+            Temporary SystemConfig instance
+
+        Raises:
+            ConfigValidationError: If validation fails
+        """
+        logger.debug("Creating temporary SystemConfig")
+        logger.debug(f"Environment: {env}")
+        logger.debug(f"Database URI: {database_uri}")
+        logger.debug(f"Database name: {database_name}")
+
+        try:
+            # Create instance with env
+            instance = cls._browse(env, [])
+
+            # Create temporary config with minimal required fields
+            await instance._create(
+                {
+                    "database_uri": str(database_uri),
+                    "database_name": str(database_name),
+                    "redis_host": "localhost",  # Default value for temporary config
+                    "database_options": {
+                        "server_selection_timeout_ms": 5000,
+                        "connect_timeout_ms": 10000,
+                        "socket_timeout_ms": 20000,
+                        "retry_writes": True,
+                        "retry_reads": True,
+                        "w": 1,
+                        "j": True,
+                    },
+                }
+            )
+            logger.debug("Successfully created temporary SystemConfig")
+            return instance
+
+        except Exception as e:
+            logger.error(f"Failed to create temporary SystemConfig: {str(e)}")
+            raise
 
     def validate(self) -> None:
         """Validate all configuration settings.
@@ -342,3 +446,27 @@ class SystemConfig(BaseModel):
 
         except Exception as e:
             raise ConfigError(f"Failed to load config from YAML: {e}") from e
+
+    @classmethod
+    async def from_data(
+        cls, env: Environment, data: SystemConfigData
+    ) -> "SystemConfig":
+        """Create a new SystemConfig instance from data.
+
+        Args:
+            env: Environment instance
+            data: Configuration data to create from
+
+        Returns:
+            New SystemConfig instance
+        """
+        # Convert data to dict
+        values = data.to_dict()
+
+        # Create new instance with env
+        instance = cls._browse(env, [])
+
+        # Create record
+        await instance._create(values)
+
+        return instance

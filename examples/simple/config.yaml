@@ -1,6 +1,6 @@
 # Database Configuration
 database_backend: mongodb
-database_uri: mongodb://localhost:27017
+database_uri: mongodb://103.199.19.42:27017/earnbase?retryWrites=true&retryReads=true
 database_name: earnbase
 database_username: # optional
 database_password: # optional
@@ -13,6 +13,16 @@ database_ssl: false
 database_ssl_ca: # optional
 database_ssl_cert: # optional
 database_ssl_key: # optional
+
+# Database Connection Options
+database_options:
+  server_selection_timeout_ms: 5000
+  connect_timeout_ms: 10000
+  socket_timeout_ms: 20000
+  retry_writes: true
+  retry_reads: true
+  w: 1
+  j: true
 
 # Redis Configuration
 redis_host: localhost

@@ -23,8 +23,6 @@ Examples:
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from dataclasses import field as dataclass_field
 from typing import (
     Any,
     Dict,
@@ -34,42 +32,19 @@ from typing import (
     Optional,
     Protocol,
     Sequence,
-    Tuple,
     TypeVar,
-    Union,
     final,
 )
 
 from earnorm.exceptions import FieldValidationError
-from earnorm.fields.base import BaseField
+from earnorm.fields.types import ValidationContext, ValidatorResult
 
 # Type variables with constraints
 T_contra = TypeVar("T_contra", contravariant=True)
 T = TypeVar("T", bound=Any)
 
 # Type aliases with better type hints
-ValidatorResult = Union[bool, Tuple[bool, str]]
 ValidationMetadata = Dict[str, Any]
-
-
-@dataclass(frozen=True)
-class ValidationContext:
-    """Context for validation.
-
-    This class provides context information for validation, including:
-    - The field being validated
-    - The value being validated
-    - Additional metadata for validation
-
-    Attributes:
-        field: Field being validated
-        value: Value being validated
-        metadata: Additional validation metadata
-    """
-
-    field: BaseField[Any]
-    value: Any
-    metadata: ValidationMetadata = dataclass_field(default_factory=dict)
 
 
 class ValidatorProtocol(Protocol[T_contra]):
@@ -365,4 +340,49 @@ class RegexValidator(Validator[Optional[str]]):
             raise FieldValidationError(
                 message=self.message or f"Value must match pattern {self.pattern}",
                 field_name=getattr(context.field, "name", "unknown"),
+            )
+
+
+@final
+class ChoicesValidator(Validator[T]):
+    """Validator for choices.
+
+    This validator ensures that a value is one of the allowed choices.
+    """
+
+    DEFAULT_CODE: Final[str] = "invalid_choice"
+
+    def __init__(
+        self,
+        choices: list[T],
+        message: Optional[str] = None,
+        code: str = DEFAULT_CODE,
+    ) -> None:
+        """Initialize choices validator.
+
+        Args:
+            choices: List of allowed choices
+            message: Error message template
+            code: Error code
+        """
+        super().__init__(message=message)
+        self.code = code
+        self.choices = choices
+
+    async def validate(self, value: T, context: ValidationContext) -> None:
+        """Validate value is in choices.
+
+        Args:
+            value: Value to validate
+            context: Validation context
+
+        Raises:
+            FieldValidationError: If value is not in choices
+        """
+        if value is not None and value not in self.choices:
+            raise FieldValidationError(
+                message=self.message
+                or f"Value must be one of: {', '.join(str(c) for c in self.choices)}",
+                field_name=getattr(context.field, "name", "unknown"),
+                code=self.code,
             )

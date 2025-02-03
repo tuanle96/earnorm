@@ -21,12 +21,13 @@ Examples:
     ...     has_bio = User.find(User.bio.length_greater_than(0))
 """
 
+import logging
 import re
-from typing import Any, Final, Optional, Union, overload
+from typing import Any, Final, List, Optional, Union, overload
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.fields.validators.base import TypeValidator, Validator
+from earnorm.fields.validators.base import ChoicesValidator, TypeValidator, Validator
 from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 
 # Constants
@@ -107,6 +108,7 @@ class StringField(BaseField[str], FieldComparisonMixin):
         strip: bool = DEFAULT_STRIP,
         lower: bool = DEFAULT_LOWER,
         upper: bool = DEFAULT_UPPER,
+        choices: Optional[List[str]] = None,
         **options: Any,
     ) -> None:
         """Initialize string field.
@@ -119,6 +121,7 @@ class StringField(BaseField[str], FieldComparisonMixin):
             strip: Whether to strip whitespace
             lower: Whether to convert to lowercase
             upper: Whether to convert to uppercase
+            choices: List of allowed values
             **options: Additional field options
 
         Raises:
@@ -137,6 +140,9 @@ class StringField(BaseField[str], FieldComparisonMixin):
             raise ValueError("Cannot set both lower and upper to True")
 
         field_validators: list[Validator[Any]] = [TypeValidator(str)]
+        if choices is not None:
+            field_validators.append(ChoicesValidator(choices))
+
         options_without_validators = {
             k: v for k, v in options.items() if k != "validators"
         }
@@ -164,52 +170,71 @@ class StringField(BaseField[str], FieldComparisonMixin):
     async def validate(self, value: Any) -> None:
         """Validate string value.
 
-        This method validates:
-        - Value is string type
-        - String length is within limits
-        - String matches pattern if provided
-
         Args:
-            value: Value to validate
+            value: String value to validate
 
         Raises:
             FieldValidationError: If validation fails
         """
-        await super().validate(value)
+        logger = logging.getLogger(__name__)
 
-        if value is not None:
-            if not isinstance(value, str):
+        if value is None:
+            if self.required:
                 raise FieldValidationError(
-                    message=f"Value must be a string, got {type(value).__name__}",
+                    message=f"{self.name} is required",
                     field_name=self.name,
-                    code="invalid_type",
+                    code="required",
                 )
+            return
 
-            # Validate length
-            length = len(value)
-            if length < self.min_length:
+        # Convert bytes to string if needed
+        if isinstance(value, bytes):
+            try:
+                value = value.decode("utf-8")
+            except UnicodeDecodeError:
                 raise FieldValidationError(
-                    message=f"String length {length} is less than minimum {self.min_length}",
+                    message=f"{self.name} contains invalid UTF-8 bytes",
                     field_name=self.name,
-                    code="min_length",
+                    code="invalid_encoding",
                 )
-            if self.max_length is not None and length > self.max_length:
-                raise FieldValidationError(
-                    message=(
-                        f"String length {length} exceeds maximum {self.max_length}"
-                    ),
-                    field_name=self.name,
-                    code="max_length",
-                )
+        elif not isinstance(value, str):
+            raise FieldValidationError(
+                message=f"{self.name} must be a string, got {type(value)}",
+                field_name=self.name,
+                code="invalid_type",
+            )
 
-            # Validate pattern
-            if self.pattern is not None:
-                if not re.match(self.pattern, value):
-                    raise FieldValidationError(
-                        message=f"String does not match pattern: {self.pattern}",
-                        field_name=self.name,
-                        code="pattern",
-                    )
+        # Length validation
+        length = len(value)
+        if self.min_length and length < self.min_length:
+            raise FieldValidationError(
+                message=f"{self.name}: String length {length} is less than minimum {self.min_length}",
+                field_name=self.name,
+                code="min_length",
+            )
+
+        if self.max_length and length > self.max_length:
+            raise FieldValidationError(
+                message=f"{self.name}: String length {length} is greater than maximum {self.max_length}",
+                field_name=self.name,
+                code="max_length",
+            )
+
+        # Pattern validation
+        if self.pattern:
+            logger.debug(f"Validating pattern for {self.name}")
+            logger.debug(f"Value: '{value}'")
+            logger.debug(f"Pattern: '{self.pattern}'")
+
+            match = re.match(self.pattern, str(value))
+            logger.debug(f"Pattern match result: {match}")
+
+            if not match:
+                raise FieldValidationError(
+                    message=f"{self.name}: String does not match pattern: {self.pattern}",
+                    field_name=self.name,
+                    code="pattern",
+                )
 
     async def convert(self, value: Any) -> Optional[str]:
         """Convert value to string.

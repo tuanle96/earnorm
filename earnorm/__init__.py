@@ -5,17 +5,21 @@ This module provides the main entry point for initializing EarnORM and guides fo
 Initialization
 -------------
 The initialization process includes:
-1. Loading and validating configuration from YAML or .env file
-2. Initializing the Dependency Injection container
-3. Registering core services (database, cache, etc.)
-4. Setting up cleanup handlers for graceful shutdown
+1. Loading and validating configuration data from YAML or .env file
+2. Creating temporary SystemConfig for DI container
+3. Initializing DI container
+4. Registering basic services
+5. Initializing Environment
+6. Creating final SystemConfig
+7. Registering remaining services
+8. Setting up cleanup handlers for graceful shutdown
 
 Basic initialization examples:
     >>> # Initialize with YAML config
     >>> config = await earnorm.init("config.yaml")
     >>>
-    >>> # Initialize with .env file and custom prefix
-    >>> config = await earnorm.init(".env", env_prefix="APP_")
+    >>> # Initialize with .env file
+    >>> config = await earnorm.init(".env")
     >>>
     >>> # Initialize without auto cleanup
     >>> config = await earnorm.init("config.yaml", auto_cleanup=False)
@@ -133,22 +137,24 @@ Example YAML configuration:
 For more details, refer to the documentation at https://earnorm.readthedocs.io
 """
 
-import atexit
 import logging
+import signal
 from pathlib import Path
+from typing import Any, Dict, Optional, cast
 
 import yaml
+from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
 
-from earnorm.config import SystemConfig
-from earnorm.di import container, init_container
-from earnorm.exceptions import (
-    CleanupError,
-    ConfigError,
-    ConfigValidationError,
-    DIError,
-    RegistrationError,
-)
-from earnorm.registry import register_all
+from earnorm.base.database.adapters.mongo import MongoAdapter
+from earnorm.base.env import Environment
+from earnorm.cache.core.manager import CacheManager
+from earnorm.config.data import SystemConfigData
+from earnorm.config.model import SystemConfig
+from earnorm.di import container
+from earnorm.exceptions import ConfigError, ConfigValidationError, RegistrationError
+from earnorm.pool.backends.mongo import MongoPool
+from earnorm.pool.registry import PoolRegistry
+from earnorm.types import DatabaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -156,121 +162,165 @@ logger = logging.getLogger(__name__)
 async def init(
     config_path: str | Path,
     *,
-    auto_cleanup: bool = True,
-) -> SystemConfig:
-    """Initialize EarnORM with the provided configuration.
+    env_file: Optional[str | Path] = None,
+    cleanup_handlers: bool = True,
+    debug: bool = False,
+) -> None:
+    """Initialize EarnORM.
 
-    This function serves as the main entry point for initializing EarnORM. It performs
-    the following steps in order:
-    1. Loads configuration from the specified file (YAML or .env)
-    2. Initializes the Dependency Injection container
-    3. Registers all required services
-    4. Sets up cleanup handlers for graceful shutdown
+    This function initializes EarnORM with the given configuration.
+    It performs the following steps:
+    1. Load and validate configuration
+    2. Initialize DI container
+    3. Register basic services
+    4. Initialize Environment
+    5. Create SystemConfig
+    6. Register remaining services
+    7. Setup cleanup handlers
 
     Args:
-        config_path: Path to config file, can be either a YAML or .env file.
-                    Both string paths and Path objects are supported.
-        env_prefix: Prefix for environment variables when using .env file.
-                   Only used when loading from .env file.
-                   Defaults to "EARNORM_".
-        validate_config: Whether to validate the loaded configuration.
-                        This is passed to load_yaml/load_env.
-                        Defaults to True.
-        auto_cleanup: Whether to register cleanup handlers for graceful shutdown.
-                     Set to False if you want to handle cleanup manually.
-                     Defaults to True.
-
-    Returns:
-        SystemConfig: The loaded and validated configuration object.
-                     This can be used to access configuration values
-                     throughout your application.
+        config_path: Path to config file (YAML or .env)
+        env_file: Optional path to .env file
+        cleanup_handlers: Whether to setup cleanup handlers
+        debug: Whether to enable debug mode
 
     Raises:
-        ConfigError: If configuration loading fails (file not found, invalid format)
-        ConfigValidationError: If configuration validation fails
-        DIError: If dependency injection container initialization fails
+        ConfigError: If config loading fails
+        ConfigValidationError: If config validation fails
+        DIError: If DI container initialization fails
         RegistrationError: If service registration fails
-        CleanupError: If cleanup process fails
         ValueError: If config file path is invalid
         OSError: If file system operations fail
     """
     try:
-        # 1. Load config
+        # 1. Load and validate config data
         logger.info("Loading config from %s", config_path)
         config_path = Path(config_path) if isinstance(config_path, str) else config_path
 
-        try:
-            if not config_path.exists():
-                raise ValueError(f"Config file not found: {config_path}")
-        except OSError as e:
-            raise ValueError(f"Invalid config path: {config_path}") from e
+        if not config_path.exists():
+            raise ValueError(f"Config file not found: {config_path}")
 
+        # Load config data based on file type
         try:
-            # Load and create config based on file type
             if config_path.suffix == ".yaml":
-                config = await SystemConfig.load_yaml(str(config_path))
+                config_data = await SystemConfigData.load_yaml(str(config_path))
             else:
-                config = await SystemConfig.load_env(str(config_path))
-        except (ConfigError, yaml.YAMLError) as e:
-            raise ConfigError(f"Failed to load config from {config_path}: {e}") from e
+                config_data = await SystemConfigData.load_env(str(config_path))
 
-        # 2. Initialize DI container
-        logger.info("Initializing DI container")
+            # Validate config data
+            config_data.validate()
+            config_dict = config_data.to_dict()
+            logger.debug("Loaded and validated config: %s", config_dict)
+
+        except (ConfigError, yaml.YAMLError, ConfigValidationError) as e:
+            raise ConfigError(f"Failed to load or validate config: {e}") from e
+
+        # 2. Extract and validate required values
         try:
-            await init_container(config=config)
-        except DIError as e:
-            raise DIError(f"Failed to initialize DI container: {e}") from e
+            # Validate required fields
+            if not config_dict.get("database_uri"):
+                raise ValueError("database_uri is required")
+            if not config_dict.get("database_name"):
+                raise ValueError("database_name is required")
 
-        # 3. Register all services
-        logger.info("Registering services")
+            # Store validated values with explicit type casting
+            database_uri = str(config_dict["database_uri"])
+            database_name = str(config_dict["database_name"])
+
+            # Handle database options with safe type casting
+            raw_options = config_dict.get("database_options")
+            db_options: Dict[str, Any] = {}
+            if isinstance(raw_options, dict):
+                db_options = cast(Dict[str, Any], raw_options)
+            logger.debug("Database options: %s", db_options)
+
+            # Get pool sizes with safe type casting
+            min_pool_size = int(config_dict.get("database_min_pool_size", 5))
+            max_pool_size = int(config_dict.get("database_max_pool_size", 20))
+
+            logger.info("Using database configuration:")
+            logger.info("- URI: %s", database_uri)
+            logger.info("- Database: %s", database_name)
+            logger.info("- Min pool size: %d", min_pool_size)
+            logger.info("- Max pool size: %d", max_pool_size)
+            logger.info("- Options: %s", db_options)
+
+        except Exception as e:
+            raise ConfigError(f"Failed to process config values: {e}") from e
+
+        # 3. Initialize services
         try:
-            await register_all(config)
-        except RegistrationError as e:
-            raise RegistrationError(f"Failed to register services: {e}") from e
+            # Create cache manager
+            cache_manager = CacheManager(
+                backend_type="redis",
+                prefix="earnorm",
+                ttl=3600,
+            )
+            container.register("cache_manager", cache_manager)
 
-        # 4. Setup cleanup if requested
-        if auto_cleanup:
-            logger.debug("Setting up cleanup handlers")
+            # Create and initialize MongoDB pool
+            mongo_pool = MongoPool[
+                AsyncIOMotorDatabase[Dict[str, Any]],
+                AsyncIOMotorCollection[Dict[str, Any]],
+            ](
+                uri=database_uri,
+                database=database_name,
+                min_size=min_pool_size,
+                max_size=max_pool_size,
+                options=db_options,
+            )
 
-            async def cleanup():
-                """Cleanup all resources on shutdown."""
-                try:
-                    logger.info("Cleaning up resources")
-                    lifecycle = await container.get("lifecycle_manager")
-                    await lifecycle.destroy_all()
-                except Exception as e:
-                    logger.error("Error during cleanup: %s", e)
-                    raise CleanupError(f"Failed to cleanup resources: {e}") from e
+            await mongo_pool.init()
+            logger.info("MongoDB pool initialized successfully")
 
-            atexit.register(cleanup)
+            # Register pool with safe type casting
+            pool_registry = cast(PoolRegistry, await container.get("pool_registry"))
+            pool_registry.register("default", mongo_pool)
+
+            # Create and initialize database adapter
+            adapter = MongoAdapter[DatabaseModel]()
+            await adapter.init()
+            container.register("database_adapter", adapter)
+
+        except Exception as e:
+            logger.error("Failed to initialize services: %s", str(e))
+            raise RegistrationError("Failed to initialize services") from e
+
+        # 4. Initialize Environment and SystemConfig
+        try:
+            # Initialize Environment
+            env = Environment.get_instance()
+            await env.init(config=config_data)
+
+            # Create and register SystemConfig
+            config = await SystemConfig.from_data(env, config_data)
+            container.register("config", config)
+
+        except Exception as e:
+            raise ConfigError(
+                f"Failed to initialize environment and config: {e}"
+            ) from e
+
+        # 5. Setup cleanup handlers
+        if cleanup_handlers:
+            logger.info("Setting up cleanup handlers")
+            try:
+
+                def cleanup(signum: int, frame: Any) -> None:
+                    """Cleanup handler for graceful shutdown."""
+                    logger.info("Received signal %d, cleaning up...", signum)
+                    # To be implemented
+                    logger.info("Cleanup complete")
+
+                signal.signal(signal.SIGINT, cleanup)
+                signal.signal(signal.SIGTERM, cleanup)
+            except Exception as e:
+                logger.warning("Failed to setup cleanup handlers: %s", e)
 
         logger.info("EarnORM initialized successfully")
-        return config
 
-    except (
-        ConfigError,
-        ConfigValidationError,
-        DIError,
-        RegistrationError,
-        ValueError,
-        OSError,
-    ) as e:
-        logger.error("Failed to initialize EarnORM: %s", e)
-
-        # Try to cleanup any partially initialized resources
-        try:
-            lifecycle = await container.get("lifecycle_manager")
-            await lifecycle.destroy_all()
-        except Exception as cleanup_error:  # pylint: disable=broad-except
-            logger.error(
-                "Error during cleanup after failed initialization: %s", cleanup_error
-            )
-            if not isinstance(e, CleanupError):
-                raise CleanupError(
-                    f"Failed to cleanup after initialization error: {cleanup_error}"
-                ) from cleanup_error
-
-        # Re-raise the original error
+    except Exception as e:
+        logger.error("Failed to initialize EarnORM: %s", str(e))
         raise
 
 

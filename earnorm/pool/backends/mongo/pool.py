@@ -2,7 +2,8 @@
 
 import asyncio
 import logging
-from typing import Any, AsyncContextManager, Optional, Set, TypeVar, cast
+from typing import Any, AsyncContextManager, Dict, List, Optional, Set, TypeVar, cast
+from urllib.parse import urlparse
 
 from motor.motor_asyncio import (
     AsyncIOMotorClient,
@@ -22,6 +23,44 @@ DB = TypeVar("DB", bound=AsyncIOMotorDatabase[dict[str, Any]])
 COLL = TypeVar("COLL", bound=AsyncIOMotorCollection[dict[str, Any]])
 
 logger = logging.getLogger(__name__)
+
+# MongoDB URI pattern
+# Format: mongodb[+srv]://[username:password@]host1[:port1][,...hostN[:portN]][/[database][?options]]
+MONGODB_URI_PATTERN = (
+    r"^mongodb(?:\+srv)?://"  # Scheme (mongodb:// or mongodb+srv://)
+    r"(?:(?:[^:/@]+)?(?::(?:[^:/@]+)?)?@)?"  # Optional username:password@
+    r"[^/?@]+"  # Required host(s)
+    r"(?:/(?:[^?]+))?"  # Optional /database
+    r"(?:\?(?:[^#]+))?"  # Optional query parameters
+    r"$"
+)
+
+
+class _ConnectionManager(AsyncContextManager[AsyncConnectionProtocol[DB, COLL]]):
+    """Connection manager context."""
+
+    def __init__(self, pool: "MongoPool[DB, COLL]") -> None:
+        """Initialize connection manager.
+
+        Args:
+            pool: Pool instance
+        """
+        self._pool = pool
+        self._conn: Optional[AsyncConnectionProtocol[DB, COLL]] = None
+
+    async def __aenter__(self) -> AsyncConnectionProtocol[DB, COLL]:
+        """Enter context.
+
+        Returns:
+            AsyncConnectionProtocol: Connection instance
+        """
+        self._conn = await self._pool.acquire()
+        return self._conn
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Exit context."""
+        if self._conn:
+            await self._pool.release(self._conn)
 
 
 class MongoPool(AsyncPoolProtocol[DB, COLL]):
@@ -47,12 +86,77 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
             retry_policy: Optional retry policy
             circuit_breaker: Optional circuit breaker
             **kwargs: Additional client options
+
+        Raises:
+            ValueError: If URI is invalid or required parameters are missing
         """
+        if not uri:
+            raise ValueError("MongoDB URI cannot be empty")
+
+        # Log input parameters
+        logger.debug("Initializing MongoPool with URI: %s", uri)
+        logger.debug("URI type: %s, length: %d", type(uri), len(uri))
+        logger.debug("Database: %s", database)
+
+        # Parse and validate URI
+        try:
+            # Try to parse the URI
+            parsed = urlparse(uri)
+
+            # Log parsed components
+            logger.debug("Parsed URI components:")
+            logger.debug("- scheme: '%s'", parsed.scheme)
+            logger.debug("- netloc: '%s'", parsed.netloc)
+            logger.debug("- path: '%s'", parsed.path)
+            logger.debug("- params: '%s'", parsed.params)
+            logger.debug("- query: '%s'", parsed.query)
+            logger.debug("- fragment: '%s'", parsed.fragment)
+
+            # Validate scheme
+            if not parsed.scheme:
+                raise ValueError("MongoDB URI must have a scheme")
+            if parsed.scheme != "mongodb":
+                raise ValueError(f"Invalid MongoDB URI scheme: {parsed.scheme}")
+
+            # Validate host and port
+            if not parsed.netloc:
+                raise ValueError("MongoDB URI must contain a valid hostname")
+
+            # Extract host and port
+            host_parts = parsed.netloc.split(":")
+            if len(host_parts) > 1:
+                try:
+                    port = int(host_parts[1])
+                    if not 1 <= port <= 65535:
+                        raise ValueError(f"Invalid port number: {port}")
+                except ValueError as e:
+                    raise ValueError(
+                        f"Invalid port in MongoDB URI: {host_parts[1]}"
+                    ) from e
+
+            # Validate path (database name)
+            if parsed.path and parsed.path != "/":
+                db_name = parsed.path.strip("/")
+                if db_name and db_name != database:
+                    logger.warning(
+                        "Database name in URI (%s) differs from provided database name (%s). Using provided database name.",
+                        db_name,
+                        database,
+                    )
+
+            logger.debug("MongoDB URI validation passed")
+
+        except Exception as e:
+            logger.error("MongoDB URI validation failed: %s", str(e))
+            raise ValueError(
+                f"Invalid MongoDB URI format: {str(e)}. Expected format: mongodb://host[:port]/[database][?options]"
+            ) from e
+
         self._uri = uri
         self._database = database
         self._min_size = min_size
         self._max_size = max_size
-        self._retry_policy = retry_policy
+        self._retry_policy = retry_policy or RetryPolicy()
         self._circuit_breaker = circuit_breaker
         self._kwargs = kwargs
 
@@ -60,6 +164,46 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
         self._available: Set[AsyncConnectionProtocol[DB, COLL]] = set()
         self._in_use: Set[AsyncConnectionProtocol[DB, COLL]] = set()
         self._lock = asyncio.Lock()
+
+    def _map_options(self, options: Dict[str, Any]) -> Dict[str, Any]:
+        """Map configuration options to PyMongo client options.
+
+        Args:
+            options: Configuration options
+
+        Returns:
+            Dict[str, Any]: PyMongo client options with mapped keys and values
+        """
+        option_mapping = {
+            "server_selection_timeout_ms": "serverSelectionTimeoutMS",
+            "connect_timeout_ms": "connectTimeoutMS",
+            "socket_timeout_ms": "socketTimeoutMS",
+            "retry_writes": "retryWrites",
+            "retry_reads": "retryReads",
+            "w": "w",
+            "j": "journal",
+        }
+
+        client_options: Dict[str, Any] = {}
+        for key, value in options.items():
+            if key in option_mapping:
+                client_options[option_mapping[key]] = value
+                logger.debug(
+                    "Mapped option %s -> %s: %s", key, option_mapping[key], value
+                )
+
+        return client_options
+
+    def map_client_options(self, options: Dict[str, Any]) -> Dict[str, Any]:
+        """Map configuration options to PyMongo client options.
+
+        Args:
+            options: Configuration options
+
+        Returns:
+            Dict[str, Any]: PyMongo client options
+        """
+        return self._map_options(options)
 
     @property
     def backend(self) -> str:
@@ -102,55 +246,108 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
 
         Raises:
             ConnectionError: If pool initialization fails
+            TimeoutError: If connection timeout occurs
+            Exception: For other initialization errors
         """
         async with self._lock:
             try:
-                # Create client
-                self._client = AsyncIOMotorClient(
+                logger.info(
+                    "Initializing MongoDB pool with URI: %s, database: %s",
                     self._uri,
-                    minPoolSize=self._min_size,
-                    maxPoolSize=self._max_size,
-                    **self._kwargs,
+                    self._database,
                 )
 
+                # Map options to PyMongo format
+                client_options = self._map_options(self._kwargs.get("options", {}))
+                logger.debug("Using client options: %s", client_options)
+
+                # Create client with mapped options and retry logic
+                max_retries = 3
+                retry_delay = 1.0  # seconds
+
+                for attempt in range(max_retries):
+                    try:
+                        self._client = AsyncIOMotorClient(
+                            self._uri,
+                            minPoolSize=self._min_size,
+                            maxPoolSize=self._max_size,
+                            **client_options,
+                        )
+
+                        # Test connection
+                        await self._client.admin.command("ping")
+                        break
+                    except Exception as e:
+                        if attempt == max_retries - 1:
+                            raise MongoDBConnectionError(
+                                f"Failed to connect to MongoDB after {max_retries} attempts: {e}"
+                            ) from e
+                        logger.warning(
+                            "Connection attempt %d/%d failed: %s. Retrying in %.1f seconds...",
+                            attempt + 1,
+                            max_retries,
+                            str(e),
+                            retry_delay,
+                        )
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+
                 # Create initial connections
-                for _ in range(self._min_size):
-                    conn = self._create_connection()
-                    self._available.add(conn)
+                connection_errors: List[str] = []
+                for i in range(self._min_size):
+                    try:
+                        conn = self._create_connection()
+                        await conn.ping()  # Verify connection works
+                        self._available.add(conn)
+                        logger.debug("Created connection %d/%d", i + 1, self._min_size)
+                    except Exception as e:
+                        connection_errors.append(str(e))
+
+                if connection_errors:
+                    raise MongoDBConnectionError(
+                        f"Failed to create some initial connections: {'; '.join(connection_errors)}"
+                    )
 
                 logger.info(
-                    "Initialized MongoDB pool with %d connections",
+                    "Successfully initialized MongoDB pool with %d connections",
                     self.size,
                 )
             except Exception as e:
-                raise MongoDBConnectionError(
-                    f"Failed to initialize MongoDB pool: {e!s}",
-                ) from e
+                logger.error("Failed to initialize MongoDB pool: %s", str(e))
+                if self._client:
+                    self._client.close()
+                    self._client = None
+                raise
 
-    async def clear(self) -> None:
-        """Clear all connections."""
-        async with self._lock:
-            # Close all connections
-            for conn in self._available | self._in_use:
-                await conn.close()
+    def _create_connection(self) -> AsyncConnectionProtocol[DB, COLL]:
+        """Create new connection.
 
-            # Clear sets
-            self._available.clear()
-            self._in_use.clear()
+        Returns:
+            AsyncConnectionProtocol[DB, COLL]: New connection
 
-            logger.info("Cleared all connections from pool")
+        Raises:
+            MongoDBConnectionError: If connection creation fails
+        """
+        if not self._client:
+            raise MongoDBConnectionError("Client not initialized")
 
-    async def destroy(self) -> None:
-        """Destroy pool and all connections."""
-        if self._client:
-            # Clear connections
-            await self.clear()
-
-            # Close client
-            self._client.close()
-            self._client = None
-
-            logger.info("Destroyed MongoDB pool")
+        try:
+            # Create connection
+            return cast(
+                AsyncConnectionProtocol[DB, COLL],
+                MongoConnection(
+                    client=self._client,
+                    database=self._database,
+                    collection="",  # Empty string as default collection
+                    retry_policy=self._retry_policy,
+                    circuit_breaker=self._circuit_breaker,
+                ),
+            )
+        except Exception as e:
+            logger.error("Failed to create MongoDB connection: %s", str(e))
+            raise MongoDBConnectionError(
+                f"Failed to create MongoDB connection: {e!s}",
+            ) from e
 
     async def acquire(self) -> AsyncConnectionProtocol[DB, COLL]:
         """Acquire connection from pool.
@@ -167,14 +364,23 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
             if not self._available and self.size < self.max_size:
                 try:
                     conn = self._create_connection()
+                    await conn.ping()  # Verify connection works
                     self._available.add(conn)
+                    logger.debug("Created new connection, pool size: %d", self.size)
                 except Exception as e:
+                    logger.error("Failed to create new connection: %s", str(e))
                     raise MongoDBConnectionError(
                         f"Failed to create connection: {e!s}",
                     ) from e
 
             # Check if pool is exhausted
             if not self._available:
+                logger.warning(
+                    "Pool exhausted - Size: %d, In use: %d, Available: %d",
+                    self.size,
+                    self.in_use,
+                    self.available,
+                )
                 raise PoolExhaustedError(
                     "Connection pool exhausted",
                     backend=self.backend,
@@ -186,6 +392,12 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
             # Get connection from available set
             conn = self._available.pop()
             self._in_use.add(conn)
+            logger.debug(
+                "Acquired connection - Pool size: %d, In use: %d, Available: %d",
+                self.size,
+                self.in_use,
+                self.available,
+            )
 
             return conn
 
@@ -199,37 +411,24 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
             try:
                 # Move connection back to available set
                 self._in_use.remove(conn)
-                if await conn.ping():
-                    self._available.add(conn)
-                else:
+                try:
+                    if await conn.ping():
+                        self._available.add(conn)
+                        logger.debug(
+                            "Released healthy connection - Pool size: %d, In use: %d, Available: %d",
+                            self.size,
+                            self.in_use,
+                            self.available,
+                        )
+                    else:
+                        logger.warning("Connection ping failed, closing connection")
+                        await conn.close()
+                except Exception as e:
+                    logger.warning("Connection health check failed: %s", str(e))
                     await conn.close()
             except ValueError:
+                logger.warning("Attempted to release connection not in pool")
                 pass
-
-    def _create_connection(self) -> AsyncConnectionProtocol[DB, COLL]:
-        """Create new connection.
-
-        Returns:
-            New connection instance
-
-        Raises:
-            ConnectionError: If pool is not initialized
-        """
-        if not self._client:
-            raise MongoDBConnectionError(
-                "Pool not initialized",
-            )
-
-        return cast(
-            AsyncConnectionProtocol[DB, COLL],
-            MongoConnection(
-                client=self._client,
-                database=self._database,
-                collection="",  # Empty string as default collection
-                retry_policy=self._retry_policy,
-                circuit_breaker=self._circuit_breaker,
-            ),
-        )
 
     async def connection(
         self,
@@ -249,6 +448,42 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
         """Close pool and cleanup resources."""
         await self.destroy()
 
+    async def destroy(self) -> None:
+        """Destroy pool and all connections."""
+        if self._client:
+            try:
+                # Clear connections
+                await self.clear()
+
+                # Close client
+                self._client.close()
+                self._client = None
+
+                logger.info("Destroyed MongoDB pool")
+            except Exception as e:
+                logger.error("Error destroying MongoDB pool: %s", str(e))
+                raise
+
+    async def clear(self) -> None:
+        """Clear all connections."""
+        async with self._lock:
+            try:
+                # Close all connections
+                for conn in self._available | self._in_use:
+                    try:
+                        await conn.close()
+                    except Exception as e:
+                        logger.warning("Error closing connection: %s", str(e))
+
+                # Clear sets
+                self._available.clear()
+                self._in_use.clear()
+
+                logger.info("Cleared all connections from pool")
+            except Exception as e:
+                logger.error("Error clearing connections: %s", str(e))
+                raise
+
     async def health_check(self) -> bool:
         """Check pool health.
 
@@ -256,12 +491,15 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
             True if pool is healthy
         """
         if not self._client:
+            logger.warning("Health check failed: Client not initialized")
             return False
 
         try:
             await self._client.admin.command("ping")
+            logger.debug("Health check passed")
             return True
-        except Exception:
+        except Exception as e:
+            logger.warning("Health check failed: %s", str(e))
             return False
 
     def get_stats(self) -> dict[str, Any]:
@@ -279,40 +517,3 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
     def database_name(self) -> str:
         """Get database name."""
         return self._database
-
-
-class _ConnectionManager(AsyncContextManager[AsyncConnectionProtocol[DB, COLL]]):
-    """Connection manager for MongoDB pool."""
-
-    def __init__(self, pool: MongoPool[DB, COLL]) -> None:
-        """Initialize connection manager.
-
-        Args:
-            pool: MongoDB pool
-        """
-        self.pool = pool
-        self.conn: Optional[AsyncConnectionProtocol[DB, COLL]] = None
-
-    async def __aenter__(self) -> AsyncConnectionProtocol[DB, COLL]:
-        """Enter async context.
-
-        Returns:
-            Connection instance
-
-        Raises:
-            PoolExhaustedError: If no connections are available
-            ConnectionError: If connection creation fails
-        """
-        self.conn = await self.pool.acquire()
-        return self.conn
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        """Exit async context.
-
-        Args:
-            exc_type: Exception type
-            exc_val: Exception value
-            exc_tb: Traceback
-        """
-        if self.conn:
-            await self.pool.release(self.conn)

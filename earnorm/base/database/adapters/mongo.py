@@ -28,6 +28,7 @@ Examples:
     ...     await tx.commit()
 """
 
+import logging
 from typing import Any, Dict, List, Optional, Sequence, Type, TypeVar
 
 from motor.motor_asyncio import (
@@ -39,13 +40,24 @@ from pymongo.operations import UpdateOne
 from pymongo.results import DeleteResult, InsertOneResult, UpdateResult
 
 from earnorm.base.database.adapter import DatabaseAdapter
+from earnorm.base.database.query.backends.mongo.operations.aggregate import (
+    MongoAggregate,
+)
+from earnorm.base.database.query.backends.mongo.operations.join import MongoJoin
 from earnorm.base.database.query.backends.mongo.query import MongoQuery
+from earnorm.base.database.query.interfaces.operations.aggregate import (
+    AggregateProtocol as AggregateQuery,
+)
+from earnorm.base.database.query.interfaces.operations.join import (
+    JoinProtocol as JoinQuery,
+)
 from earnorm.base.database.transaction.backends.mongo import MongoTransactionManager
 from earnorm.di import container
 from earnorm.pool.backends.mongo import MongoPool
 from earnorm.pool.protocols import AsyncConnectionProtocol
 from earnorm.types import DatabaseModel, JsonDict
 
+logger = logging.getLogger(__name__)
 ModelT = TypeVar("ModelT", bound=DatabaseModel)
 
 
@@ -113,24 +125,47 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
 
         Raises:
             ConnectionError: If connection fails
+            RuntimeError: If pool registry or pool not found
         """
         try:
-            # Get pool from registry
+            logger.debug("Connecting to MongoDB with pool: %s", self._pool_name)
+
+            # Get pool registry from container
             pool_registry = await container.get("pool_registry")
             if not pool_registry:
+                logger.error("Pool registry not initialized")
                 raise RuntimeError("Pool registry not initialized")
 
-            self._pool = await pool_registry.get(self._pool_name)
+            # Get pool from registry (sync operation)
+            self._pool = pool_registry.get(self._pool_name)
             if not self._pool:
+                logger.error("Pool not found: %s", self._pool_name)
                 raise RuntimeError(f"Pool {self._pool_name} not found")
 
+            logger.debug("Got pool from registry: %s", self._pool_name)
+
+            # Get client options
+            client_options = getattr(self._pool, "_kwargs", {}).get("options", {})
+            mapped_options = self._pool.map_client_options(client_options)
+
+            # Create client with mapped options
+            client = AsyncIOMotorClient[Dict[str, Any]](
+                getattr(self._pool, "_uri"),
+                **mapped_options,
+            )
+
             # Get sync database for transactions
-            client = AsyncIOMotorClient[Dict[str, Any]](getattr(self._pool, "_uri"))
             self._sync_db = AsyncIOMotorDatabase(
                 client, getattr(self._pool, "_database")
             )
 
+            logger.info(
+                "Successfully connected to MongoDB with pool: %s",
+                self._pool_name,
+            )
+
         except Exception as e:
+            logger.error("Failed to connect to MongoDB: %s", str(e))
             raise ConnectionError(f"Failed to connect to MongoDB: {e}") from e
 
     async def disconnect(self) -> None:
@@ -445,3 +480,41 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         )
         result: DeleteResult = await collection.delete_many(domain_filter)
         return result.deleted_count
+
+    async def get_aggregate_query(
+        self, model_type: Type[ModelT]
+    ) -> AggregateQuery[ModelT]:
+        """Create aggregate query for model type.
+
+        Args:
+            model_type: Type of model to query
+
+        Returns:
+            Aggregate query builder instance
+        """
+        collection = await self.get_collection(self._get_collection_name(model_type))
+        return MongoAggregate[ModelT](collection, model_type)
+
+    async def get_join_query(self, model_type: Type[ModelT]) -> JoinQuery[ModelT, Any]:
+        """Create join query for model type.
+
+        Args:
+            model_type: Type of model to query
+
+        Returns:
+            Join query builder instance
+        """
+        collection = await self.get_collection(self._get_collection_name(model_type))
+        return MongoJoin[ModelT, DatabaseModel](collection, model_type)
+
+    async def get_group_query(self, model_type: Type[ModelT]) -> AggregateQuery[ModelT]:
+        """Create group query for model type.
+
+        Args:
+            model_type: Type of model to query
+
+        Returns:
+            Group query builder instance
+        """
+        collection = await self.get_collection(self._get_collection_name(model_type))
+        return MongoAggregate[ModelT](collection, model_type)

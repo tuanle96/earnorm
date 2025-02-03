@@ -19,6 +19,8 @@ from typing import Any, Dict, List, Set, Type, TypeVar, cast
 from earnorm.fields import BaseField
 from earnorm.fields.primitive import DateTimeField, StringField
 
+__all__ = ["BaseModel", "ModelInfo", "MetaModel"]
+
 
 @dataclass
 class ModelInfo:
@@ -200,6 +202,7 @@ class MetaModel(ABCMeta):
         # Combine inherited and current fields
         all_fields = {**inherited_fields, **fields}
         attrs["fields"] = all_fields
+        attrs["_fields"] = all_fields
 
         # Handle model name before creating class
         model_name = attrs.get("_name")

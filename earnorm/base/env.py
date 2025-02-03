@@ -13,7 +13,7 @@ from earnorm.types import DatabaseModel
 
 if TYPE_CHECKING:
     from earnorm.cache import CacheManager
-    from earnorm.config import SystemConfig
+    from earnorm.config.data import SystemConfigData
 
 logger = logging.getLogger(__name__)
 
@@ -66,11 +66,11 @@ class Environment:
             cls._instance = cls()
         return cls._instance
 
-    async def init(self, config: "SystemConfig") -> None:
+    async def init(self, config: "SystemConfigData") -> None:
         """Initialize environment.
 
         Args:
-            config: System configuration
+            config: System configuration data
 
         This method:
         1. Registers config in DI container

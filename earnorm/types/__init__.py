@@ -52,11 +52,11 @@ __all__ = (
     "RelationProtocol",
     "ComparisonOperator",
     # Model types
-    "ModelName",
-    "FieldName",
-    "RecordID",
     "ModelProtocol",
     "DatabaseModel",
+    "FieldName",
+    "ModelName",
+    "RecordID",
     # Database types
     "DatabaseProtocol",
 )
