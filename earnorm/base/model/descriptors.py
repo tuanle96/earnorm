@@ -7,7 +7,7 @@ Currently supported descriptors:
 - FieldsDescriptor: Access model fields through __fields__ attribute
 """
 
-from typing import Any, Dict, Type
+from typing import Any, Dict, Optional, Type
 
 from earnorm.fields import BaseField
 
@@ -16,29 +16,34 @@ class FieldsDescriptor:
     """Descriptor for accessing model fields.
 
     This descriptor provides access to model fields through __fields__ attribute.
-    It works both on class level and instance level.
+    It caches fields dictionary on first access.
 
     Examples:
-        >>> class MyModel(BaseModel):
-        ...     name = StringField()
-        ...     age = IntegerField()
-        ...
-        >>> # Class level access
-        >>> MyModel.__fields__  # {'name': StringField(...), 'age': IntegerField(...)}
-        >>> # Instance level access
-        >>> instance = MyModel()
-        >>> instance.__fields__  # Same as class level
+        >>> class User(BaseModel):
+        ...     name = fields.StringField()
+        >>> user = User()
+        >>> print(user.__fields__["name"])  # Access field
     """
 
-    def __get__(self, instance: Any, owner: Type[Any]) -> Dict[str, BaseField[Any]]:
+    def __get__(
+        self, obj: Any, objtype: Optional[type] = None
+    ) -> Dict[str, BaseField[Any]]:
         """Get fields dictionary.
 
         Args:
-            instance: Model instance or None
-            owner: Model class
+            obj: Model instance
+            objtype: Model class
 
         Returns:
             Dictionary mapping field names to field instances
         """
-        # Return fields from class
-        return owner.fields
+        if objtype is None:
+            objtype = type(obj)
+
+        # Get fields from class attributes
+        fields_dict: Dict[str, BaseField[Any]] = {}
+        for key, value in objtype.__dict__.items():
+            if isinstance(value, BaseField):
+                fields_dict[key] = value
+
+        return fields_dict

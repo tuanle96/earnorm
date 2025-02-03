@@ -20,11 +20,19 @@ Examples:
     >>> query.window().over(partition_by=[User.age]).row_number()
 """
 
-from typing import Any, List, Optional, Type, TypeVar, Union
+from typing import Any, List, Optional, Type, TypeVar, Union, cast
 
 from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorCommandCursor
 
 from earnorm.base.database.query.core.query import BaseQuery
+from earnorm.base.database.query.interfaces.domain import (
+    DomainExpression,
+    DomainItem,
+    DomainLeaf,
+    DomainNode,
+    DomainOperator,
+    LogicalOperator,
+)
 from earnorm.base.database.query.interfaces.operations.aggregate import (
     AggregateProtocol,
 )
@@ -103,25 +111,31 @@ class MongoQuery(BaseQuery[ModelT]):
         self._options = options
 
     async def execute(self) -> List[ModelT]:
-        """Execute MongoDB query.
+        """Execute query and return results.
 
         Returns:
-            List of query results
+            List of model instances
         """
-        # Build pipeline
         pipeline: List[JsonDict] = []
 
         # Add filter stage
         if self._filter:
-            pipeline.append({"$match": self._filter})
-
-        # Add projection stage
-        if self._projection:
-            pipeline.append({"$project": self._projection})
+            # Convert id to _id in filter if exists
+            filter_dict = self._filter.copy()
+            if "id" in filter_dict:
+                filter_dict["_id"] = filter_dict.pop("id")
+            pipeline.append({"$match": filter_dict})
 
         # Add sort stage
         if self._sort:
-            pipeline.append({"$sort": dict(self._sort)})
+            # Convert id to _id in sort if exists
+            sort_dict = {}
+            for field, order in self._sort:
+                if field == "id":
+                    sort_dict["_id"] = order
+                else:
+                    sort_dict[field] = order
+            pipeline.append({"$sort": sort_dict})
 
         # Add skip stage
         if self._skip:
@@ -135,15 +149,48 @@ class MongoQuery(BaseQuery[ModelT]):
         if self._pipeline:
             pipeline.extend(self._pipeline)
 
+        # Add projection to rename _id to id
+        pipeline.append({"$addFields": {"id": "$_id"}})
+        pipeline.append({"$project": {"_id": 0}})
+
+        # Handle hint parameter
+        aggregate_kwargs = {"allowDiskUse": self._allow_disk_use, **self._options}
+        if self._hint is not None:
+            if isinstance(self._hint, str):
+                aggregate_kwargs["hint"] = self._hint
+            elif isinstance(self._hint, list):
+                # Convert id to _id in hint if exists
+                hint_dict = {}
+                for field, order in self._hint:
+                    if field == "id":
+                        hint_dict["_id"] = order
+                    else:
+                        hint_dict[field] = order
+                aggregate_kwargs["hint"] = hint_dict
+            else:
+                aggregate_kwargs["hint"] = self._hint
+
         # Execute pipeline
         cursor: AsyncIOMotorCommandCursor[JsonDict] = self._collection.aggregate(
-            pipeline,
-            allowDiskUse=self._allow_disk_use,
-            hint=self._hint,
-            **self._options,
+            pipeline, **aggregate_kwargs
         )
         docs = [doc async for doc in cursor]
-        return [self._model_type(**doc) for doc in docs]
+
+        # Create model instances with data
+        results = []
+        for doc in docs:
+            model = self._model_type()
+            # Set model id
+            if "id" in doc:
+                model.id = doc["id"]
+                # Remove id from data since it's already set as attribute
+                doc.pop("id")
+            # Set model data
+            object.__setattr__(model, "_data", doc)
+            # Set model ids for recordset
+            object.__setattr__(model, "_ids", (model.id,))
+            results.append(model)
+        return results
 
     def filter(self, domain: Union[List[Any], JsonDict]) -> "MongoQuery[ModelT]":
         """Filter documents.
@@ -155,10 +202,77 @@ class MongoQuery(BaseQuery[ModelT]):
             Self for chaining
         """
         if isinstance(domain, dict):
+            # Direct MongoDB filter
             self._filter.update(domain)
         else:
-            self._domain = domain
+            # Convert domain expression to MongoDB query
+            expr = DomainExpression(cast(List[DomainItem], domain))
+            expr.validate()
+            mongo_query = self._convert_domain_to_mongo(expr)
+            self._filter.update(mongo_query)
         return self
+
+    def _convert_domain_to_mongo(self, expr: DomainExpression) -> JsonDict:
+        """Convert domain expression to MongoDB query.
+
+        Args:
+            expr: Domain expression
+
+        Returns:
+            MongoDB query
+        """
+
+        def convert_node(node: Union[DomainNode, DomainLeaf]) -> JsonDict:
+            if isinstance(node, DomainLeaf):
+                field = node.field
+                if field == "id":
+                    field = "_id"
+                op = node.operator
+                value = node.value
+
+                if op == "=":
+                    return {field: value}
+                elif op == "!=":
+                    return {field: {"$ne": value}}
+                elif op == ">":
+                    return {field: {"$gt": value}}
+                elif op == ">=":
+                    return {field: {"$gte": value}}
+                elif op == "<":
+                    return {field: {"$lt": value}}
+                elif op == "<=":
+                    return {field: {"$lte": value}}
+                elif op == "in":
+                    return {field: {"$in": value}}
+                elif op == "not in":
+                    return {field: {"$nin": value}}
+                elif op == "like":
+                    return {field: {"$regex": value}}
+                elif op == "ilike":
+                    return {field: {"$regex": value, "$options": "i"}}
+                elif op == "not like":
+                    return {field: {"$not": {"$regex": value}}}
+                elif op == "not ilike":
+                    return {field: {"$not": {"$regex": value, "$options": "i"}}}
+                elif op == "is null":
+                    return {field: None}
+                elif op == "is not null":
+                    return {field: {"$ne": None}}
+                else:
+                    raise ValueError(f"Unsupported operator: {op}")
+            else:
+                if node.operator == "&":
+                    return {"$and": [convert_node(op) for op in node.operands]}
+                elif node.operator == "|":
+                    return {"$or": [convert_node(op) for op in node.operands]}
+                elif node.operator == "!":
+                    return {"$not": convert_node(node.operands[0])}
+                else:
+                    raise ValueError(f"Unsupported logical operator: {node.operator}")
+
+        if not expr.root:
+            return {}
+        return convert_node(expr.root)
 
     def order_by(self, *fields: str) -> "MongoQuery[ModelT]":
         """Add order by fields.

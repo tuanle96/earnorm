@@ -1,4 +1,11 @@
-"""Simple example usage with detailed logging."""
+"""Simple example usage with detailed logging.
+
+This example demonstrates:
+1. Model definition with auto env injection
+2. CRUD operations with recordsets
+3. Search and filtering
+4. Error handling and logging
+"""
 
 import asyncio
 import logging
@@ -17,41 +24,135 @@ logger = logging.getLogger(__name__)
 
 
 class User(BaseModel):
-    """User model."""
+    """User model with auto env injection.
+
+    This model demonstrates:
+    - Auto environment injection
+    - Field definitions with validation
+    - CRUD operations on recordsets
+
+    Examples:
+        >>> user = User()  # env auto-injected
+        >>> new_user = await user.create({
+        ...     "name": "John Doe",
+        ...     "email": "john@example.com",
+        ...     "age": 30
+        ... })
+        >>> print(new_user.name)  # Access as recordset
+    """
 
     # Collection configuration
-    _collection = "users"
     _name = "user"
-    _indexes = [{"email": 1}]
 
-    # Fields
+    # Fields with validation
     name = fields.StringField(required=True)
     email = fields.StringField(required=True, unique=True)
     age = fields.IntegerField(required=True)
 
-    async def get_all_users(self) -> Self:
-        """Retrieve and return all users from the database.
+    async def get_adult_users(self) -> Self:
+        """Retrieve and return all adult users from the database.
 
         Returns:
-            list: A list of User objects representing all users in the database.
+            Self: A recordset containing adult users
+
+        Examples:
+            >>> user = User()  # env auto-injected
+            >>> adults = await user.get_adult_users()
+            >>> for user in adults:
+            ...     print(f"{user.name} ({user.age})")
         """
+        # Search for users over 18
         users = await self.search(
             domain=[("age", ">", 18)],
             limit=10,
         )
-        users.filtered(lambda user: user.age is not None and user.age > 18)
-
-        for user in users:
-            print(user.name)
-        return users
+        # Filter active users
+        return users.filtered(lambda user: user.age is not None and user.age > 18)
 
 
 async def main():
-    await earnorm.init(
-        "./config.yaml",
-        cleanup_handlers=True,
-        debug=True,
-    )
+    """Main function demonstrating CRUD operations with User model.
+
+    This function shows:
+    1. Model instantiation with auto env injection
+    2. Creating records
+    3. Searching and filtering
+    4. Updating records
+    5. Deleting records
+    6. Error handling
+
+    Examples:
+        >>> await main()
+        Creating new user: John Doe
+        Reading user by email: john@example.com
+        Updating user age to 26
+        Deleting user with email: john@example.com
+    """
+    try:
+        # Initialize EarnORM
+        await earnorm.init(
+            "./config.yaml",
+            cleanup_handlers=True,
+            debug=True,
+        )
+
+        # CREATE - Create a new user
+        new_user = await User.create(
+            {"name": "John Doe", "email": "john@example.com", "age": 25}
+        )
+        logger.info(f"Created user: {new_user.name} with ID: {new_user.id}")
+
+        # READ - Read/Search users
+        # Get all adult users
+        adult_users = await User.search(
+            domain=[("age", ">", 18)],
+            limit=10,
+        )
+        logger.info(f"Found {len(adult_users)} adult users")
+
+        # Search by criteria
+        users = await User.search(domain=[("email", "=", "john@example.com")], limit=1)
+        if users:
+            found_user = users[0]
+            logger.info(f"Found user by email: {found_user.name}")
+
+            # UPDATE - Update user information
+            updated_user = await found_user.write({"age": 26})
+            logger.info(f"Updated user {updated_user.name}'s age to {updated_user.age}")
+
+            # DELETE - Delete user
+            success = await found_user.unlink()
+            if success:
+                logger.info(f"Deleted user: {found_user.name}")
+
+        # Bulk operations example
+        # Bulk update users under 20
+        young_users = await User.search(domain=[("age", "<", 20)], limit=10)
+        if young_users:
+            await young_users.write({"age": 20})
+            logger.info(f"Bulk updated {len(young_users)} users' age to 20")
+
+        # Bulk delete users under 18
+        underage_users = await User.search(domain=[("age", "<", 18)], limit=10)
+        if underage_users:
+            success = await underage_users.unlink()
+            if success:
+                logger.info(f"Bulk deleted {len(underage_users)} users")
+
+    except Exception as e:
+        logger.error(f"Error during CRUD operations: {str(e)}")
+        raise
+    finally:
+        # Cleanup and close connections
+        try:
+            from earnorm.base.env import Environment
+
+            env = Environment.get_instance()
+            if env:
+                await env.destroy()
+                logger.info("Environment cleaned up successfully")
+        except Exception as e:
+            logger.error(f"Failed to cleanup environment: {str(e)}")
 
 
 if __name__ == "__main__":

@@ -23,21 +23,10 @@ Examples:
 """
 
 from abc import ABC, abstractmethod
-from typing import (
-    Any,
-    Dict,
-    Final,
-    Generic,
-    List,
-    Optional,
-    Protocol,
-    Sequence,
-    TypeVar,
-    final,
-)
+from typing import Any, Dict, Final, Generic, List, Optional, Protocol, Sequence, TypeVar, final
 
 from earnorm.exceptions import FieldValidationError
-from earnorm.fields.types import ValidationContext, ValidatorResult
+from earnorm.fields.types import ValidationContext
 
 # Type variables with constraints
 T_contra = TypeVar("T_contra", contravariant=True)

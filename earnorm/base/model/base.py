@@ -84,7 +84,9 @@ from typing import (
     Optional,
     Self,
     Sequence,
+    Set,
     Tuple,
+    TypeVar,
     Union,
     cast,
 )
@@ -102,7 +104,7 @@ from earnorm.base.database.query.interfaces.query import QueryProtocol as AsyncQ
 from earnorm.base.database.transaction.base import Transaction
 from earnorm.base.env import Environment
 from earnorm.base.model.descriptors import FieldsDescriptor
-from earnorm.base.model.meta import MetaModel
+from earnorm.base.model.meta import ModelMeta
 from earnorm.exceptions import (
     DatabaseError,
     FieldValidationError,
@@ -114,42 +116,35 @@ from earnorm.types.models import ModelProtocol
 
 logger = logging.getLogger(__name__)
 
+T = TypeVar("T", bound=ModelProtocol)
 
-class BaseModel(metaclass=MetaModel):
-    """Base class for all database models.
 
-    Features:
-    - Field validation and type conversion
-    - CRUD operations
-    - Multiple database support
-    - Lazy loading
-    - Built-in recordset functionality
-    - Event system
+class BaseModel(metaclass=ModelMeta):
+    """Base model class with auto env injection.
+
+    This class provides:
+    - Automatic env injection from container
+    - Basic CRUD operations
+    - Field validation and type checking
+    - Implementation of ModelProtocol methods
 
     Examples:
         >>> class User(BaseModel):
-        ...     name = StringField(required=True)
-        ...     email = EmailField(unique=True)
-        ...
-        >>> user = User(name="John")
-        >>> await user.save()
-        >>> users = await User.filter([('name', 'like', 'J%')]).all()
+        ...     _name = "user"
+        ...     name = fields.StringField()
+        >>> user = User()  # env auto-injected
+        >>> new_user = await user.create({"name": "John"})
     """
 
-    # Define slots for instance variables only
+    # Define slots for memory efficiency and type safety
     __slots__ = (
-        "_env",
-        "_ids",
-        "_prefetch_ids",
-        "_domain",
-        "_limit",
-        "_offset",
-        "_order",
-        "_group_by",
-        "_having",
-        "_distinct",
-        "_data",
-        "_changed",
+        "_env",  # Environment instance
+        "_name",  # Model name
+        "_data",  # Record data
+        "_changed",  # Changed fields
+        "_deleted",  # Deletion flag
+        "_ids",  # Record IDs
+        "_prefetch_ids",  # Prefetch IDs
     )
 
     # Class variables (metadata)
@@ -162,31 +157,41 @@ class BaseModel(metaclass=MetaModel):
     _abstract: ClassVar[bool] = False
 
     # Model fields (will be set by metaclass)
-    _fields: ClassVar[Dict[str, BaseField[Any]]]
     __fields__ = FieldsDescriptor()  # Descriptor for accessing fields
     id: int = 0  # Record ID with default value
 
-    # Environment instance
-    _env: Environment
+    def __init__(self, env: Optional[Environment] = None) -> None:
+        """Initialize model with injected env."""
+        # Initialize all slots with default values
+        env_instance = env if env is not None else self._get_default_env()
+        if not env_instance:
+            raise RuntimeError(
+                "Environment not initialized. Make sure earnorm.init() is called first"
+            )
+        object.__setattr__(self, "_env", env_instance)
+        self._set_instance_name(self._get_instance_name())
+        object.__setattr__(self, "_data", {})
+        object.__setattr__(self, "_changed", set())
+        object.__setattr__(self, "_deleted", False)
+        object.__setattr__(self, "_ids", ())
+        object.__setattr__(self, "_prefetch_ids", ())
 
-    def __init__(
-        self,
-        env: Environment,
-        ids: Optional[Sequence[int]] = None,
-        prefetch_ids: Optional[Sequence[int]] = None,
-    ) -> None:
-        """Initialize recordset.
+        if not self._name:
+            raise ValueError("Model must define _name attribute")
 
-        Args:
-            env: Environment instance
-            ids: Record IDs
-            prefetch_ids: IDs to prefetch
+    @classmethod
+    def _get_default_env(cls) -> Optional[Environment]:
+        """Get default environment from container.
+
+        Returns:
+            Optional[Environment]: Environment instance or None
         """
-        self._env = env
-        self._ids = tuple(ids or ())  # Store as immutable tuple
-        self._prefetch_ids = tuple(
-            prefetch_ids or ids or ()
-        )  # Store as immutable tuple
+        try:
+            from earnorm.di import container
+
+            return container.get("environment")
+        except Exception:
+            return None
 
     @property
     def env(self) -> Environment:
@@ -208,12 +213,16 @@ class BaseModel(metaclass=MetaModel):
             prefetch_ids: IDs to prefetch
 
         Returns:
-            New recordset instance
+            Self: New recordset instance
         """
         records = object.__new__(cls)
         records._env = env
         records._ids = tuple(ids)
-        records._prefetch_ids = tuple(prefetch_ids or ids)  # Store as immutable tuple
+        records._prefetch_ids = tuple(prefetch_ids or ids)
+        records._data = {}
+        records._changed = set()
+        records._deleted = False
+        records._set_instance_name(cls._get_instance_name())
         return records
 
     @classmethod
@@ -280,7 +289,12 @@ class BaseModel(metaclass=MetaModel):
             order: Sort order
 
         Returns:
-            Recordset containing matching records
+            Self: A recordset containing matching records
+
+        Examples:
+            >>> users = await User.search([("age", ">", 18)])
+            >>> for user in users:
+            ...     print(user.name)
         """
         query = await cls._where_calc(domain or [])
         await cls._apply_ir_rules(query, "read")
@@ -293,7 +307,7 @@ class BaseModel(metaclass=MetaModel):
         if offset:
             query = query.offset(offset)
 
-        # Execute query
+        # Execute query and return recordset
         ids = await query.execute()
         return cls._browse(cls._env, cast(Sequence[int], ids), cast(Sequence[int], ids))
 
@@ -317,7 +331,7 @@ class BaseModel(metaclass=MetaModel):
 
         try:
             # Check required fields
-            for name, field in self._fields.items():
+            for name, field in self.__fields__.items():
                 if (
                     field.required
                     and not field.readonly
@@ -331,12 +345,12 @@ class BaseModel(metaclass=MetaModel):
 
             # Validate field values
             for name, value in vals.items():
-                if name not in self._fields:
+                if name not in self.__fields__:
                     raise FieldValidationError(
                         message=f"Field '{name}' does not exist",
                         field_name=name,
                     )
-                field = self._fields[name]
+                field = self.__fields__[name]
                 if field.readonly:
                     raise FieldValidationError(
                         message=f"Field '{name}' is readonly",
@@ -395,12 +409,12 @@ class BaseModel(metaclass=MetaModel):
 
             # Validate field values
             for name, value in vals.items():
-                if name not in self._fields:
+                if name not in self.__fields__:
                     raise FieldValidationError(
                         message=f"Field '{name}' does not exist",
                         field_name=name,
                     )
-                field = self._fields[name]
+                field = self.__fields__[name]
                 if field.readonly:
                     raise FieldValidationError(
                         message=f"Field '{name}' is readonly",
@@ -513,12 +527,12 @@ class BaseModel(metaclass=MetaModel):
 
         # Convert user-provided values
         for name, value in vals.items():
-            field = self._fields[name]
+            field = self.__fields__[name]
             if not field.readonly:  # Skip readonly fields
                 db_vals[name] = await field.to_db(value, backend)
 
         # Add default values for missing required fields
-        for name, field in self._fields.items():
+        for name, field in self.__fields__.items():
             if name not in vals and field.required and not field.readonly:
                 if field.default is not None:
                     default_value = (
@@ -563,7 +577,7 @@ class BaseModel(metaclass=MetaModel):
 
         # Convert user-provided values
         for name, value in vals.items():
-            field = self._fields[name]
+            field = self.__fields__[name]
             if not field.readonly:  # Skip readonly fields
                 db_vals[name] = await field.to_db(value, backend)
 
@@ -591,30 +605,21 @@ class BaseModel(metaclass=MetaModel):
                 message=f"Failed to update records: {e}", backend=backend
             ) from e
 
-    async def _unlink(self) -> None:
-        """Delete record from database.
+    async def _unlink(self) -> bool:
+        """Delete records in recordset.
 
-        Raises:
-            FieldValidationError: If deletion is not allowed
-            DatabaseError: If database operation fails
+        Returns:
+            bool: True if records were deleted successfully
+
+        Examples:
+            >>> user = await User.search([("email", "=", "john@example.com")])
+            >>> success = await user.unlink()
+            >>> print(success)  # True
         """
-        # Validate deletion
-        await self._validate_unlink()
-
-        try:
-            # Convert to model objects
-            models = [
-                self._browse(self._env, [id], self._prefetch_ids) for id in self._ids
-            ]
-
-            # Bulk delete
-            await self._env.adapter.delete_many(cast(List[DatabaseModel], models))
-
-        except Exception as e:
-            raise DatabaseError(
-                message=f"Failed to delete records: {e}",
-                backend=self._env.adapter.backend_type,
-            ) from e
+        await self._unlink()
+        self._ids = ()
+        self._prefetch_ids = ()
+        return True
 
     async def write(self, values: Dict[str, Any]) -> Self:
         """Update records in recordset.
@@ -623,7 +628,12 @@ class BaseModel(metaclass=MetaModel):
             values: Field values to update
 
         Returns:
-            Same recordset
+            Self: Same recordset with updated values
+
+        Examples:
+            >>> user = await User.search([("email", "=", "john@example.com")])
+            >>> updated_user = await user.write({"age": 26})
+            >>> print(updated_user.age)  # 26
         """
         await self._write(values)
         return self
@@ -632,9 +642,16 @@ class BaseModel(metaclass=MetaModel):
         """Delete records in recordset.
 
         Returns:
-            True if records were deleted
+            bool: True if records were deleted successfully
+
+        Examples:
+            >>> user = await User.search([("email", "=", "john@example.com")])
+            >>> success = await user.unlink()
+            >>> print(success)  # True
         """
         await self._unlink()
+        self._ids = ()
+        self._prefetch_ids = ()
         return True
 
     def __iter__(self):
@@ -694,7 +711,7 @@ class BaseModel(metaclass=MetaModel):
             Result of mapping
         """
         if isinstance(func, str):
-            field = self._fields[func]
+            field = self.__fields__[func]
             # pylint: disable=unnecessary-dunder-call
             return field.__get__(
                 self, type(self)
@@ -724,7 +741,7 @@ class BaseModel(metaclass=MetaModel):
         if key is not None:
             if isinstance(key, str):
                 name = key
-                field = self._fields[name]
+                field = self.__fields__[name]
 
                 def sort_key(rec: Self) -> Any:
                     return self._sort_key(rec, field)
@@ -899,7 +916,7 @@ class BaseModel(metaclass=MetaModel):
             UniqueConstraintError: If unique constraint would be violated
         """
         for name, value in vals.items():
-            field = self._fields[name]
+            field = self.__fields__[name]
             if not getattr(field, "unique", False):
                 continue
 
@@ -963,7 +980,7 @@ class BaseModel(metaclass=MetaModel):
             values: Field values to create record with
 
         Returns:
-            New record instance
+            Self: A recordset containing the newly created record
 
         Raises:
             FieldValidationError: If validation fails
@@ -976,7 +993,7 @@ class BaseModel(metaclass=MetaModel):
             ...     "email": "john@example.com",
             ...     "age": 30
             ... })
-            >>> print(user.id)  # New record ID
+            >>> print(user.name)  # Access as recordset
         """
         # Create new instance
         record = cls._browse(cls._env, [], [])
@@ -993,7 +1010,7 @@ class BaseModel(metaclass=MetaModel):
             Dictionary representation of model
         """
         result: Dict[str, Any] = {}
-        for name, field in self._fields.items():
+        for name, field in self.__fields__.items():
             if not field.readonly:
                 result[name] = getattr(self, name)
         return result
@@ -1005,7 +1022,7 @@ class BaseModel(metaclass=MetaModel):
             data: Dictionary data to update from
         """
         for name, value in data.items():
-            if name in self._fields and not self._fields[name].readonly:
+            if name in self.__fields__ and not self.__fields__[name].readonly:
                 setattr(self, name, value)
 
     async def with_transaction(
@@ -1017,3 +1034,37 @@ class BaseModel(metaclass=MetaModel):
             Transaction context manager
         """
         return await self._env.adapter.transaction(model_type=type(self))
+
+    @classmethod
+    async def _get_env(cls) -> Environment:
+        """Get environment from container.
+
+        Returns:
+            Environment: Environment instance
+
+        Raises:
+            RuntimeError: If environment not initialized
+        """
+        from earnorm.di import container
+
+        env = await container.get("environment")
+        if not env:
+            raise RuntimeError("Environment not initialized")
+        return cast(Environment, env)
+
+    @classmethod
+    def _get_instance_name(cls) -> str:
+        """Get instance name from class.
+
+        Returns:
+            str: Instance name
+        """
+        return str(getattr(cls, "_name", ""))
+
+    def _set_instance_name(self, name: str) -> None:
+        """Set instance name.
+
+        Args:
+            name: Instance name
+        """
+        object.__setattr__(self, "_name", name)

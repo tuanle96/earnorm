@@ -116,17 +116,18 @@ class Environment:
             from earnorm.di import container
 
             # Get services from DI container
-            adapter = await container.get("database_adapter")
-            cache = await container.get("cache_manager")
-            events = await container.get("event_bus")
-
-            # Cleanup services
-            if adapter:
+            if container.has("database_adapter"):
+                adapter = await container.get("database_adapter")
                 await adapter.close()
-            if cache:
+
+            if container.has("cache_manager"):
+                cache = await container.get("cache_manager")
                 await cache.cleanup()
                 await cache.close()
-            if events:
+
+            # check if event bus is registered
+            if container.has("event_bus"):
+                events = await container.get("event_bus")
                 await events.destroy()
 
             # Reset state

@@ -70,7 +70,10 @@ async def register_environment_services(config: SystemConfig) -> None:
     # Create and initialize environment if not already initialized
     env = Environment.get_instance()
     if not getattr(env, "_initialized", False):
-        await env.init(config)
+        from earnorm.config.data import SystemConfigData
+
+        config_data = SystemConfigData(**config.model_dump())
+        await env.init(config_data)
 
     # Register in container if not already registered
     if not container.has("environment"):
@@ -94,8 +97,8 @@ async def register_database_services(config: SystemConfig) -> None:
             await create_mongo_pool(
                 uri=config.database_uri or "",
                 database=config.database_name,
-                min_size=int(config.database_min_pool_size or 1),
-                max_size=int(config.database_max_pool_size or 10),
+                min_size=int(config.database_options.get("min_pool_size") or 1),
+                max_size=int(config.database_options.get("max_pool_size") or 10),
             ),
         )
         await mongo_pool.init()

@@ -7,26 +7,17 @@ Examples:
     >>> config = container.get("config")
     >>> print(config.mongodb_uri)
     >>> config.redis_host = "localhost"
-    >>> await config.write({"redis_host": "localhost"})
+    >>> config.save_yaml("config.yaml")
 """
 
 import logging
 import os
 from pathlib import Path
-from typing import Any, ClassVar, Dict, Optional, Self, TypeVar, Union
+from typing import Any, Dict, Optional, Union
 
 import yaml
 from dotenv import load_dotenv
-
-from earnorm.base.env import Environment
-from earnorm.base.model import BaseModel
-from earnorm.config.data import SystemConfigData
-from earnorm.exceptions import ConfigError, ConfigValidationError
-from earnorm.fields import BaseField, DictField, StringField
-from earnorm.fields.primitive.boolean import BooleanField
-from earnorm.fields.primitive.datetime import DateTimeField
-from earnorm.fields.primitive.json import JSONField
-from earnorm.fields.primitive.number import IntegerField
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -35,29 +26,6 @@ CONFIG_PREFIXES = ("MONGO_", "REDIS_", "CACHE_", "EVENT_")
 
 # Type for config data
 ConfigData = Dict[str, Union[str, int, bool]]
-
-# Type variable for SystemConfig
-T = TypeVar("T", bound="SystemConfig")
-
-
-def validate_pool_sizes(min_size: Optional[int], max_size: Optional[int]) -> None:
-    """Validate pool size configuration.
-
-    Args:
-        min_size: Minimum pool size
-        max_size: Maximum pool size
-
-    Raises:
-        ConfigValidationError: If validation fails
-    """
-    if min_size is None or max_size is None:
-        return
-
-    if min_size > max_size:
-        raise ConfigValidationError(
-            f"Minimum pool size ({min_size}) cannot be greater than "
-            f"maximum pool size ({max_size})"
-        )
 
 
 class SystemConfig(BaseModel):
@@ -68,118 +36,27 @@ class SystemConfig(BaseModel):
 
     Examples:
         >>> # Load from .env file
-        >>> config = await SystemConfig.load_env(".env")
+        >>> config = SystemConfig.load_env(".env")
         >>> print(config.database_uri)
 
         >>> # Load from YAML file
-        >>> config = await SystemConfig.load_yaml("config.yaml")
+        >>> config = SystemConfig.load_yaml("config.yaml")
         >>> print(config.redis_host)
     """
 
-    _name = "earnorm.config"
-    _description = "System Configuration"
-    _skip_default_fields = True  # Skip default fields like created_at, updated_at
-
-    # Singleton instance
-    _instance: ClassVar[Optional["SystemConfig"]] = None
-
-    @classmethod
-    def __init_subclass__(cls) -> None:
-        """Initialize subclass.
-
-        This method ensures fields are properly initialized when subclassing SystemConfig.
-        It copies all field definitions from the class to _fields for backward compatibility.
-        """
-        super().__init_subclass__()
-        # Get all class attributes that are BaseField instances
-        fields: Dict[str, BaseField[Any]] = {
-            name: field
-            for name, field in cls.__dict__.items()
-            if isinstance(field, BaseField)
-        }
-        cls._fields = fields
-
     # Version and timestamps
-    version = StringField(default="1.0.0")
-    created_at = DateTimeField(auto_now_add=True, required=False)
-    updated_at = DateTimeField(auto_now=True, required=False)
+    version: str = Field(default="1.0.0")
+    created_at: Optional[str] = Field(default=None)
+    updated_at: Optional[str] = Field(default=None)
 
     # Database Configuration
-    database_backend = StringField(
-        default="mongodb",
-        choices=["mongodb", "mysql", "postgres"],
-        description="Database backend type",
-    )
-    database_uri = StringField(
-        required=True,
-        pattern=r"^(mongodb|mysql|postgres)://[^/\s]+(/[^/\s]*)?$",  # Validate URI format
-        description="Database connection URI",
-    )
-    database_name = StringField(
-        required=True,
-        min_length=1,
-        max_length=64,
-        description="Database name",
-    )
-    database_username = StringField(
-        required=False,
-        description="Database username",
-    )
-    database_password = StringField(
-        required=False,
-        description="Database password",
-    )
-    database_min_pool_size = IntegerField(
-        default=5,
-        min_value=1,
-        max_value=100,
-        description="Minimum database connection pool size",
-    )
-    database_max_pool_size = IntegerField(
-        default=20,
-        min_value=5,
-        max_value=1000,
-        description="Maximum database connection pool size",
-    )
-    database_pool_timeout = IntegerField(
-        default=30,
-        min_value=1,
-        max_value=300,
-        description="Database connection timeout in seconds",
-    )
-    database_max_lifetime = IntegerField(
-        default=3600,
-        min_value=60,
-        max_value=86400,  # 24 hours
-        description="Maximum connection lifetime in seconds",
-    )
-    database_idle_timeout = IntegerField(
-        default=300,
-        min_value=10,
-        max_value=3600,
-        description="Connection idle timeout in seconds",
-    )
-    database_ssl = BooleanField(
-        default=False,
-        description="Whether to use SSL for database connection",
-    )
-    database_ssl_ca = StringField(
-        required=False,
-        description="SSL CA certificate path",
-    )
-    database_ssl_cert = StringField(
-        required=False,
-        description="SSL certificate path",
-    )
-    database_ssl_key = StringField(
-        required=False,
-        description="SSL key path",
-    )
-    database_options = DictField(
-        key_field=StringField(),
-        value_field=JSONField(),
-        required=False,
-        default={
+    database_backend: str = Field(default="mongodb")
+    database_uri: str = Field(...)  # Required field
+    database_name: str = Field(...)  # Required field
+    database_username: Optional[str] = Field(default=None)
+    database_password: Optional[str] = Field(default=None)
+    database_options: Dict[str, Any] = Field(
+        default_factory=lambda: {
             "server_selection_timeout_ms": 5000,
             "connect_timeout_ms": 10000,
             "socket_timeout_ms": 20000,
@@ -187,214 +64,84 @@ class SystemConfig(BaseModel):
             "retry_reads": True,
             "w": 1,
             "j": True,
-        },
-        description="Additional database connection options",
+        }
     )
+
+    # Pool Configuration
+    min_pool_size: Optional[int] = Field(default=None)
+    max_pool_size: Optional[int] = Field(default=None)
 
     # Redis Configuration
-    redis_host = StringField(
-        required=True, min_length=1, max_length=255, description="Redis server host"
-    )
-    redis_port = IntegerField(
-        default=6379, min_value=1, max_value=65535, description="Redis server port"
-    )
-    redis_db = IntegerField(
-        default=0, min_value=0, max_value=15, description="Redis database number"
-    )
-    redis_min_pool_size = IntegerField(
-        default=5,
-        min_value=1,
-        max_value=100,
-        description="Minimum Redis connection pool size",
-    )
-    redis_max_pool_size = IntegerField(
-        default=20,
-        min_value=5,
-        max_value=1000,
-        description="Maximum Redis connection pool size",
-    )
-    redis_pool_timeout = IntegerField(
-        default=30,
-        min_value=1,
-        max_value=300,
-        description="Redis connection timeout in seconds",
-    )
+    redis_host: str = Field(default="localhost")
+    redis_port: int = Field(default=6379)
+    redis_db: int = Field(default=0)
+    redis_password: Optional[str] = Field(default=None)
+    redis_min_pool_size: int = Field(default=1)
+    redis_max_pool_size: int = Field(default=10)
+    redis_pool_timeout: int = Field(default=10)
 
     # Cache Configuration
-    cache_backend = StringField(
-        default="redis", choices=["redis", "memory"], description="Cache backend type"
-    )
-    cache_ttl = IntegerField(
-        default=3600,
-        min_value=1,
-        max_value=86400,  # 24 hours
-        description="Default cache TTL in seconds",
-    )
+    cache_backend: str = Field(default="redis")
+    cache_prefix: str = Field(default="earnorm")
+    cache_ttl: int = Field(default=3600)
 
     # Event Configuration
-    event_enabled = BooleanField(
-        default=True,
-        description="Whether to enable event system",
-    )
-    event_queue = StringField(
-        default="earnorm:events",
-        min_length=1,
-        max_length=255,
-        description="Event queue name",
-    )
-    event_batch_size = IntegerField(
-        default=100,
-        min_value=1,
-        max_value=10000,
-        description="Event batch size",
-    )
+    event_backend: str = Field(default="redis")
+    event_prefix: str = Field(default="earnorm")
 
+    @field_validator("database_uri")
     @classmethod
-    async def create_temp(
-        cls, env: Environment, database_uri: str, database_name: str
-    ) -> "SystemConfig":
-        """Create a temporary SystemConfig instance with minimal required fields.
-
-        This method is used to create a temporary SystemConfig instance for initializing
-        the DI container. It only validates the required fields for database connection.
+    def validate_database_uri(cls, v: str) -> str:
+        """Validate database URI format.
 
         Args:
-            env: Environment instance
-            database_uri: Database connection URI
-            database_name: Database name
+            v: Database URI
 
         Returns:
-            Temporary SystemConfig instance
+            Validated URI
 
         Raises:
-            ConfigValidationError: If validation fails
+            ValueError: If URI format is invalid
         """
-        logger.debug("Creating temporary SystemConfig")
-        logger.debug(f"Environment: {env}")
-        logger.debug(f"Database URI: {database_uri}")
-        logger.debug(f"Database name: {database_name}")
+        import re
 
-        try:
-            # Create instance with env
-            instance = cls._browse(env, [])
+        if not re.match(r"^(mongodb|mysql|postgres)://[^/\s]+(/[^/\s]*)?$", v):
+            raise ValueError("Invalid database URI format")
+        return v
 
-            # Create temporary config with minimal required fields
-            await instance._create(
-                {
-                    "database_uri": str(database_uri),
-                    "database_name": str(database_name),
-                    "redis_host": "localhost",  # Default value for temporary config
-                    "database_options": {
-                        "server_selection_timeout_ms": 5000,
-                        "connect_timeout_ms": 10000,
-                        "socket_timeout_ms": 20000,
-                        "retry_writes": True,
-                        "retry_reads": True,
-                        "w": 1,
-                        "j": True,
-                    },
-                }
+    @field_validator("min_pool_size", "max_pool_size")
+    @classmethod
+    def validate_pool_sizes(
+        cls, v: Optional[int], info: ValidationInfo
+    ) -> Optional[int]:
+        """Validate pool size configuration.
+
+        Args:
+            v: Pool size value
+            info: Validation info
+
+        Returns:
+            Validated pool size
+
+        Raises:
+            ValueError: If validation fails
+        """
+        if v is None:
+            return v
+
+        min_size = info.data.get("min_pool_size")
+        max_size = info.data.get("max_pool_size")
+
+        if min_size is not None and max_size is not None and min_size > max_size:
+            raise ValueError(
+                f"Minimum pool size ({min_size}) cannot be greater than "
+                f"maximum pool size ({max_size})"
             )
-            logger.debug("Successfully created temporary SystemConfig")
-            return instance
 
-        except Exception as e:
-            logger.error(f"Failed to create temporary SystemConfig: {str(e)}")
-            raise
-
-    def validate(self) -> None:
-        """Validate all configuration settings.
-
-        This method runs all validation checks on the configuration:
-        - Database configuration (URI, pool sizes, timeouts)
-        - Redis configuration (host, port, pool sizes)
-        - Cache configuration (backend type, TTL values)
-
-        Raises:
-            ConfigValidationError: If any validation check fails
-        """
-        self._validate_database_config()
-        self._validate_redis_config()
-        self._validate_cache_config()
-
-    @property
-    def database(self) -> Dict[str, Any]:
-        """Get database configuration.
-
-        Returns:
-            Dictionary with database configuration
-        """
-        return {
-            "backend_type": self.database_backend,
-            "uri": self.database_uri,
-            "database": self.database_name,
-            "username": self.database_username,
-            "password": self.database_password,
-            "pool_size": self.database_max_pool_size,
-            "pool_timeout": self.database_pool_timeout,
-            "max_lifetime": self.database_max_lifetime,
-            "idle_timeout": self.database_idle_timeout,
-            "ssl": self.database_ssl,
-            "ssl_ca": self.database_ssl_ca,
-            "ssl_cert": self.database_ssl_cert,
-            "ssl_key": self.database_ssl_key,
-        }
-
-    @property
-    def redis(self) -> Dict[str, Any]:
-        """Get Redis configuration.
-
-        Returns:
-            Dictionary with Redis configuration
-        """
-        return {
-            "host": self.redis_host,
-            "port": self.redis_port,
-            "db": self.redis_db,
-            "min_pool_size": self.redis_min_pool_size,
-            "max_pool_size": self.redis_max_pool_size,
-            "pool_timeout": self.redis_pool_timeout,
-        }
-
-    @property
-    def cache(self) -> Dict[str, Any]:
-        """Get cache configuration.
-
-        Returns:
-            Dictionary with cache configuration
-        """
-        return {
-            "backend": self.cache_backend,
-            "ttl": self.cache_ttl,
-        }
-
-    def _validate_database_config(self) -> None:
-        """Validate database configuration.
-
-        Raises:
-            ConfigValidationError: If validation fails
-        """
-        validate_pool_sizes(self.database_min_pool_size, self.database_max_pool_size)
-
-    def _validate_redis_config(self) -> None:
-        """Validate Redis configuration.
-
-        Raises:
-            ConfigValidationError: If validation fails
-        """
-        validate_pool_sizes(self.redis_min_pool_size, self.redis_max_pool_size)
-
-    def _validate_cache_config(self) -> None:
-        """Validate cache configuration.
-
-        Raises:
-            ConfigValidationError: If validation fails
-        """
-        if self.cache_backend == "redis":
-            self._validate_redis_config()
+        return v
 
     @classmethod
-    async def load_env(cls, env_file: Optional[Union[str, Path]] = None) -> Self:
+    def load_env(cls, env_file: Optional[Union[str, Path]] = None) -> "SystemConfig":
         """Load configuration from environment variables.
 
         Args:
@@ -403,28 +150,26 @@ class SystemConfig(BaseModel):
         Returns:
             SystemConfig instance
 
-        Raises:
-            ConfigError: If loading fails
+        Examples:
+            >>> config = SystemConfig.load_env(".env")
+            >>> print(config.database_uri)
         """
-        try:
-            # Load .env file if provided
-            if env_file:
-                load_dotenv(env_file)
+        # Load .env file if provided
+        if env_file:
+            load_dotenv(env_file)
 
-            # Get all environment variables with config prefixes
-            config_data: ConfigData = {}
-            for key, value in os.environ.items():
-                if any(key.startswith(prefix) for prefix in CONFIG_PREFIXES):
-                    config_data[key.lower()] = value
+        # Get all environment variables with config prefixes
+        config_data: Dict[str, Any] = {}
+        for key, value in os.environ.items():
+            if any(key.startswith(prefix) for prefix in CONFIG_PREFIXES):
+                config_key = key.lower()
+                config_data[config_key] = value
 
-            # Create config instance
-            return await cls.create(values=config_data)
-
-        except Exception as e:
-            raise ConfigError(f"Failed to load config from environment: {e}") from e
+        # Create config instance
+        return cls(**config_data)
 
     @classmethod
-    async def load_yaml(cls, yaml_file: Union[str, Path]) -> Self:
+    def load_yaml(cls, yaml_file: Union[str, Path]) -> "SystemConfig":
         """Load configuration from YAML file.
 
         Args:
@@ -433,40 +178,76 @@ class SystemConfig(BaseModel):
         Returns:
             SystemConfig instance
 
-        Raises:
-            ConfigError: If loading fails
+        Examples:
+            >>> config = SystemConfig.load_yaml("config.yaml")
+            >>> print(config.redis_host)
         """
-        try:
-            # Read YAML file
-            with open(yaml_file, "r", encoding="utf-8") as f:
-                config_data = yaml.safe_load(f)
+        # Read YAML file
+        with open(yaml_file) as f:
+            config_data = yaml.safe_load(f)
 
-            # Create config instance
-            return await cls.create(values=config_data)
+        # Create config instance
+        return cls(**config_data)
 
-        except Exception as e:
-            raise ConfigError(f"Failed to load config from YAML: {e}") from e
+    def save_yaml(self, yaml_file: Union[str, Path]) -> None:
+        """Save configuration to YAML file.
+
+        Args:
+            yaml_file: Path to YAML file
+
+        Examples:
+            >>> config = SystemConfig.load_env()
+            >>> config.save_yaml("config.yaml")
+        """
+        # Convert to dictionary
+        config_data = self.model_dump()
+
+        # Write YAML file
+        with open(yaml_file, "w") as f:
+            yaml.safe_dump(config_data, f)
 
     @classmethod
-    async def from_data(
-        cls, env: Environment, data: SystemConfigData
-    ) -> "SystemConfig":
-        """Create a new SystemConfig instance from data.
+    async def from_data(cls, env: Any, config_data: Any) -> "SystemConfig":
+        """Create SystemConfig instance from environment and config data.
 
         Args:
             env: Environment instance
-            data: Configuration data to create from
+            config_data: Configuration data object or dictionary
 
         Returns:
-            New SystemConfig instance
+            SystemConfig instance
+
+        Examples:
+            >>> env = Environment()
+            >>> config_data = {"database_uri": "mongodb://localhost:27017"}
+            >>> config = await SystemConfig.from_data(env, config_data)
         """
-        # Convert data to dict
-        values = data.to_dict()
+        logger.debug("Creating SystemConfig from data: %s", config_data)
 
-        # Create new instance with env
-        instance = cls._browse(env, [])
+        # Convert config_data to dictionary if it's not already
+        if hasattr(config_data, "_data"):
+            config_dict = config_data._data
+        elif hasattr(config_data, "model_dump"):
+            config_dict = config_data.model_dump()
+        else:
+            config_dict = dict(config_data)
 
-        # Create record
-        await instance._create(values)
+        # Convert database options if needed
+        if "database_options" in config_dict and isinstance(
+            config_dict["database_options"], str
+        ):
+            try:
+                config_dict["database_options"] = yaml.safe_load(
+                    config_dict["database_options"]
+                )
+            except Exception as e:
+                logger.error("Failed to parse database options: %s", e)
+                config_dict["database_options"] = {}
+
+        # Create instance
+        instance = cls(**config_dict)
+
+        # Additional validation can be added here
+        logger.debug("Created SystemConfig instance: %s", instance)
 
         return instance

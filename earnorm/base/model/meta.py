@@ -11,6 +11,7 @@ It handles:
 - Inheritance tracking
 """
 
+import logging
 from abc import ABCMeta
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -20,6 +21,11 @@ from earnorm.fields import BaseField
 from earnorm.fields.primitive import DateTimeField, StringField
 
 __all__ = ["BaseModel", "ModelInfo", "MetaModel"]
+
+logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+ValueT = TypeVar("ValueT")
 
 
 @dataclass
@@ -75,9 +81,6 @@ class BaseModel:
     #     "_ids",
     #     "_prefetch_ids",
     # )
-
-
-ValueT = TypeVar("ValueT")
 
 
 class MetaModel(ABCMeta):
@@ -361,3 +364,86 @@ class MetaModel(ABCMeta):
             parent_models=cls.get_parent_models(name),
             fields=getattr(model, "fields", {}),
         )
+
+
+class ModelMeta(type):
+    """Metaclass for model classes.
+
+    This metaclass:
+    1. Sets up _fields dictionary from class attributes
+    2. Injects environment from container
+    3. Validates model configuration
+
+    Examples:
+        >>> class User(metaclass=ModelMeta):
+        ...     _name = "user"
+        ...     name = fields.StringField()
+    """
+
+    def __new__(
+        mcs, name: str, bases: tuple[Type[Any], ...], attrs: Dict[str, Any]
+    ) -> Type[object]:
+        """Create new model class.
+
+        Args:
+            name: Class name
+            bases: Base classes
+            attrs: Class attributes
+
+        Returns:
+            New model class
+        """
+        # Skip for BaseModel
+        if name == "BaseModel":
+            return cast(Type[object], super().__new__(mcs, name, bases, attrs))
+
+        # Get fields from class attributes
+        fields_dict: Dict[str, BaseField[Any]] = {}
+        for key, value in list(attrs.items()):
+            if isinstance(value, BaseField):
+                fields_dict[key] = value
+
+        # Set _fields class variable
+        attrs["_fields"] = fields_dict
+
+        # Create class
+        cls = cast(Type[object], super().__new__(mcs, name, bases, attrs))
+
+        # Get environment from container
+        try:
+            from earnorm.base.env import Environment
+
+            env = Environment.get_instance()
+            if env:
+                setattr(cls, "_env", env)
+        except Exception as e:
+            import logging
+
+            logging.error(f"Failed to inject environment: {e}")
+
+        return cls
+
+    def __call__(cls, *args: Any, **kwargs: Any) -> Any:
+        """Create model instance with injected env.
+
+        Args:
+            *args: Positional arguments
+            **kwargs: Keyword arguments
+
+        Returns:
+            Model instance
+        """
+        # Get env from container if not provided
+        if "env" not in kwargs:
+            try:
+                from earnorm.base.env import Environment
+
+                env = Environment.get_instance()
+                if env:
+                    kwargs["env"] = env
+            except Exception as e:
+                import logging
+
+                logging.error(f"Failed to inject environment: {e}")
+
+        return super().__call__(*args, **kwargs)
