@@ -91,7 +91,7 @@ async def main():
     try:
         # Initialize EarnORM
         await earnorm.init(
-            "./config.yaml",
+            config_path="examples/simple/config.yaml",
             cleanup_handlers=True,
             debug=True,
         )
@@ -117,8 +117,8 @@ async def main():
             logger.info(f"Found user by email: {found_user.name}")
 
             # UPDATE - Update user information
-            updated_user = await found_user.write({"age": 26})
-            logger.info(f"Updated user {updated_user.name}'s age to {updated_user.age}")
+            await found_user.write({"age": 26})
+            logger.info(f"Updated user {found_user.name}'s age to {found_user.age}")
 
             # DELETE - Delete user
             success = await found_user.unlink()

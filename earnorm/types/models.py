@@ -41,7 +41,7 @@ class ModelProtocol(Protocol):
     id: int
     """Record ID."""
 
-    def to_dict(self) -> Dict[str, Any]:
+    async def to_dict(self) -> Dict[str, Any]:
         """Convert model to dictionary.
 
         Returns:

@@ -22,6 +22,7 @@ Examples:
 
 from typing import Any, List, Optional, Type, TypeVar, Union, cast
 
+from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorCommandCursor
 
 from earnorm.base.database.query.core.query import BaseQuery
@@ -225,10 +226,19 @@ class MongoQuery(BaseQuery[ModelT]):
         def convert_node(node: Union[DomainNode, DomainLeaf]) -> JsonDict:
             if isinstance(node, DomainLeaf):
                 field = node.field
-                if field == "id":
-                    field = "_id"
                 op = node.operator
                 value = node.value
+
+                # Convert id field and value
+                if field == "id":
+                    field = "_id"
+                    # Convert value to ObjectId if needed
+                    if isinstance(value, str):
+                        value = ObjectId(value)
+                    elif isinstance(value, list) and op in ("in", "not in"):
+                        value = [
+                            ObjectId(v) if isinstance(v, str) else v for v in value
+                        ]
 
                 if op == "=":
                     return {field: value}

@@ -147,7 +147,7 @@ class MongoTransaction(Transaction[ModelT]):
         if not model.id:
             raise ValueError("Model has no ID")
         try:
-            values = cast(JsonDict, model.to_dict())
+            values = await model.to_dict()
             await self._collection.update_one(
                 {"_id": model.id}, {"$set": values}, session=self._session
             )
@@ -172,7 +172,7 @@ class MongoTransaction(Transaction[ModelT]):
             for model in models:
                 if not model.id:
                     raise ValueError("Model has no ID")
-                values = cast(JsonDict, model.to_dict())
+                values = await model.to_dict()
                 await self._collection.update_one(
                     {"_id": model.id}, {"$set": values}, session=self._session
                 )

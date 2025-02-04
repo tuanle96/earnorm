@@ -91,6 +91,8 @@ from typing import (
     cast,
 )
 
+from bson import ObjectId
+
 from earnorm.base.database.query.interfaces.domain import DomainExpression
 from earnorm.base.database.query.interfaces.domain import DomainOperator as Operator
 from earnorm.base.database.query.interfaces.domain import LogicalOperator as LogicalOp
@@ -105,6 +107,7 @@ from earnorm.base.database.transaction.base import Transaction
 from earnorm.base.env import Environment
 from earnorm.base.model.descriptors import FieldsDescriptor
 from earnorm.base.model.meta import ModelMeta
+from earnorm.di import Container
 from earnorm.exceptions import (
     DatabaseError,
     FieldValidationError,
@@ -160,6 +163,9 @@ class BaseModel(metaclass=ModelMeta):
     __fields__ = FieldsDescriptor()  # Descriptor for accessing fields
     id: int = 0  # Record ID with default value
 
+    _ids: Tuple[Any, ...]  # Record IDs with proper type
+    _changed: Set[str]  # Changed fields with proper type
+
     def __init__(self, env: Optional[Environment] = None) -> None:
         """Initialize model with injected env."""
         # Initialize all slots with default values
@@ -189,7 +195,8 @@ class BaseModel(metaclass=ModelMeta):
         try:
             from earnorm.di import container
 
-            return container.get("environment")
+            env = container.get("environment")
+            return env if isinstance(env, Environment) else None
         except Exception:
             return None
 
@@ -391,51 +398,86 @@ class BaseModel(metaclass=ModelMeta):
             ValidationError: If custom validation fails
             ValueError: If records don't exist
         """
-        logger.debug("Validating write values: %s", vals)
+        logger.debug("Starting write validation for values: %s", vals)
+        logger.debug("Current model IDs: %s", self._ids)
 
         try:
             if not self._ids:
+                logger.error("No records to update - IDs are empty")
                 raise ValueError("No records to update")
 
             # Check if records exist in database
+            # Get actual ID values from model objects
+            id_list = []
+            for model_id in self._ids:
+                if isinstance(model_id, str):
+                    id_list.append(model_id)
+                elif hasattr(model_id, "id"):
+                    id_list.append(str(getattr(model_id, "id")))
+                else:
+                    id_list.append(str(model_id))
+
+            logger.debug("Checking existence for IDs: %s", id_list)
+
+            # Create query to check existence
             domain_tuple = cast(
                 Tuple[str, Operator, ValueType],
-                ("id", "in", list(self._ids)),
+                ("id", "in", id_list),
             )
             query = await self._where_calc([domain_tuple])
+            logger.debug("Generated query: %s", query)
+
+            # Count matching records
             count = await query.count()
+            logger.debug("Found %d records matching IDs", count)
+
             if count != len(self._ids):
+                logger.error(
+                    "Record count mismatch - Expected: %d, Found: %d",
+                    len(self._ids),
+                    count,
+                )
                 raise ValueError("Some records do not exist")
 
             # Validate field values
             for name, value in vals.items():
+                logger.debug("Validating field '%s' with value: %s", name, value)
+
                 if name not in self.__fields__:
+                    logger.error("Invalid field name: %s", name)
                     raise FieldValidationError(
                         message=f"Field '{name}' does not exist",
                         field_name=name,
                     )
+
                 field = self.__fields__[name]
                 if field.readonly:
+                    logger.error("Attempt to modify readonly field: %s", name)
                     raise FieldValidationError(
                         message=f"Field '{name}' is readonly",
                         field_name=name,
                     )
+
                 try:
                     await field.validate(value)
+                    logger.debug("Field '%s' validation passed", name)
                 except ValueError as e:
+                    logger.error("Field '%s' validation failed: %s", name, str(e))
                     raise FieldValidationError(
                         message=str(e),
                         field_name=name,
                     ) from e
 
             # Check unique constraints
+            logger.debug("Checking unique constraints")
             await self._check_unique_constraints(vals)
 
             # Apply custom validation rules
+            logger.debug("Applying custom validation rules")
             await self._validate_write_rules(vals)
 
         except Exception as e:
-            logger.error("Validation failed: %s", str(e))
+            logger.error("Write validation failed: %s", str(e), exc_info=True)
             raise
 
     async def _validate_unlink(self) -> None:
@@ -559,50 +601,48 @@ class BaseModel(metaclass=ModelMeta):
         self._ids = (record_id,)
 
     async def _write(self, vals: Dict[str, Any]) -> None:
-        """Update record in database.
+        """Write values to database.
 
         Args:
-            vals: Field values to update
-
-        Raises:
-            FieldValidationError: If validation fails
-            DatabaseError: If database operation fails
+            vals: Values to write
         """
-        # Validate values
-        await self._validate_write(vals)
-
-        # Convert values to database format
-        db_vals: Dict[str, Any] = {}
-        backend = self._env.adapter.backend_type
-
-        # Convert user-provided values
-        for name, value in vals.items():
-            field = self.__fields__[name]
-            if not field.readonly:  # Skip readonly fields
-                db_vals[name] = await field.to_db(value, backend)
-
-        # Add system fields
-        now = datetime.now(UTC)
-        db_vals["updated_at"] = now
-
-        # Update records
         try:
-            # Convert to model objects
-            models = [
-                self._browse(self._env, [id], self._prefetch_ids) for id in self._ids
-            ]
+            # Validate write operation
+            await self._validate_write(vals)
 
-            # Update each model
-            for model in models:
-                for field, value in db_vals.items():
-                    setattr(model, field, value)
+            # Convert values for backend
+            db_vals = await self._convert_to_db(vals)
 
-            # Bulk update
-            await self._env.adapter.update_many(cast(List[DatabaseModel], models))
+            # Create update operations
+            updates: List[Dict[str, Any]] = []
+
+            # Process each model ID
+            for model_id in self._ids:
+                logger.debug("Processing model with ID: %s", model_id)
+
+                # Convert ID to ObjectId if string
+                if isinstance(model_id, str):
+                    _id = ObjectId(model_id)
+                elif hasattr(model_id, "id"):
+                    _id = ObjectId(str(getattr(model_id, "id")))
+                else:
+                    _id = model_id
+
+                # Create update operation
+                update_op = {"filter": {"_id": _id}, "update": {"$set": db_vals}}
+                logger.debug("Created update operation: %s", update_op)
+
+                updates.append(update_op)
+
+            logger.debug("Attempting bulk update with %d operations", len(updates))
+            result = await self._env.adapter.bulk_write(self._name, updates)
+            logger.debug("Bulk update completed successfully: %s", result)
 
         except Exception as e:
+            logger.error("Failed to update records: %s", str(e), exc_info=True)
             raise DatabaseError(
-                message=f"Failed to update records: {e}", backend=backend
+                backend=self._env.adapter.backend_type,
+                message=f"Failed to update records: {str(e)}",
             ) from e
 
     async def _unlink(self) -> bool:
@@ -610,16 +650,37 @@ class BaseModel(metaclass=ModelMeta):
 
         Returns:
             bool: True if records were deleted successfully
-
-        Examples:
-            >>> user = await User.search([("email", "=", "john@example.com")])
-            >>> success = await user.unlink()
-            >>> print(success)  # True
         """
-        await self._unlink()
-        self._ids = ()
-        self._prefetch_ids = ()
-        return True
+        if not self._ids:
+            return False
+
+        try:
+            # Convert IDs to ObjectId if needed
+            delete_ids = []
+            for model_id in self._ids:
+                if isinstance(model_id, str):
+                    delete_ids.append(ObjectId(model_id))
+                elif hasattr(model_id, "id"):
+                    delete_ids.append(ObjectId(str(getattr(model_id, "id"))))
+                else:
+                    delete_ids.append(model_id)
+
+            # Delete records
+            collection = await self._env.adapter.get_collection(self._name)
+            result = await collection.delete_many({"_id": {"$in": delete_ids}})
+
+            # Clear recordset
+            self._ids = ()
+            self._prefetch_ids = ()
+
+            return result.deleted_count > 0
+
+        except Exception as e:
+            logger.error("Failed to delete records: %s", str(e), exc_info=True)
+            raise DatabaseError(
+                message=f"Failed to delete records: {e}",
+                backend=self._env.adapter.backend,
+            ) from e
 
     async def write(self, values: Dict[str, Any]) -> Self:
         """Update records in recordset.
@@ -1003,16 +1064,24 @@ class BaseModel(metaclass=ModelMeta):
 
         return record
 
-    def to_dict(self) -> Dict[str, Any]:
+    async def to_dict(self) -> Dict[str, Any]:
         """Convert model to dictionary.
+
+        This method converts all fields (both readonly and non-readonly) to their database format.
 
         Returns:
             Dictionary representation of model
+
+        Examples:
+            >>> user = User(name="John", age=30)
+            >>> data = await user.to_dict()
+            >>> print(data)  # {'name': 'John', 'age': 30, 'created_at': datetime(...)}
         """
         result: Dict[str, Any] = {}
+        backend = self._env.adapter.backend_type
         for name, field in self.__fields__.items():
-            if not field.readonly:
-                result[name] = getattr(self, name)
+            value = getattr(self, name)
+            result[name] = await field.to_db(value, backend)
         return result
 
     def from_dict(self, data: Dict[str, Any]) -> None:
@@ -1037,20 +1106,19 @@ class BaseModel(metaclass=ModelMeta):
 
     @classmethod
     async def _get_env(cls) -> Environment:
-        """Get environment from container.
+        """Get environment instance from container.
 
         Returns:
-            Environment: Environment instance
+            Environment: Environment instance from container
 
         Raises:
-            RuntimeError: If environment not initialized
+            RuntimeError: If environment is not found in container
         """
-        from earnorm.di import container
-
-        env = await container.get("environment")
-        if not env:
-            raise RuntimeError("Environment not initialized")
-        return cast(Environment, env)
+        container = Container()
+        env = await container.get_env()
+        if env is None:
+            raise RuntimeError("Environment not found in container")
+        return env
 
     @classmethod
     def _get_instance_name(cls) -> str:
@@ -1068,3 +1136,38 @@ class BaseModel(metaclass=ModelMeta):
             name: Instance name
         """
         object.__setattr__(self, "_name", name)
+
+    async def _convert_to_db(self, vals: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert values to database format.
+
+        This method converts Python values to database-compatible format.
+        It handles:
+        1. Field type conversion
+        2. ID conversion
+        3. Special field handling
+        4. System fields
+
+        Args:
+            vals: Values to convert
+
+        Returns:
+            Dict with converted values
+
+        Examples:
+            >>> user = User()
+            >>> db_vals = await user._convert_to_db({"age": 25})
+            >>> print(db_vals)  # {"age": 25, "updated_at": datetime(...)}
+        """
+        db_vals: Dict[str, Any] = {}
+        backend = self._env.adapter.backend_type
+
+        # Convert user-provided values
+        for name, value in vals.items():
+            field = self.__fields__[name]
+            if not field.readonly:  # Skip readonly fields
+                db_vals[name] = await field.to_db(value, backend)
+
+        # Add system fields
+        db_vals["updated_at"] = datetime.now(UTC)
+
+        return db_vals

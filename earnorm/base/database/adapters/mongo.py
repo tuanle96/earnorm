@@ -298,7 +298,8 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         collection: AsyncIOMotorCollection[JsonDict] = await self.get_collection(
             self._get_collection_name(type(model))
         )
-        result: InsertOneResult = await collection.insert_one(model.to_dict())
+        values = await model.to_dict()
+        result: InsertOneResult = await collection.insert_one(values)
         model.id = result.inserted_id
         return model
 
@@ -317,7 +318,11 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         collection: AsyncIOMotorCollection[JsonDict] = await self.get_collection(
             self._get_collection_name(type(models[0]))
         )
-        result = await collection.insert_many([model.to_dict() for model in models])
+        values: List[JsonDict] = []
+        for model in models:
+            model_dict = await model.to_dict()
+            values.append(model_dict)
+        result = await collection.insert_many(values)
         for model, _id in zip(models, result.inserted_ids):
             model.id = _id
         return models
@@ -356,7 +361,8 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         collection: AsyncIOMotorCollection[JsonDict] = await self.get_collection(
             self._get_collection_name(type(model))
         )
-        await collection.update_one({"_id": model.id}, {"$set": model.to_dict()})
+        values = await model.to_dict()
+        await collection.update_one({"_id": model.id}, {"$set": values})
         return model
 
     async def update_many(self, models: List[ModelT]) -> List[ModelT]:
@@ -383,13 +389,15 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             self._get_collection_name(type(models[0]))
         )
         # Create operations with type hints
-        operations: Sequence[UpdateOne] = [
-            UpdateOne(
-                filter={"_id": model.id},
-                update={"$set": model.to_dict()},
+        operations: Sequence[UpdateOne] = []
+        for model in models:
+            values = await model.to_dict()
+            operations.append(
+                UpdateOne(
+                    filter={"_id": model.id},
+                    update={"$set": values},
+                )
             )
-            for model in models
-        ]
         # Execute bulk write with type ignore
         await collection.bulk_write(operations)  # type: ignore
         return models
@@ -518,3 +526,41 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         """
         collection = await self.get_collection(self._get_collection_name(model_type))
         return MongoAggregate[ModelT](collection, model_type)
+
+    async def bulk_write(
+        self, collection_name: str, operations: List[Dict[str, Any]]
+    ) -> UpdateResult:
+        """Execute bulk write operations.
+
+        Args:
+            collection_name: Name of the collection
+            operations: List of update operations in format:
+                [{"filter": {...}, "update": {...}}]
+
+        Returns:
+            UpdateResult with matched and modified counts
+
+        Raises:
+            RuntimeError: If not connected to MongoDB
+        """
+        if not collection_name:
+            raise ValueError("Collection name cannot be empty")
+        if not operations:
+            raise ValueError("Operations list cannot be empty")
+
+        collection = await self.get_collection(collection_name)
+
+        # Convert operations to UpdateOne objects
+        bulk_ops = [UpdateOne(op["filter"], op["update"]) for op in operations]
+
+        # Execute bulk write
+        result = await collection.bulk_write(bulk_ops)
+
+        return UpdateResult(
+            raw_result={
+                "n": result.matched_count,
+                "nModified": result.modified_count,
+                "ok": 1,
+            },
+            acknowledged=True,
+        )
