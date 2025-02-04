@@ -632,6 +632,14 @@ class BaseModel(metaclass=ModelMeta):
             result = await self._env.adapter.bulk_write(self._name, updates)
             logger.debug("Bulk update completed successfully: %s", result)
 
+            # Update cache with new values
+            cache_manager = await self._env.cache_manager
+            for field_name, value in vals.items():
+                for record_id in self._ids:
+                    await cache_manager.set(
+                        f"{self._name}:{field_name}:{record_id}", value
+                    )
+
         except Exception as e:
             logger.error("Failed to update records: %s", str(e), exc_info=True)
             raise DatabaseError(
