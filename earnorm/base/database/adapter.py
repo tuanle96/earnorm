@@ -302,3 +302,8 @@ class DatabaseAdapter(Generic[ModelT], ABC):
             Result of bulk write operation
         """
         pass
+
+    @abstractmethod
+    async def convert_id(self, document: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert database-specific ID to ORM format"""
+        pass

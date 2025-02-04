@@ -74,7 +74,7 @@ Examples:
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timezone
 from typing import (
     Any,
     AsyncContextManager,
@@ -93,8 +93,6 @@ from typing import (
     Union,
     cast,
 )
-
-from bson import ObjectId
 
 from earnorm.base.database.query.interfaces.domain import DomainExpression
 from earnorm.base.database.query.interfaces.domain import DomainOperator as Operator
@@ -126,6 +124,14 @@ class ContainerProtocol(Protocol):
     async def get_environment(self) -> Optional[Environment]:
         """Get environment from container."""
         ...
+
+
+class LoggerProtocol(Protocol):
+    """Protocol for logger interface."""
+
+    def warning(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
+    def error(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
+    def debug(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
 
 
 class BaseModel(metaclass=ModelMeta):
@@ -165,6 +171,7 @@ class BaseModel(metaclass=ModelMeta):
     _skip_default_fields: ClassVar[bool] = False
     _abstract: ClassVar[bool] = False
     _env: Environment  # Environment instance
+    logger: LoggerProtocol = logging.getLogger(__name__)
 
     # Model fields (will be set by metaclass)
     __fields__ = FieldsDescriptor()
@@ -172,6 +179,7 @@ class BaseModel(metaclass=ModelMeta):
 
     _ids: Tuple[str, ...]  # Record IDs with proper type
     _changed: Set[str]  # Changed fields with proper type
+    _data: Dict[str, Any]  # Record data with proper type
 
     def __init__(self, env: Optional[Environment] = None) -> None:
         """Initialize model with injected env."""
@@ -247,8 +255,6 @@ class BaseModel(metaclass=ModelMeta):
                 str_id = str(id_value).strip()
                 if not str_id:
                     continue
-                # Validate ObjectId format
-                _ = ObjectId(str_id)
                 validated_ids.append(str_id)
             except Exception as e:
                 logger.warning(f"Invalid ID skipped: {id_value} - {str(e)}")
@@ -266,7 +272,6 @@ class BaseModel(metaclass=ModelMeta):
                     str_pid = str(pid).strip()
                     if not str_pid:
                         continue
-                    _ = ObjectId(str_pid)
                     validated_prefetch.append(str_pid)
                 except Exception as e:
                     logger.warning(f"Invalid prefetch ID skipped: {pid} - {str(e)}")
@@ -571,39 +576,54 @@ class BaseModel(metaclass=ModelMeta):
         """
         pass
 
+    def _serialize_value(self, value: Any) -> Any:
+        """Serialize value for caching.
+
+        Args:
+            value: Value to serialize
+
+        Returns:
+            Serialized value that can be stored in cache
+
+        Examples:
+            >>> _serialize_value(datetime(2024, 1, 1))
+            '2024-01-01T00:00:00+00:00'
+            >>> _serialize_value({"date": datetime(2024, 1, 1)})
+            {'date': '2024-01-01T00:00:00+00:00'}
+        """
+        if isinstance(value, datetime):
+            # Convert to UTC and format as ISO string
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            return value.isoformat()
+        elif isinstance(value, dict):
+            return {
+                str(key): self._serialize_value(val)
+                for key, val in cast(Dict[Any, Any], value).items()
+            }
+        elif isinstance(value, (list, tuple)):
+            return [
+                self._serialize_value(item)
+                for item in cast(Union[List[Any], Tuple[Any, ...]], value)
+            ]
+        return value
+
     async def _create(self, vals: Dict[str, Any]) -> None:
         """Create record in database.
 
         Args:
-            vals: Field values to create
+            vals: Values to create record with
 
         Raises:
-            FieldValidationError: If validation fails
-            DatabaseError: If database operation fails
+            DatabaseError: If record creation fails
         """
-        # Validate values
-        await self._validate_create(vals)
-
-        # Convert values to database format
-        db_vals: Dict[str, Any] = {}
+        # Get database backend
         backend = self._env.adapter.backend_type
 
-        # Convert user-provided values
-        for name, value in vals.items():
-            field = self.__fields__[name]
-            if not field.readonly:  # Skip readonly fields
-                db_vals[name] = await field.to_db(value, backend)
+        # Convert values to database format
+        db_vals = await self._convert_to_db(vals)
 
-        # Add default values for missing required fields
-        for name, field in self.__fields__.items():
-            if name not in vals and field.required and not field.readonly:
-                if field.default is not None:
-                    default_value = (
-                        field.default() if callable(field.default) else field.default
-                    )
-                    db_vals[name] = await field.to_db(default_value, backend)
-
-        # Add system fields
+        # Add timestamps
         now = datetime.now(UTC)
         db_vals["created_at"] = now
         db_vals["updated_at"] = now
@@ -618,8 +638,16 @@ class BaseModel(metaclass=ModelMeta):
             if not str_id:
                 raise ValueError("Failed to get record ID after creation")
             self._ids = (str_id,)
-            # Set id field in _data
-            self._data["id"] = str_id
+
+            # Store all record data including original values and converted values
+            self._data = {
+                **vals,  # Original values from user
+                **db_vals,  # Converted values including any transformations
+                "id": str_id,
+                "created_at": now,
+                "updated_at": now,
+            }
+
         except Exception as e:
             raise DatabaseError(
                 message=f"Failed to create record: {e}", backend=backend
@@ -628,10 +656,12 @@ class BaseModel(metaclass=ModelMeta):
         # Update cache for new record
         try:
             cache_manager = await self._env.cache_manager
-            for field_name, value in db_vals.items():
+            for field_name, value in self._data.items():
+                # Serialize value before caching
+                serialized_value = self._serialize_value(value)
                 await cache_manager.set(
                     f"{self._name}:{field_name}:{str_id}",
-                    value,
+                    serialized_value,
                     ttl=3600,  # Cache for 1 hour
                 )
         except Exception as e:
@@ -642,7 +672,7 @@ class BaseModel(metaclass=ModelMeta):
         """Write values to database.
 
         This method updates records in the database with the given values.
-        It ensures all IDs are valid strings before converting to ObjectId.
+        It ensures all IDs are valid strings.
 
         Args:
             vals: Field values to update
@@ -671,16 +701,13 @@ class BaseModel(metaclass=ModelMeta):
                     str_id = str(model_id).strip()
                     if not str_id:
                         raise ValueError("Empty ID after conversion")
-                    _id = ObjectId(str_id)
                 except Exception as e:
-                    raise ValueError(
-                        f"Invalid ID format: {model_id}. Must be a valid ObjectId"
-                    ) from e
+                    raise ValueError(f"Invalid ID format: {model_id}") from e
 
                 logger.debug("Processing model with ID: %s", model_id)
 
                 # Create update operation
-                update_op = {"filter": {"_id": _id}, "update": {"$set": db_vals}}
+                update_op = {"filter": {"id": str_id}, "update": {"$set": db_vals}}
                 logger.debug("Created update operation: %s", update_op)
 
                 updates.append(update_op)
@@ -1306,3 +1333,43 @@ class BaseModel(metaclass=ModelMeta):
             >>> print(user.id)  # "123"
         """
         self._data["id"] = str(value) if value else ""
+
+    async def _validate_id(self, id_value: Any) -> Optional[str]:
+        """Validate and convert ID value.
+
+        Args:
+            id_value: Value to validate as ID
+
+        Returns:
+            Optional[str]: Validated ID as string or None if invalid
+
+        Examples:
+            >>> await model._validate_id("123")
+            "123"
+            >>> await model._validate_id(model)  # model instance
+            "123"
+            >>> await model._validate_id(None)
+            None
+        """
+        try:
+            # Handle model instance
+            if isinstance(id_value, self.__class__):
+                id_attr = getattr(id_value, "id", None)
+                return str(id_attr) if id_attr else None
+
+            # Handle string
+            if isinstance(id_value, str):
+                return id_value
+
+            # Handle objects with id attribute
+            if hasattr(id_value, "id"):
+                id_attr = getattr(id_value, "id", None)
+                return str(id_attr) if id_attr else None
+
+            return None
+        except Exception as e:
+            self.logger.warning(
+                f"Invalid ID validation: {e} for value type {type(id_value)}",
+                exc_info=True,
+            )
+            return None

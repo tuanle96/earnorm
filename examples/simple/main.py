@@ -90,60 +90,69 @@ async def main():
     """
     try:
         # Initialize EarnORM
+        logger.info("Initializing ORM...")
         await earnorm.init(
             config_path="examples/simple/config.yaml",
             cleanup_handlers=True,
             debug=True,
         )
+        logger.info("ORM initialized successfully")
 
         # CREATE - Create a new user
+        logger.info("Creating new user...")
         new_user = await User.create(
             {"name": "John Doe", "email": "john@example.com", "age": 25}
         )
-        logger.info(f"Created user: {new_user.name} with ID: {new_user.id}")
+        logger.info(f"Created user: {await new_user.to_dict()} with ID: {new_user.id}")
 
         # READ - Read/Search users
         # Get all adult users
+        logger.info("Finding adult users...")
         adult_users = await User.search(
             domain=[("age", ">", 18)],
             limit=10,
         )
-        logger.info(f"Found {len(adult_users)} adult users")
+        adult_users_data = [await u.to_dict() for u in adult_users]
+        logger.info(f"Found {len(adult_users)} adult users: {adult_users_data}")
 
         # Search by criteria
+        logger.info("Finding one adult user...")
         users = await User.search(domain=[("email", "=", "john@example.com")], limit=1)
         if users:
             found_user = users[0]
-            logger.info(f"Found user by email: {found_user.name}")
+            found_user_data = await found_user.to_dict()
+            logger.info(f"Found user by email: {found_user_data}")
 
             # UPDATE - Update user information
             await found_user.write({"age": 26})
-            logger.info(f"Updated user {found_user.name}'s age to {found_user.age}")
+            logger.info(
+                f"Updated user {found_user_data['name']}'s age to {found_user_data['age']}"
+            )
 
             # DELETE - Delete user
             success = await found_user.unlink()
             if success:
-                logger.info(f"Deleted user: {found_user.name}")
+                logger.info(f"Deleted user: {found_user_data['name']}")
 
         # Bulk operations example
         # Bulk update users under 20
-        young_users = await User.search(domain=[("age", "<", 20)], limit=10)
-        if young_users:
-            await young_users.write({"age": 20})
-            logger.info(f"Bulk updated {len(young_users)} users' age to 20")
+        logger.info("Finding teenage users...")
+        teenage_users = await User.search(domain=[("age", "<", 20)], limit=10)
+        teenage_users_data = [await u.to_dict() for u in teenage_users]
+        logger.info(f"Found {len(teenage_users)} teenage users: {teenage_users_data}")
 
         # Bulk delete users under 18
-        underage_users = await User.search(domain=[("age", "<", 18)], limit=10)
-        if underage_users:
-            success = await underage_users.unlink()
-            if success:
-                logger.info(f"Bulk deleted {len(underage_users)} users")
+        logger.info("Finding child users...")
+        child_users = await User.search(domain=[("age", "<", 18)], limit=10)
+        child_users_data = [await u.to_dict() for u in child_users]
+        logger.info(f"Found {len(child_users)} child users: {child_users_data}")
 
     except Exception as e:
-        logger.error(f"Error during CRUD operations: {str(e)}")
+        logger.error(f"Error occurred: {str(e)}", exc_info=True)
         raise
     finally:
         # Cleanup and close connections
+        logger.info("Cleaning up environment...")
         try:
             from earnorm.base.env import Environment
 

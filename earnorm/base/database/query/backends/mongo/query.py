@@ -20,9 +20,24 @@ Examples:
     >>> query.window().over(partition_by=[User.age]).row_number()
 """
 
-from typing import Any, List, Optional, Type, TypeVar, Union, cast
+import asyncio
+import logging
+from typing import (
+    Any,
+    Callable,
+    Coroutine,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    Type,
+    TypeVar,
+    Union,
+    cast,
+)
 
 from bson import ObjectId
+from bson.errors import InvalidId
 from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorCommandCursor
 
 from earnorm.base.database.query.core.query import BaseQuery
@@ -47,6 +62,14 @@ ModelT = TypeVar("ModelT", bound=DatabaseModel)
 JoinT = TypeVar("JoinT", bound=DatabaseModel)
 
 
+class LoggerProtocol(Protocol):
+    """Protocol for logger interface."""
+
+    def warning(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
+    def error(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
+    def debug(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
+
+
 class MongoQuery(BaseQuery[ModelT]):
     """MongoDB query implementation.
 
@@ -56,6 +79,8 @@ class MongoQuery(BaseQuery[ModelT]):
     Args:
         ModelT: Type of model being queried
     """
+
+    logger: LoggerProtocol = logging.getLogger(__name__)
 
     # pylint: disable=dangerous-default-value
     def __init__(
@@ -108,6 +133,46 @@ class MongoQuery(BaseQuery[ModelT]):
         self._document = document
         self._update = update
         self._options = options
+        self._postprocessors: List[
+            Callable[
+                [Dict[str, Any]],
+                Union[Dict[str, Any], Coroutine[Any, Any, Dict[str, Any]]],
+            ]
+        ] = []
+        self._processed_docs: List[Dict[str, Any]] = []
+
+    def add_postprocessor(
+        self,
+        processor: Callable[
+            [Dict[str, Any]], Union[Dict[str, Any], Coroutine[Any, Any, Dict[str, Any]]]
+        ],
+    ) -> None:
+        """Add document post-processor function."""
+        self._postprocessors.append(processor)
+
+    async def _process_document(self, doc: Dict[str, Any]) -> Dict[str, Any]:
+        """Process single document with post-processors.
+
+        Args:
+            doc: Document to process
+
+        Returns:
+            Processed document
+        """
+        try:
+            for processor in self._postprocessors:
+                if asyncio.iscoroutinefunction(processor):
+                    doc = await processor(doc)
+                else:
+                    result = processor(doc)
+                    doc = await result if asyncio.iscoroutine(result) else result
+            return doc
+        except Exception as e:
+            self.logger.warning(
+                f"Document processing failed: {str(e)} for document: {doc}",
+                exc_info=True,
+            )
+            return doc
 
     async def execute(self) -> List[ModelT]:
         """Execute query and return results.
@@ -119,10 +184,13 @@ class MongoQuery(BaseQuery[ModelT]):
 
         # Add filter stage
         if self._filter:
-            # Convert id to _id in filter if exists
             filter_dict = self._filter.copy()
             if "id" in filter_dict:
-                filter_dict["_id"] = filter_dict.pop("id")
+                try:
+                    filter_dict["_id"] = ObjectId(filter_dict.pop("id"))
+                except InvalidId as e:
+                    self.logger.warning(f"Invalid ID in filter: {e}")
+                    filter_dict["_id"] = None
             pipeline.append({"$match": filter_dict})
 
         # Add sort stage
@@ -173,20 +241,48 @@ class MongoQuery(BaseQuery[ModelT]):
         )
         docs = [doc async for doc in cursor]
 
-        # Create model instances with data
-        results: List[ModelT] = []
+        # Process documents
+        self._processed_docs = []
         for doc in docs:
-            model = self._model_type()
-            # Set model id
-            if "id" in doc:
-                model.id = doc["id"]
-                # Remove id from data since it's already set as attribute
-                doc.pop("id")
-            # Set model data
-            object.__setattr__(model, "_data", doc)
-            # Set model ids for recordset
-            object.__setattr__(model, "_ids", (model.id,))
-            results.append(model)
+            try:
+                # Convert _id to id with type checking
+                if "_id" in doc:
+                    if isinstance(doc["_id"], (ObjectId, str)):
+                        doc["id"] = str(doc["_id"])
+                    elif doc["_id"] is None:
+                        doc["id"] = None
+                    else:
+                        self.logger.error(
+                            "Invalid _id type: %s for document: %s",
+                            type(doc["_id"]),
+                            doc,
+                        )
+                        continue
+                    del doc["_id"]
+
+                # Apply post-processors
+                doc = await self._process_document(doc)
+                self._processed_docs.append(doc)
+            except Exception as e:
+                self.logger.warning(
+                    f"Document processing failed: {str(e)} for document: {doc}",
+                    exc_info=True,
+                )
+
+        # Create model instances
+        results: List[ModelT] = []
+        for doc in self._processed_docs:
+            try:
+                model = self._model_type()
+                if "id" in doc:
+                    model.id = doc["id"]
+                object.__setattr__(model, "_data", doc)
+                object.__setattr__(model, "_ids", (model.id,))
+                results.append(model)
+            except Exception as e:
+                self.logger.warning(f"Error creating model instance: {e}")
+                continue
+
         return results
 
     def filter(self, domain: Union[List[Any], JsonDict]) -> "MongoQuery[ModelT]":
@@ -439,3 +535,13 @@ class MongoQuery(BaseQuery[ModelT]):
         """
         result = await self._collection.delete_many(self._filter)
         return {"deleted_count": result.deleted_count}
+
+    async def _process_id(self, doc: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert _id to id and validate format."""
+        if "_id" in doc:
+            try:
+                doc["id"] = str(ObjectId(doc["_id"]))
+            except InvalidId:
+                self.logger.warning(f"Invalid ObjectId: {doc['_id']}")
+                doc["id"] = None
+        return doc
