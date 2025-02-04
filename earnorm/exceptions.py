@@ -620,3 +620,19 @@ class InitializationError(EarnORMError):
             message: Error message describing the initialization issue
         """
         super().__init__(f"Initialization error: {message}")
+
+
+class SerializationError(EarnORMError):
+    """Error raised when serialization fails."""
+
+    def __init__(self, message: str, *, backend: str, original_error: Optional[Exception] = None) -> None:
+        """Initialize serialization error.
+
+        Args:
+            message: Error message describing the serialization issue
+            backend: Serialization backend name
+            original_error: Original exception that caused this error
+        """
+        self.backend = backend
+        self.original_error = original_error
+        super().__init__(f"{backend}: {message}")

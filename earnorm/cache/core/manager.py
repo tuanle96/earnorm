@@ -242,6 +242,22 @@ class CacheManager:
         """
         await self.backend.delete_many(keys)
 
+    async def queue_write(
+        self, key: str, value: Any, ttl: Optional[int] = None
+    ) -> None:
+        """Queue write operation for batch processing.
+
+        Args:
+            key: Cache key
+            value: Value to cache
+            ttl: Optional TTL in seconds
+
+        Raises:
+            CacheError: If failed to queue write operation
+        """
+        # For now, just write immediately since we don't have batch processing yet
+        await self.set(key, value, ttl)
+
     async def close(self) -> None:
         """Close cache backend."""
         await self.backend.close()

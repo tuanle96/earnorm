@@ -52,6 +52,7 @@ from earnorm.base.database.query.interfaces.operations.aggregate import (
 )
 from earnorm.base.database.query.interfaces.operations.join import JoinProtocol
 from earnorm.base.database.query.interfaces.operations.window import WindowProtocol
+from earnorm.base.database.query.interfaces.query import QueryProtocol
 from earnorm.types import DatabaseModel, JsonDict
 
 from .operations.aggregate import MongoAggregate
@@ -545,3 +546,13 @@ class MongoQuery(BaseQuery[ModelT]):
                 self.logger.warning(f"Invalid ObjectId: {doc['_id']}")
                 doc["id"] = None
         return doc
+
+    def hint(self, index_hint: Dict[str, Any]) -> "QueryProtocol[ModelT]":
+        """Add index hint for query optimization."""
+        self._hint = index_hint
+        return self
+
+    def prefetch(self, fields: List[str]) -> "QueryProtocol[ModelT]":
+        """Add fields to prefetch."""
+        self._prefetch_fields = fields
+        return self

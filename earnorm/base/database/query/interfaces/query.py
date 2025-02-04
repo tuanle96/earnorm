@@ -13,7 +13,7 @@ Examples:
 """
 
 from abc import abstractmethod
-from typing import Any, List, Optional, Protocol, TypeVar, Union
+from typing import Any, Dict, List, Optional, Protocol, TypeVar, Union
 
 from earnorm.types import DatabaseModel, JsonDict
 
@@ -65,6 +65,37 @@ class QueryProtocol(Protocol[ModelT]):
 
         Args:
             offset: Number of results to skip
+
+        Returns:
+            Self for chaining
+        """
+        ...
+
+    @abstractmethod
+    def hint(self, index_hint: Dict[str, Any]) -> "QueryProtocol[ModelT]":
+        """Add index hint for query optimization.
+
+        Args:
+            index_hint: Index hint specification
+                Example: {"field": 1} to use ascending index
+                        {"field": -1} to use descending index
+                        {"field1": 1, "field2": -1} for compound index
+
+        Returns:
+            Self for chaining
+        """
+        ...
+
+    @abstractmethod
+    def prefetch(self, fields: List[str]) -> "QueryProtocol[ModelT]":
+        """Add fields to prefetch.
+
+        This method specifies which related fields should be prefetched
+        when executing the query to reduce the number of database queries.
+
+        Args:
+            fields: List of field names to prefetch
+                Example: ["company_id", "role_ids"]
 
         Returns:
             Self for chaining

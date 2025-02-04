@@ -106,6 +106,7 @@ from earnorm.base.database.query.interfaces.operations.join import (
 from earnorm.base.database.query.interfaces.query import QueryProtocol as AsyncQuery
 from earnorm.base.database.transaction.base import Transaction
 from earnorm.base.env import Environment
+from earnorm.base.model.data_store import ModelDataStore
 from earnorm.base.model.descriptors import FieldsDescriptor
 from earnorm.base.model.meta import ModelMeta
 from earnorm.di import Container
@@ -121,13 +122,17 @@ from earnorm.types.models import ModelProtocol
 
 logger = logging.getLogger(__name__)
 
-ModelT = TypeVar("ModelT", bound=ModelProtocol)
-T = TypeVar("T", bound="BaseModel")
+# Define type variables
+T = TypeVar("T")
 V = TypeVar("V")
 
 
 class ContainerProtocol(Protocol):
     """Protocol for Container class."""
+
+    async def get(self, key: str) -> Any:
+        """Get value from container by key."""
+        ...
 
     async def get_environment(self) -> Optional[Environment]:
         """Get environment from container."""
@@ -163,8 +168,7 @@ class BaseModel(metaclass=ModelMeta):
     __slots__ = (
         "_env",  # Environment instance
         "_name",  # Model name
-        "_data",  # Record data
-        "_changed",  # Changed fields
+        "_data_store",  # Data store instance
         "_deleted",  # Deletion flag
         "_ids",  # Record IDs
         "_prefetch_ids",  # Prefetch IDs
@@ -185,27 +189,26 @@ class BaseModel(metaclass=ModelMeta):
     __fields__ = FieldsDescriptor()
     # id field is defined in ModelMeta.DEFAULT_FIELDS as StringField
 
-    _ids: Tuple[str, ...]  # Record IDs with proper type
-    _changed: Set[str]  # Changed fields with proper type
-    _data: Dict[str, Any]  # Record data with proper type
+    # Instance variables with type hints
+    _ids: Tuple[str, ...]
+    _data_store: "ModelDataStore[Self]"  # Use Self type
+    _deleted: bool
+    _prefetch_ids: Tuple[str, ...]
 
     def __init__(self, env: Optional[Environment] = None) -> None:
-        """Initialize model with injected env."""
-        # Initialize all slots with default values
+        """Initialize base model."""
         env_instance = env if env is not None else self._get_default_env()
         if not env_instance:
             raise RuntimeError(
                 "Environment not initialized. Make sure earnorm.init() is called first"
             )
         object.__setattr__(self, "_env", env_instance)
-        self._set_instance_name(self._get_instance_name())
-        object.__setattr__(self, "_data", {})
-        object.__setattr__(self, "_changed", set())
+        object.__setattr__(self, "_data_store", ModelDataStore(self))
         object.__setattr__(self, "_deleted", False)
         object.__setattr__(self, "_ids", ())
         object.__setattr__(self, "_prefetch_ids", ())
-        # Initialize id field in _data
-        self._data["id"] = ""
+        # Initialize id field
+        self._data_store.set_field("id", "")
 
         if not self._name:
             raise ValueError("Model must define _name attribute")
@@ -218,10 +221,11 @@ class BaseModel(metaclass=ModelMeta):
             Optional[Environment]: Environment instance or None
         """
         try:
-            from earnorm.di import container
-
-            env = container.get("environment")
-            return env if isinstance(env, Environment) else None
+            # Get singleton instance
+            env = Environment.get_instance()
+            if not env._initialized:  # type: ignore
+                return None
+            return env
         except Exception:
             return None
 
@@ -230,6 +234,36 @@ class BaseModel(metaclass=ModelMeta):
         """Get environment."""
         return self._env
 
+    @property
+    def _data(self) -> Dict[str, Any]:
+        """Get record data."""
+        return self._data_store.get_data()
+
+    @_data.setter
+    def _data(self, value: Dict[str, Any]) -> None:
+        """Set record data."""
+        self._data_store.set_data(value)
+
+    @property
+    def _changed(self) -> Set[str]:
+        """Get changed fields."""
+        return self._data_store.get_changed()
+
+    @property
+    def _has_data(self) -> bool:
+        """Check if record has data loaded."""
+        return self._data_store.has_data()
+
+    @property
+    def _record_data(self) -> Dict[str, Any]:
+        """Get record data."""
+        return self._data_store.get_data()
+
+    @_record_data.setter
+    def _record_data(self, value: Dict[str, Any]) -> None:
+        """Set record data."""
+        self._data_store.set_data(value)
+
     @classmethod
     def _browse(
         cls,
@@ -237,21 +271,14 @@ class BaseModel(metaclass=ModelMeta):
         ids: Sequence[str],
         prefetch_ids: Optional[Sequence[str]] = None,
     ) -> Self:
-        """Create recordset instance.
-
-        Args:
-            env: Environment instance
-            ids: Record IDs
-            prefetch_ids: IDs to prefetch
-
-        Returns:
-            Self: New recordset instance
-
-        Raises:
-            ValueError: If any ID is invalid
-        """
+        """Create recordset instance."""
         records = object.__new__(cls)
-        records._env = env
+
+        # Initialize required attributes
+        object.__setattr__(records, "_env", env)
+        object.__setattr__(records, "_data_store", ModelDataStore(records))
+        object.__setattr__(records, "_deleted", False)
+        object.__setattr__(records, "_name", cls._get_instance_name())
 
         # Validate and convert IDs
         validated_ids: List[str] = []
@@ -268,7 +295,7 @@ class BaseModel(metaclass=ModelMeta):
                 logger.warning(f"Invalid ID skipped: {id_value} - {str(e)}")
                 continue
 
-        records._ids = tuple(validated_ids)
+        object.__setattr__(records, "_ids", tuple(validated_ids))
 
         # Handle prefetch IDs
         if prefetch_ids:
@@ -284,17 +311,12 @@ class BaseModel(metaclass=ModelMeta):
                 except Exception as e:
                     logger.warning(f"Invalid prefetch ID skipped: {pid} - {str(e)}")
                     continue
-            records._prefetch_ids = tuple(validated_prefetch)
+            object.__setattr__(records, "_prefetch_ids", tuple(validated_prefetch))
         else:
-            records._prefetch_ids = records._ids
-
-        records._data = {}
-        records._changed = set()
-        records._deleted = False
-        records._set_instance_name(cls._get_instance_name())
+            object.__setattr__(records, "_prefetch_ids", records._ids)
 
         # Set id field in _data
-        records._data["id"] = records._ids[0] if records._ids else ""
+        records._data_store.set_field("id", records._ids[0] if records._ids else "")
         return records
 
     @classmethod
@@ -362,6 +384,8 @@ class BaseModel(metaclass=ModelMeta):
         offset: int = 0,
         limit: Optional[int] = None,
         order: Optional[str] = None,
+        use_cache: bool = True,
+        prefetch_fields: Optional[List[str]] = None,
     ) -> Self:
         """Search records matching domain.
 
@@ -370,29 +394,119 @@ class BaseModel(metaclass=ModelMeta):
             offset: Number of records to skip
             limit: Maximum number of records to return
             order: Sort order
+            use_cache: Whether to use cache
+            prefetch_fields: Fields to prefetch
 
         Returns:
-            Self: A recordset containing matching records
+            Recordset containing matching records
 
         Examples:
             >>> users = await User.search([("age", ">", 18)])
-            >>> for user in users:
-            ...     print(user.name)
+            >>> print(len(users))  # Number of adult users
         """
-        query = await cls._where_calc(domain or [])
-        await cls._apply_ir_rules(query, "read")
+        try:
+            # Try get from cache first
+            if use_cache:
+                logger.debug("Trying to get results from cache")
+                cache_manager = await cls._env.cache_manager
+                cache_key = f"query:{cls._name}:{hash(str(domain))}"
+                if limit:
+                    cache_key += f":limit={limit}"
+                if offset:
+                    cache_key += f":offset={offset}"
+                if order:
+                    cache_key += f":order={order}"
 
-        # Build query
-        if order:
-            query = query.order_by(order)
-        if limit:
-            query = query.limit(limit)
-        if offset:
-            query = query.offset(offset)
+                cached_result = await cache_manager.get(cache_key)
+                if cached_result:
+                    logger.debug("Found cached results")
+                    return cls._browse(
+                        await cls._get_env(),
+                        [
+                            str(doc.get("id"))  # type: ignore
+                            for doc in cached_result
+                            if isinstance(doc, dict) and "id" in doc
+                        ],
+                        prefetch_fields,
+                    )
 
-        # Execute query and return recordset
-        ids = await query.execute()
-        return cls._browse(cls._env, cast(Sequence[str], ids), cast(Sequence[str], ids))
+            # Calculate where clause
+            logger.debug("Building query from domain: %s", domain)
+            query = await cls._where_calc(domain or [])
+
+            # Add options
+            if offset:
+                query.offset(offset)
+            if limit is not None:
+                query.limit(limit)
+            if order:
+                query.order_by(order)
+
+            # Execute query with timeout
+            logger.debug("Executing query")
+            docs = await asyncio.wait_for(
+                query.execute(), timeout=30.0  # 30 seconds timeout
+            )
+            logger.debug("Search found %d records", len(docs))
+            logger.debug("Raw docs: %s", docs)
+
+            # Cache query result
+            if use_cache:
+                logger.debug("Caching query results")
+                # Convert docs to serializable format before caching
+                serializable_docs = []
+                for doc in docs:
+                    if isinstance(doc, dict):
+                        # If doc is already a dict, use it
+                        serializable_docs.append(
+                            {k: v for k, v in doc.items() if not isinstance(v, type)}
+                        )
+                    else:
+                        # If doc is a model instance, convert to dict
+                        serializable_docs.append(
+                            {
+                                k: v
+                                for k, v in doc._data.items()
+                                if not isinstance(v, type)
+                            }
+                        )
+                logger.debug("Serializable docs: %s", serializable_docs)
+                await cache_manager.set(
+                    cache_key, serializable_docs, ttl=300
+                )  # Cache for 5 minutes
+
+            # Create recordset
+            logger.debug("Creating recordset from docs")
+            recordset = cls._browse(
+                await cls._get_env(),
+                [
+                    str(doc.id if hasattr(doc, "id") else doc.get("id"))  # type: ignore
+                    for doc in docs
+                    if (isinstance(doc, dict) and "id" in doc)
+                    or (hasattr(doc, "id") and doc.id)
+                ],
+                prefetch_fields,
+            )
+            logger.debug("Created recordset with %d records", len(recordset))
+
+            # Batch load data
+            logger.debug("Batch loading data for search results")
+            await recordset._batch_load_data([recordset])  # Convert to list
+
+            # Prefetch fields
+            if prefetch_fields:
+                logger.debug("Prefetching fields: %s", prefetch_fields)
+                await recordset.prefetch(*prefetch_fields)
+
+            return recordset
+
+        except Exception as e:
+            logger.error("Search failed: %s", str(e), exc_info=True)
+            backend = cls._env.adapter.backend_type
+            raise DatabaseError(
+                message=f"Search failed: {str(e)}",
+                backend=backend,
+            ) from e
 
     async def _validate_create(self, vals: Dict[str, Any]) -> None:
         """Validate record creation.
@@ -913,9 +1027,8 @@ class BaseModel(metaclass=ModelMeta):
         """Create aggregate query.
 
         Returns:
-            Aggregate query builder
+            AggregateQuery: Aggregate query builder
         """
-        logger.debug("Creating aggregate query for model: %s", cls._name)
         query = await cls._env.adapter.get_aggregate_query(
             cast(Type[ModelProtocol], cls)
         )
@@ -1059,9 +1172,10 @@ class BaseModel(metaclass=ModelMeta):
         """Convert model to dictionary.
 
         This method converts all fields to their Python format, handling:
-        1. Loading data from database if needed
+        1. Loading data from database/cache if needed
         2. Converting database format to Python format
         3. Error handling for each field
+        4. Caching converted results
 
         Returns:
             Dictionary representation of model
@@ -1070,40 +1184,43 @@ class BaseModel(metaclass=ModelMeta):
             DatabaseError: If database operation fails
         """
         try:
-            # 1. Get database adapter
-            adapter = self._env.adapter
-            backend = adapter.backend_type
+            # Try get from cache first
+            cache_manager = await self._env.cache_manager
+            cache_key = f"{self._name}:dict:{self.id}"
+            cached_dict = await cache_manager.get(cache_key)
+            if isinstance(cached_dict, dict):
+                logger.debug(f"Got cached dict for {self._name}:{self.id}")
+                return cached_dict
 
-            # 2. Get raw data from database if needed
-            if not self._data and self.id:
-                raw_data = await adapter.find_by_id(self._name, self.id)
-                if raw_data:
-                    self._data = raw_data
+            # Ensure data is loaded
+            if not self._has_data and self.id:
+                logger.debug(f"Loading data for {self._name}:{self.id}")
+                await self._ensure_data_loaded()
 
-            # 3. Convert data
+            if not self._has_data:
+                logger.warning(f"No data found for {self._name}:{self.id}")
+                return {name: None for name in self.__fields__}
+
+            # Get database backend
+            backend = self._env.adapter.backend_type
+            logger.debug(
+                f"Converting fields for {self._name}:{self.id} using {backend} backend"
+            )
+
+            # Convert fields
             result: Dict[str, Any] = {}
             for name, field in self.__fields__.items():
+                raw_value = self._data.get(name)
                 try:
-                    # Try get from _data first
-                    raw_value = self._data.get(name)
-
-                    if raw_value is not None:
-                        # Convert from database format to Python format
-                        try:
-                            value = await field.from_db(raw_value, backend)
-                            result[name] = value
-                        except Exception as e:
-                            logger.warning(
-                                f"Failed to convert field {name} from database format: {e}"
-                            )
-                            result[name] = None
-                    else:
-                        # Field not in _data
-                        result[name] = None
-
+                    value = await self._convert_field_value(field, raw_value, backend)
+                    result[name] = value
                 except Exception as e:
-                    logger.error(f"Error processing field {name}: {e}")
+                    logger.error(f"Failed to convert field {name}: {e}")
                     result[name] = None
+
+            # Cache converted dict
+            logger.debug(f"Caching dict for {self._name}:{self.id}")
+            await cache_manager.set(cache_key, result)
 
             return result
 
@@ -1148,11 +1265,21 @@ class BaseModel(metaclass=ModelMeta):
         Raises:
             RuntimeError: If environment is not found in container
         """
-        container = cast(ContainerProtocol, Container())
-        env = await container.get_environment()
-        if not isinstance(env, Environment):
-            raise RuntimeError("Environment not found in container")
-        return env
+        try:
+            container = cast(ContainerProtocol, Container())
+            env = await container.get("environment")
+            if not isinstance(env, Environment):
+                # Try get default environment
+                env = cls._get_default_env()
+                if not env:
+                    raise RuntimeError("Environment not found in container")
+            return env
+        except Exception as e:
+            # Try get default environment
+            env = cls._get_default_env()
+            if not env:
+                raise RuntimeError(f"Failed to get environment: {str(e)}")
+            return env
 
     @classmethod
     def _get_instance_name(cls) -> str:
@@ -1224,40 +1351,85 @@ class BaseModel(metaclass=ModelMeta):
         key = f"{self._name}:{field_name}:{self.id}"
         return await cache_manager.get(key)
 
-    async def _write_to_cache(self, field_name: str, value: Any) -> None:
+    async def _write_to_cache(
+        self,
+        field_name: str,
+        value: Any,
+        ttl: Optional[int] = None,
+        strategy: str = "write-through",
+    ) -> None:
         """Write field value to cache.
 
         Args:
             field_name: Name of the field to write
             value: Value to cache
-
-        Examples:
-            >>> user = User.browse(1)
-            >>> await user._write_to_cache("name", "John")
+            ttl: Cache TTL in seconds
+            strategy: Cache strategy (write-through/write-behind)
         """
         cache_manager = await self._env.cache_manager
         key = f"{self._name}:{field_name}:{self.id}"
-        await cache_manager.set(key, value)
 
-    async def _invalidate_cache(self, field_names: Optional[List[str]] = None) -> None:
+        if strategy == "write-through":
+            # Write to cache immediately
+            await cache_manager.set(key, value, ttl=ttl or 3600)
+        else:
+            # Write-behind: Queue write for batch processing
+            await cache_manager.queue_write(key, value, ttl=ttl or 3600)
+
+    async def _invalidate_cache(
+        self, field_names: Optional[List[str]] = None, invalidate_related: bool = True
+    ) -> None:
         """Invalidate cache for specified fields.
 
         Args:
             field_names: List of field names to invalidate, or None to invalidate all
-
-        Examples:
-            >>> user = User.browse(1)
-            >>> await user._invalidate_cache(["name", "email"])  # Invalidate specific fields
-            >>> await user._invalidate_cache()  # Invalidate all fields
+            invalidate_related: Whether to invalidate related records
         """
         cache_manager = await self._env.cache_manager
+
+        # Get fields to invalidate
         if field_names is None:
-            # Invalidate all fields
             field_names = list(self.__fields__.keys())
+
+        # Collect all keys to invalidate
+        keys_to_invalidate: Set[str] = set()
+
+        # Add direct field keys
         for field_name in field_names:
             for record_id in self._ids:
-                key = f"{self._name}:{field_name}:{record_id}"
-                await cache_manager.delete(key)
+                keys_to_invalidate.add(f"{self._name}:{field_name}:{record_id}")
+
+        # Add computed field keys that depend on these fields
+        for compute_field in self.__fields__.values():
+            if hasattr(compute_field, "depends"):
+                if any(dep in field_names for dep in compute_field.depends):
+                    for record_id in self._ids:
+                        keys_to_invalidate.add(
+                            f"{self._name}:{compute_field.name}:{record_id}"
+                        )
+
+        # Add related record keys if requested
+        if invalidate_related:
+            for field_name in field_names:
+                field = self.__fields__.get(field_name)
+                if isinstance(field, RelationField):
+                    # Get related record IDs
+                    related_ids: Set[str] = set()
+                    for record_id in self._ids:
+                        value = await self._read_from_cache(field_name)
+                        if isinstance(value, (list, tuple)):
+                            related_ids.update(str(v) for v in value if v)  # type: ignore
+                        elif value:
+                            related_ids.add(str(value))
+
+                    # Add related record keys
+                    for related_id in related_ids:
+                        keys_to_invalidate.add(f"{field.model_ref}:data:{related_id}")
+
+        # Batch invalidate all keys
+        if keys_to_invalidate:
+            await cache_manager.delete_many(list(keys_to_invalidate))
+            logger.debug(f"Invalidated {len(keys_to_invalidate)} cache keys")
 
     async def _prefetch_fields(self, field_names: List[str]) -> None:
         """Prefetch field values for recordset.
@@ -1421,4 +1593,151 @@ class BaseModel(metaclass=ModelMeta):
                 f"Invalid ID validation: {e} for value type {type(id_value)}",
                 exc_info=True,
             )
+            return None
+
+    def _set_data(self, data: Dict[str, Any]) -> None:
+        """Set record data safely.
+
+        Args:
+            data: Data to set
+        """
+        self.__dict__["_data"] = data
+
+    async def _batch_load_data(
+        self, records: List[Self], batch_size: int = 100
+    ) -> None:
+        """Load data for multiple records in one query.
+
+        Args:
+            records: Records to load data for
+            batch_size: Number of records to load in one batch
+        """
+        try:
+            # Get IDs of records that need data
+            ids_to_load = [rec.id for rec in records if rec.id and not rec._has_data]
+
+            if not ids_to_load:
+                logger.debug("No records need data loading")
+                return
+
+            logger.debug(f"Loading data for {len(ids_to_load)} records")
+
+            # Get cache manager
+            cache_manager = await self._env.cache_manager
+
+            # Try get from cache first in batches
+            cached_data: Dict[str, Dict[str, Any]] = {}
+            cache_keys = [f"{self._name}:data:{rid}" for rid in ids_to_load]
+
+            # Batch get from cache
+            cached_values = await cache_manager.get_many(cache_keys)
+            for key, value in zip(cache_keys, cached_values):
+                if isinstance(value, dict):
+                    record_id = key.split(":")[-1]
+                    cached_data[record_id] = value
+                    logger.debug(f"Got cached data for {self._name}:{record_id}")
+
+            # Remove cached IDs
+            ids_to_load = [id for id in ids_to_load if id not in cached_data]
+
+            if ids_to_load:
+                # Process in batches
+                for i in range(0, len(ids_to_load), batch_size):
+                    batch_ids = ids_to_load[i : i + batch_size]
+                    logger.debug(
+                        f"Querying database for batch of {len(batch_ids)} records"
+                    )
+
+                    # Batch query for remaining IDs
+                    query = await self._env.adapter.query(
+                        cast(Type[ModelProtocol], type(self))
+                    )
+                    query.filter([("id", "in", batch_ids)])
+
+                    # Add prefetch fields if defined
+                    if hasattr(self, "_prefetch_fields"):
+                        query.prefetch(getattr(self, "_prefetch_fields", []))
+
+                    docs = await query.execute()
+
+                    # Cache new data in batch
+                    cache_ops: List[Tuple[str, Dict[str, Any]]] = []
+                    for doc in docs:
+                        if isinstance(doc, dict) and "id" in doc:
+                            doc_id_value = cast(Optional[str], doc.get("id"))  # type: ignore
+                            if doc_id_value is not None:
+                                try:
+                                    doc_id = str(doc_id_value)
+                                    cache_key = f"{self._name}:data:{doc_id}"
+                                    cache_ops.append((cache_key, doc))
+                                    cached_data[doc_id] = doc
+                                except (ValueError, TypeError) as e:
+                                    logger.warning(
+                                        f"Failed to convert document ID: {e}"
+                                    )
+                                    continue
+
+                    if cache_ops:
+                        # Batch set to cache
+                        await cache_manager.set_many(
+                            {k: (v, 3600) for k, v in cache_ops}  # 1 hour TTL
+                        )
+                        logger.debug(f"Cached {len(cache_ops)} records")
+
+            # Update records
+            for record in records:
+                if record.id in cached_data:
+                    record._data = cached_data[record.id]
+                    logger.debug(f"Updated data for {self._name}:{record.id}")
+
+        except Exception as e:
+            logger.error(f"Failed to batch load data: {e}", exc_info=True)
+
+    async def _ensure_data_loaded(self) -> None:
+        """Ensure record data is loaded."""
+        if not self._has_data and self.id:
+            try:
+                logger.debug(f"Loading data for {self._name}:{self.id}")
+                # Try cache first
+                cache_manager = await self._env.cache_manager
+                cache_key = f"{self._name}:data:{self.id}"
+                cached_data = await cache_manager.get(cache_key)
+
+                if isinstance(cached_data, dict):
+                    logger.debug(f"Got cached data for {self._name}:{self.id}")
+                    self._data = cached_data
+                else:
+                    # Query database
+                    logger.debug(f"Querying database for {self._name}:{self.id}")
+                    raw_data = await self._env.adapter.find_by_id(self._name, self.id)
+                    if isinstance(raw_data, dict):
+                        self._data = raw_data
+                        # Cache for next time
+                        logger.debug(f"Caching data for {self._name}:{self.id}")
+                        await cache_manager.set(cache_key, raw_data)
+                    else:
+                        logger.warning(f"No data found for {self._name}:{self.id}")
+
+            except Exception as e:
+                logger.error(f"Failed to load data: {e}", exc_info=True)
+
+    async def _convert_field_value(
+        self, field: BaseField[Any], raw_value: Any, backend: str
+    ) -> Any:
+        """Convert field value from database format.
+
+        Args:
+            field: Field instance
+            raw_value: Raw value from database
+            backend: Database backend type
+
+        Returns:
+            Any: Converted value
+        """
+        try:
+            if raw_value is None:
+                return None
+            return await field.from_db(raw_value, backend)
+        except Exception as e:
+            self.logger.warning(f"Failed to convert field {field.name}: {e}")
             return None

@@ -146,6 +146,8 @@ async def main():
         child_users = await User.search(domain=[("age", "<", 18)], limit=10)
         child_users_data = [await u.to_dict() for u in child_users]
         logger.info(f"Found {len(child_users)} child users: {child_users_data}")
+        await child_users.unlink()
+        logger.info("Deleted child users")
 
     except Exception as e:
         logger.error(f"Error occurred: {str(e)}", exc_info=True)
