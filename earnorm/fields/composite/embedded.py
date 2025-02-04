@@ -345,9 +345,29 @@ class EmbeddedField(BaseField[M], FieldComparisonMixin, Generic[M]):
             ) from e
 
     def _prepare_value(self, value: Any) -> DatabaseValue:
-        """Prepare embedded value for comparison.
+        """Prepare embedded value for comparison (sync version).
 
-        Converts value to dictionary for database comparison.
+        This is the sync version required by FieldComparisonMixin.
+        For async operations, use _prepare_value_async instead.
+
+        Args:
+            value: Value to prepare
+
+        Returns:
+            Prepared dictionary value or None
+        """
+        if value is None:
+            return None
+
+        try:
+            if isinstance(value, dict):
+                return value  # type: ignore
+            return None
+        except (TypeError, ValueError):
+            return None
+
+    async def _prepare_value_async(self, value: Any) -> DatabaseValue:
+        """Prepare embedded value for comparison (async version).
 
         Args:
             value: Value to prepare
@@ -360,56 +380,34 @@ class EmbeddedField(BaseField[M], FieldComparisonMixin, Generic[M]):
 
         try:
             if isinstance(value, self.model_class):
-                return value.to_dict()
+                return await value.to_dict()
             elif isinstance(value, dict):
                 return value  # type: ignore
             return None
         except (TypeError, ValueError):
             return None
 
-    def matches(self, criteria: Dict[str, Any]) -> ComparisonOperator:
-        """Check if embedded model matches criteria.
+    async def matches(self, criteria: Dict[str, Any]) -> ComparisonOperator:
+        """Check if embedded model matches criteria."""
+        prepared_value = await self._prepare_value_async(criteria)
+        return ComparisonOperator(self.name, "matches", prepared_value)
 
-        Args:
-            criteria: Dictionary of field values to match
-
-        Returns:
-            ComparisonOperator: Comparison operator with field name and criteria
-        """
-        return ComparisonOperator(self.name, "matches", self._prepare_value(criteria))
-
-    def equals(
+    async def equals(
         self, other: Any, fields: Optional[List[str]] = None
     ) -> ComparisonOperator:
-        """Check if embedded model equals another model or dictionary.
-
-        Args:
-            other: Model instance or dictionary to compare with
-            fields: Optional list of fields to compare, if None compares all fields
-
-        Returns:
-            ComparisonOperator: Comparison operator with field name and value
-        """
+        """Check if embedded model equals another model or dictionary."""
+        prepared_value = await self._prepare_value_async(other)
         return ComparisonOperator(
-            self.name, "equals", {"value": self._prepare_value(other), "fields": fields}
+            self.name, "equals", {"value": prepared_value, "fields": fields}
         )
 
-    def not_equals(
+    async def not_equals(
         self, other: Any, fields: Optional[List[str]] = None
     ) -> ComparisonOperator:
-        """Check if embedded model does not equal another model or dictionary.
-
-        Args:
-            other: Model instance or dictionary to compare with
-            fields: Optional list of fields to compare, if None compares all fields
-
-        Returns:
-            ComparisonOperator: Comparison operator with field name and value
-        """
+        """Check if embedded model does not equal another model or dictionary."""
+        prepared_value = await self._prepare_value_async(other)
         return ComparisonOperator(
-            self.name,
-            "not_equals",
-            {"value": self._prepare_value(other), "fields": fields},
+            self.name, "not_equals", {"value": prepared_value, "fields": fields}
         )
 
     def has_fields(self, fields: List[str]) -> ComparisonOperator:

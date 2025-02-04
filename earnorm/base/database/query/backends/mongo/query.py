@@ -31,8 +31,6 @@ from earnorm.base.database.query.interfaces.domain import (
     DomainItem,
     DomainLeaf,
     DomainNode,
-    DomainOperator,
-    LogicalOperator,
 )
 from earnorm.base.database.query.interfaces.operations.aggregate import (
     AggregateProtocol,
@@ -159,7 +157,7 @@ class MongoQuery(BaseQuery[ModelT]):
         if self._hint is not None:
             if isinstance(self._hint, str):
                 aggregate_kwargs["hint"] = self._hint
-            elif isinstance(self._hint, list):
+            else:
                 # Convert id to _id in hint if exists
                 hint_dict = {}
                 for field, order in self._hint:
@@ -168,8 +166,6 @@ class MongoQuery(BaseQuery[ModelT]):
                     else:
                         hint_dict[field] = order
                 aggregate_kwargs["hint"] = hint_dict
-            else:
-                aggregate_kwargs["hint"] = self._hint
 
         # Execute pipeline
         cursor: AsyncIOMotorCommandCursor[JsonDict] = self._collection.aggregate(
@@ -178,7 +174,7 @@ class MongoQuery(BaseQuery[ModelT]):
         docs = [doc async for doc in cursor]
 
         # Create model instances with data
-        results = []
+        results: List[ModelT] = []
         for doc in docs:
             model = self._model_type()
             # Set model id
@@ -227,7 +223,9 @@ class MongoQuery(BaseQuery[ModelT]):
             if isinstance(node, DomainLeaf):
                 field = node.field
                 op = node.operator
-                value = node.value
+                value: Union[str, int, List[Union[str, int, ObjectId]], Any] = (
+                    node.value
+                )
 
                 # Convert id field and value
                 if field == "id":
@@ -237,7 +235,8 @@ class MongoQuery(BaseQuery[ModelT]):
                         value = ObjectId(value)
                     elif isinstance(value, list) and op in ("in", "not in"):
                         value = [
-                            ObjectId(v) if isinstance(v, str) else v for v in value
+                            ObjectId(str(v)) if isinstance(v, (str, int)) else v
+                            for v in cast(List[Union[str, int, Any]], value)
                         ]
 
                 if op == "=":

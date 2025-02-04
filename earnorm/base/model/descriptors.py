@@ -7,7 +7,7 @@ Currently supported descriptors:
 - FieldsDescriptor: Access model fields through __fields__ attribute
 """
 
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, Optional
 
 from earnorm.fields import BaseField
 

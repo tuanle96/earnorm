@@ -277,13 +277,28 @@ class DatabaseAdapter(Generic[ModelT], ABC):
     async def delete_many_by_filter(
         self, table_name: str, domain_filter: Dict[str, Any]
     ) -> int:
-        """Delete multiple documents in table by filter.
+        """Delete multiple documents from table by filter.
 
         Args:
             table_name: Table name
-            filter: Filter to match documents
+            domain_filter: Filter to match documents
 
         Returns:
-            Number of documents deleted
+            Number of deleted documents
+        """
+        pass
+
+    @abstractmethod
+    async def bulk_write(
+        self, table_name: str, operations: List[Dict[str, Any]]
+    ) -> Any:
+        """Execute bulk write operations.
+
+        Args:
+            table_name: Table name
+            operations: List of write operations
+
+        Returns:
+            Result of bulk write operation
         """
         pass

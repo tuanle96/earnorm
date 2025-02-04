@@ -37,7 +37,7 @@ from motor.motor_asyncio import (
     AsyncIOMotorDatabase,
 )
 from pymongo.operations import UpdateOne
-from pymongo.results import DeleteResult, InsertOneResult, UpdateResult
+from pymongo.results import BulkWriteResult, DeleteResult, InsertOneResult, UpdateResult
 
 from earnorm.base.database.adapter import DatabaseAdapter
 from earnorm.base.database.query.backends.mongo.operations.aggregate import (
@@ -380,26 +380,18 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         if not models:
             return []
 
-        # Check if all models have IDs
-        for model in models:
-            if not model.id:
-                raise ValueError("Model has no ID")
-
-        collection: AsyncIOMotorCollection[JsonDict] = await self.get_collection(
-            self._get_collection_name(type(models[0]))
+        collection: AsyncIOMotorCollection[Dict[str, Any]] = self._get_collection(
+            type(models[0])
         )
-        # Create operations with type hints
-        operations: Sequence[UpdateOne] = []
-        for model in models:
-            values = await model.to_dict()
-            operations.append(
-                UpdateOne(
-                    filter={"_id": model.id},
-                    update={"$set": values},
-                )
-            )
-        # Execute bulk write with type ignore
-        await collection.bulk_write(operations)  # type: ignore
+        operations: Sequence[UpdateOne] = [
+            UpdateOne({"_id": model.id}, {"$set": await model.to_dict()})
+            for model in models
+            if getattr(model, "id", None)
+        ]
+
+        if operations:
+            await collection.bulk_write(operations)  # type: ignore
+
         return models
 
     async def delete(self, model: ModelT) -> None:
@@ -528,39 +520,25 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         return MongoAggregate[ModelT](collection, model_type)
 
     async def bulk_write(
-        self, collection_name: str, operations: List[Dict[str, Any]]
-    ) -> UpdateResult:
+        self, table_name: str, operations: List[Dict[str, Dict[str, Any]]]
+    ) -> BulkWriteResult:
         """Execute bulk write operations.
 
         Args:
-            collection_name: Name of the collection
-            operations: List of update operations in format:
+            table_name: Table name
+            operations: List of write operations in format:
                 [{"filter": {...}, "update": {...}}]
 
         Returns:
-            UpdateResult with matched and modified counts
-
-        Raises:
-            RuntimeError: If not connected to MongoDB
+            Result of bulk write operation
         """
-        if not collection_name:
-            raise ValueError("Collection name cannot be empty")
-        if not operations:
-            raise ValueError("Operations list cannot be empty")
-
-        collection = await self.get_collection(collection_name)
-
-        # Convert operations to UpdateOne objects
-        bulk_ops = [UpdateOne(op["filter"], op["update"]) for op in operations]
-
-        # Execute bulk write
-        result = await collection.bulk_write(bulk_ops)
-
-        return UpdateResult(
-            raw_result={
-                "n": result.matched_count,
-                "nModified": result.modified_count,
-                "ok": 1,
-            },
-            acknowledged=True,
+        collection: AsyncIOMotorCollection[Dict[str, Any]] = await self.get_collection(
+            table_name
         )
+
+        # Convert dict operations to UpdateOne objects
+        bulk_ops: List[UpdateOne] = [
+            UpdateOne(op["filter"], op["update"]) for op in operations
+        ]
+
+        return await collection.bulk_write(bulk_ops)  # type: ignore

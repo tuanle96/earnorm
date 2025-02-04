@@ -82,6 +82,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Protocol,
     Self,
     Sequence,
     Set,
@@ -119,7 +120,15 @@ from earnorm.types.models import ModelProtocol
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T", bound=ModelProtocol)
+ModelT = TypeVar("ModelT", bound=ModelProtocol)
+
+
+class ContainerProtocol(Protocol):
+    """Protocol for Container class."""
+
+    async def get_environment(self) -> Optional[Environment]:
+        """Get environment from container."""
+        ...
 
 
 class BaseModel(metaclass=ModelMeta):
@@ -158,6 +167,7 @@ class BaseModel(metaclass=ModelMeta):
     _sequence: ClassVar[Optional[str]] = None
     _skip_default_fields: ClassVar[bool] = False
     _abstract: ClassVar[bool] = False
+    _env: Environment  # Environment instance
 
     # Model fields (will be set by metaclass)
     __fields__ = FieldsDescriptor()  # Descriptor for accessing fields
@@ -235,7 +245,7 @@ class BaseModel(metaclass=ModelMeta):
     @classmethod
     async def browse(
         cls, ids: Union[int, List[int]]
-    ) -> Union[DatabaseModel, List[DatabaseModel]]:
+    ) -> Union[ModelProtocol, List[ModelProtocol]]:
         """Browse records by IDs.
 
         Args:
@@ -251,7 +261,7 @@ class BaseModel(metaclass=ModelMeta):
     @classmethod
     async def _where_calc(
         cls, domain: Sequence[Union[Tuple[str, str, Any], str]]
-    ) -> AsyncQuery[DatabaseModel]:
+    ) -> AsyncQuery[ModelProtocol]:
         """Build query from domain.
 
         Args:
@@ -264,7 +274,7 @@ class BaseModel(metaclass=ModelMeta):
         if domain:
             expr = DomainExpression(cast(List[Any], list(domain)))
             query = query.filter(expr.to_list())
-        return query
+        return cast(AsyncQuery[ModelProtocol], query)
 
     @classmethod
     async def _apply_ir_rules(cls, query: AsyncQuery[DatabaseModel], mode: str) -> None:
@@ -384,12 +394,6 @@ class BaseModel(metaclass=ModelMeta):
     async def _validate_write(self, vals: Dict[str, Any]) -> None:
         """Validate record update.
 
-        This method performs the following validations:
-        1. Check if records exist
-        2. Check field types and constraints
-        3. Check unique constraints
-        4. Apply custom validation rules
-
         Args:
             vals: Field values to validate
 
@@ -398,26 +402,18 @@ class BaseModel(metaclass=ModelMeta):
             ValidationError: If custom validation fails
             ValueError: If records don't exist
         """
-        logger.debug("Starting write validation for values: %s", vals)
-        logger.debug("Current model IDs: %s", self._ids)
-
         try:
             if not self._ids:
                 logger.error("No records to update - IDs are empty")
                 raise ValueError("No records to update")
 
-            # Check if records exist in database
-            # Get actual ID values from model objects
-            id_list = []
-            for model_id in self._ids:
-                if isinstance(model_id, str):
-                    id_list.append(model_id)
-                elif hasattr(model_id, "id"):
-                    id_list.append(str(getattr(model_id, "id")))
-                else:
-                    id_list.append(str(model_id))
+            # Convert all IDs to strings in a type-safe way
+            def convert_id(model_id: Any) -> str:
+                if isinstance(model_id, (str, int)):
+                    return str(model_id)
+                return str(getattr(model_id, "id", model_id))
 
-            logger.debug("Checking existence for IDs: %s", id_list)
+            id_list = [convert_id(model_id) for model_id in self._ids]
 
             # Create query to check existence
             domain_tuple = cast(
@@ -425,11 +421,9 @@ class BaseModel(metaclass=ModelMeta):
                 ("id", "in", id_list),
             )
             query = await self._where_calc([domain_tuple])
-            logger.debug("Generated query: %s", query)
 
             # Count matching records
             count = await query.count()
-            logger.debug("Found %d records matching IDs", count)
 
             if count != len(self._ids):
                 logger.error(
@@ -655,31 +649,33 @@ class BaseModel(metaclass=ModelMeta):
             return False
 
         try:
-            # Convert IDs to ObjectId if needed
+            # Get actual ID values from model objects in a database-agnostic way
             delete_ids = []
             for model_id in self._ids:
-                if isinstance(model_id, str):
-                    delete_ids.append(ObjectId(model_id))
+                if isinstance(model_id, (str, int)):
+                    delete_ids.append(model_id)  # type: ignore
                 elif hasattr(model_id, "id"):
-                    delete_ids.append(ObjectId(str(getattr(model_id, "id"))))
+                    delete_ids.append(getattr(model_id, "id"))  # type: ignore
                 else:
-                    delete_ids.append(model_id)
+                    delete_ids.append(model_id)  # type: ignore
 
-            # Delete records
-            collection = await self._env.adapter.get_collection(self._name)
-            result = await collection.delete_many({"_id": {"$in": delete_ids}})
+            # Delete records using adapter's interface
+            result = await self._env.adapter.delete_many_by_filter(
+                self._name,
+                {"id": {"in": delete_ids}},  # Use database-agnostic filter format
+            )
 
             # Clear recordset
             self._ids = ()
             self._prefetch_ids = ()
 
-            return result.deleted_count > 0
+            return bool(result)
 
         except Exception as e:
             logger.error("Failed to delete records: %s", str(e), exc_info=True)
             raise DatabaseError(
                 message=f"Failed to delete records: {e}",
-                backend=self._env.adapter.backend,
+                backend=self._env.adapter.backend_type,
             ) from e
 
     async def write(self, values: Dict[str, Any]) -> Self:
@@ -814,39 +810,11 @@ class BaseModel(metaclass=ModelMeta):
         return self._browse(self._env, [rec.id for rec in records], self._prefetch_ids)
 
     @classmethod
-    async def aggregate(cls) -> AggregateQuery[DatabaseModel]:
+    async def aggregate(cls) -> AggregateQuery[ModelProtocol]:
         """Create aggregate query.
-
-        This method creates an aggregate query builder for performing
-        aggregation operations on the model's records.
 
         Returns:
             Aggregate query builder
-
-        Examples:
-            >>> # Count records by status
-            >>> stats = await User.aggregate()\\
-            ...     .group_by("status")\\
-            ...     .count("total")\\
-            ...     .execute()
-
-            >>> # Calculate average age by country
-            >>> avg_age = await User.aggregate()\\
-            ...     .group_by("country")\\
-            ...     .avg("age", "avg_age")\\
-            ...     .having(total__gt=100)\\
-            ...     .execute()
-
-            >>> # Multiple aggregations
-            >>> stats = await Order.aggregate()\\
-            ...     .group_by("status", "category")\\
-            ...     .count("total_orders")\\
-            ...     .sum("amount", "total_amount")\\
-            ...     .avg("amount", "avg_amount")\\
-            ...     .min("amount", "min_amount")\\
-            ...     .max("amount", "max_amount")\\
-            ...     .having(total_orders__gt=10)\\
-            ...     .execute()
         """
         logger.debug("Creating aggregate query for model: %s", cls._name)
         query = await cls._env.adapter.get_aggregate_query(cls)
@@ -858,11 +826,8 @@ class BaseModel(metaclass=ModelMeta):
         model: str,
         on: Dict[str, str],
         join_type: str = "inner",
-    ) -> JoinQuery[DatabaseModel, Any]:
+    ) -> JoinQuery[ModelProtocol, Any]:
         """Create join query.
-
-        This method creates a join query builder for performing
-        join operations with other models.
 
         Args:
             model: Model to join with
@@ -871,47 +836,6 @@ class BaseModel(metaclass=ModelMeta):
 
         Returns:
             Join query builder
-
-        Examples:
-            >>> # Simple join
-            >>> users = await User.join(
-            ...     "posts",
-            ...     on={"id": "user_id"},
-            ...     join_type="left"
-            ... ).select(
-            ...     "name",
-            ...     "posts.title"
-            ... ).execute()
-
-            >>> # Multiple joins
-            >>> users = await User.join(
-            ...     "posts",
-            ...     on={"id": "user_id"}
-            ... ).join(
-            ...     "comments",
-            ...     on={"id": "user_id"}
-            ... ).select(
-            ...     "name",
-            ...     "posts.title",
-            ...     "comments.content"
-            ... ).where(
-            ...     posts__likes__gt=10,
-            ...     comments__status="approved"
-            ... ).execute()
-
-            >>> # Join with aggregation
-            >>> stats = await User.join(
-            ...     "posts",
-            ...     on={"id": "user_id"}
-            ... ).group_by(
-            ...     "name",
-            ...     "email"
-            ... ).count(
-            ...     "posts.id",
-            ...     "total_posts"
-            ... ).having(
-            ...     total_posts__gt=5
-            ... ).execute()
         """
         logger.debug(
             "Creating join query for model %s with %s",
@@ -922,43 +846,11 @@ class BaseModel(metaclass=ModelMeta):
         return query.join(model, on, join_type)
 
     @classmethod
-    async def group(cls) -> AggregateQuery[DatabaseModel]:
+    async def group(cls) -> AggregateQuery[ModelProtocol]:
         """Create group query.
-
-        This method creates a group query builder for performing
-        grouping operations on the model's records.
 
         Returns:
             Group query builder
-
-        Examples:
-            >>> # Simple grouping
-            >>> stats = await Order.group()\\
-            ...     .by("status")\\
-            ...     .count("total")\\
-            ...     .execute()
-
-            >>> # Multiple grouping fields
-            >>> stats = await Order.group()\\
-            ...     .by("status", "category")\\
-            ...     .count("total_orders")\\
-            ...     .sum("amount", "total_amount")\\
-            ...     .having(total_orders__gt=10)\\
-            ...     .execute()
-
-            >>> # Complex grouping
-            >>> stats = await Order.group()\\
-            ...     .by("customer.country", "product.category")\\
-            ...     .count("total_orders")\\
-            ...     .sum("amount", "total_amount")\\
-            ...     .avg("amount", "avg_amount")\\
-            ...     .having(
-            ...         total_orders__gt=100,
-            ...         total_amount__gt=10000
-            ...     ).sort(
-            ...         "-total_amount"
-            ...     ).limit(10)\\
-            ...     .execute()
         """
         logger.debug("Creating group query for model: %s", cls._name)
         query = await cls._env.adapter.get_group_query(cls)
@@ -966,9 +858,6 @@ class BaseModel(metaclass=ModelMeta):
 
     async def _check_unique_constraints(self, vals: Dict[str, Any]) -> None:
         """Check unique constraints.
-
-        This method checks if any unique constraints would be violated
-        by the given values.
 
         Args:
             vals: Field values to check
@@ -990,7 +879,8 @@ class BaseModel(metaclass=ModelMeta):
 
             # Check if value exists
             query = await self._where_calc(domain)
-            if await query.exists():
+            exists = await query.exists()
+            if exists:
                 raise UniqueConstraintError(
                     message="Value already exists",
                     field_name=name,
@@ -1096,7 +986,7 @@ class BaseModel(metaclass=ModelMeta):
 
     async def with_transaction(
         self,
-    ) -> "AsyncContextManager[Transaction[ModelProtocol]]":
+    ) -> AsyncContextManager[Transaction[ModelProtocol]]:
         """Get transaction context manager.
 
         Returns:
@@ -1114,9 +1004,9 @@ class BaseModel(metaclass=ModelMeta):
         Raises:
             RuntimeError: If environment is not found in container
         """
-        container = Container()
-        env = await container.get_env()
-        if env is None:
+        container = cast(ContainerProtocol, Container())
+        env = await container.get_environment()
+        if not isinstance(env, Environment):
             raise RuntimeError("Environment not found in container")
         return env
 
