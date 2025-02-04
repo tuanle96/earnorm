@@ -21,9 +21,11 @@ ID Handling:
 """
 
 import logging
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Protocol, Type, TypeVar, Union
 
 from bson import ObjectId
+from bson.decimal128 import Decimal128
 from motor.motor_asyncio import (
     AsyncIOMotorClient,
     AsyncIOMotorCollection,
@@ -46,6 +48,7 @@ from earnorm.base.database.query.interfaces.operations.join import (
 )
 from earnorm.base.database.transaction.backends.mongo import MongoTransactionManager
 from earnorm.di import container
+from earnorm.exceptions import DatabaseError
 from earnorm.pool.backends.mongo import MongoPool
 from earnorm.pool.protocols import AsyncConnectionProtocol
 from earnorm.types import DatabaseModel, JsonDict
@@ -708,3 +711,85 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             # Keep original document but set id to None to indicate conversion error
             document["id"] = None
             return document
+
+    async def find_by_id(
+        self, collection: str, id: str, projection: Optional[List[str]] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Find document by ID.
+
+        Args:
+            collection: Collection name
+            id: Document ID
+            projection: Fields to include/exclude
+
+        Returns:
+            Document data or None if not found
+
+        Raises:
+            DatabaseError: If query fails
+        """
+        try:
+            # Convert string ID to ObjectId
+            object_id = ObjectId(id)
+
+            # Get collection
+            coll = await self.get_collection(collection)
+
+            # Build projection
+            proj = {field: 1 for field in projection} if projection else None
+
+            # Find document
+            doc = await coll.find_one({"_id": object_id}, projection=proj)
+
+            if doc:
+                # Convert ObjectId to string
+                doc["id"] = str(doc.pop("_id"))
+                return doc
+
+            return None
+
+        except Exception as e:
+            self.logger.error(f"Failed to find document by ID: {e}")
+            raise DatabaseError(
+                message=f"Failed to find document by ID: {e}", backend="mongodb"
+            ) from e
+
+    async def convert_value(self, value: Any, field_type: str) -> Any:
+        """Convert between MongoDB and Python types.
+
+        Args:
+            value: Value to convert
+            field_type: Target field type
+
+        Returns:
+            Converted value
+
+        Raises:
+            ValueError: If conversion fails
+        """
+        try:
+            if value is None:
+                return None
+
+            if isinstance(value, ObjectId):
+                return str(value)
+
+            if field_type == "datetime":
+                if isinstance(value, str):
+                    return datetime.fromisoformat(value)
+                if isinstance(value, datetime):
+                    return value
+
+            if field_type == "decimal":
+                if isinstance(value, Decimal128):
+                    # Convert to Python Decimal first then to float
+                    decimal_value = value.to_decimal()
+                    return float(decimal_value)
+
+            # Add more type conversions as needed
+
+            return value
+
+        except Exception as e:
+            self.logger.error(f"Failed to convert value: {e}")
+            raise ValueError(f"Failed to convert value: {e}") from e

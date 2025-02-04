@@ -97,15 +97,23 @@ from typing import (
 from earnorm.base.database.query.interfaces.domain import DomainExpression
 from earnorm.base.database.query.interfaces.domain import DomainOperator as Operator
 from earnorm.base.database.query.interfaces.domain import LogicalOperator as LogicalOp
-from earnorm.base.database.query.interfaces.operations.aggregate import AggregateProtocol as AggregateQuery
-from earnorm.base.database.query.interfaces.operations.join import JoinProtocol as JoinQuery
+from earnorm.base.database.query.interfaces.operations.aggregate import (
+    AggregateProtocol as AggregateQuery,
+)
+from earnorm.base.database.query.interfaces.operations.join import (
+    JoinProtocol as JoinQuery,
+)
 from earnorm.base.database.query.interfaces.query import QueryProtocol as AsyncQuery
 from earnorm.base.database.transaction.base import Transaction
 from earnorm.base.env import Environment
 from earnorm.base.model.descriptors import FieldsDescriptor
 from earnorm.base.model.meta import ModelMeta
 from earnorm.di import Container
-from earnorm.exceptions import DatabaseError, FieldValidationError, UniqueConstraintError
+from earnorm.exceptions import (
+    DatabaseError,
+    FieldValidationError,
+    UniqueConstraintError,
+)
 from earnorm.fields.base import BaseField
 from earnorm.fields.relation.base import RelationField
 from earnorm.types import DatabaseModel, ValueType
@@ -1050,22 +1058,63 @@ class BaseModel(metaclass=ModelMeta):
     async def to_dict(self) -> Dict[str, Any]:
         """Convert model to dictionary.
 
-        This method converts all fields (both readonly and non-readonly) to their database format.
+        This method converts all fields to their Python format, handling:
+        1. Loading data from database if needed
+        2. Converting database format to Python format
+        3. Error handling for each field
 
         Returns:
             Dictionary representation of model
 
-        Examples:
-            >>> user = User(name="John", age=30)
-            >>> data = await user.to_dict()
-            >>> print(data)  # {'name': 'John', 'age': 30, 'created_at': datetime(...)}
+        Raises:
+            DatabaseError: If database operation fails
         """
-        result: Dict[str, Any] = {}
-        backend = self._env.adapter.backend_type
-        for name, field in self.__fields__.items():
-            value = getattr(self, name)
-            result[name] = await field.to_db(value, backend)
-        return result
+        try:
+            # 1. Get database adapter
+            adapter = self._env.adapter
+            backend = adapter.backend_type
+
+            # 2. Get raw data from database if needed
+            if not self._data and self.id:
+                raw_data = await adapter.find_by_id(self._name, self.id)
+                if raw_data:
+                    self._data = raw_data
+
+            # 3. Convert data
+            result: Dict[str, Any] = {}
+            for name, field in self.__fields__.items():
+                try:
+                    # Try get from _data first
+                    raw_value = self._data.get(name)
+
+                    if raw_value is not None:
+                        # Convert from database format to Python format
+                        try:
+                            value = await field.from_db(raw_value, backend)
+                            result[name] = value
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to convert field {name} from database format: {e}"
+                            )
+                            result[name] = None
+                    else:
+                        # Field not in _data
+                        result[name] = None
+
+                except Exception as e:
+                    logger.error(f"Error processing field {name}: {e}")
+                    result[name] = None
+
+            return result
+
+        except DatabaseError:
+            # Re-raise database errors
+            raise
+
+        except Exception as e:
+            logger.error(f"Failed to convert model to dict: {e}", exc_info=True)
+            # Return empty values as fallback
+            return {name: None for name in self.__fields__}
 
     def from_dict(self, data: Dict[str, Any]) -> None:
         """Update model from dictionary.

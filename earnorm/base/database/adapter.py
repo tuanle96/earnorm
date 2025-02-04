@@ -27,7 +27,7 @@ Examples:
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Generic, List, Type, TypeVar
+from typing import Any, Dict, Generic, List, Optional, Type, TypeVar
 
 from earnorm.base.database.query.core.query import BaseQuery
 from earnorm.base.database.query.interfaces.operations.aggregate import (
@@ -306,4 +306,39 @@ class DatabaseAdapter(Generic[ModelT], ABC):
     @abstractmethod
     async def convert_id(self, document: Dict[str, Any]) -> Dict[str, Any]:
         """Convert database-specific ID to ORM format"""
+        pass
+
+    @abstractmethod
+    async def find_by_id(
+        self, collection: str, id: str, projection: Optional[List[str]] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Find document by ID.
+
+        Args:
+            collection: Collection name
+            id: Document ID
+            projection: Fields to include/exclude
+
+        Returns:
+            Document data or None if not found
+
+        Raises:
+            DatabaseError: If query fails
+        """
+        pass
+
+    @abstractmethod
+    async def convert_value(self, value: Any, field_type: str) -> Any:
+        """Convert value between database and Python format.
+
+        Args:
+            value: Value to convert
+            field_type: Target field type
+
+        Returns:
+            Converted value
+
+        Raises:
+            ValueError: If conversion fails
+        """
         pass
