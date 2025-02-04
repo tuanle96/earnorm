@@ -5,6 +5,7 @@ from collections.abc import Awaitable
 from typing import Any, TypeVar, cast
 
 from redis.asyncio import Redis
+from redis.asyncio.client import Pipeline
 from redis.exceptions import ConnectionError as BaseRedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
@@ -30,6 +31,12 @@ class RedisConnection(AsyncConnectionProtocol[DB, None]):
         True
         >>> await conn.execute_typed("get", "key")
         "value"
+        >>> # Pipeline example
+        >>> pipe = conn.pipeline()
+        >>> pipe.set("key1", "value1")
+        >>> pipe.set("key2", "value2")
+        >>> await pipe.execute()
+        [True, True]
     """
 
     def __init__(
@@ -237,3 +244,18 @@ class RedisConnection(AsyncConnectionProtocol[DB, None]):
             ["value"]
         """
         return await self._execute_impl(operation, *args, **kwargs)
+
+    def pipeline(self) -> Pipeline:
+        """Get Redis pipeline.
+
+        Returns:
+            Pipeline: Redis pipeline instance
+
+        Examples:
+            >>> pipe = conn.pipeline()
+            >>> pipe.set("key1", "value1")
+            >>> pipe.set("key2", "value2")
+            >>> await pipe.execute()
+            [True, True]
+        """
+        return self._client.pipeline()

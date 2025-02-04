@@ -144,6 +144,9 @@ async def create_redis_pool(
     password: str | None = None,
     min_size: int = 1,
     max_size: int = 10,
+    socket_timeout: float | None = None,
+    socket_connect_timeout: float | None = None,
+    socket_keepalive: bool = True,
     retry_policy: Any | None = None,
     circuit_breaker: Any | None = None,
     **kwargs: Any,
@@ -158,6 +161,9 @@ async def create_redis_pool(
         password: Redis password
         min_size: Minimum pool size
         max_size: Maximum pool size
+        socket_timeout: Socket timeout in seconds
+        socket_connect_timeout: Socket connect timeout in seconds
+        socket_keepalive: Whether to enable socket keepalive
         retry_policy: Optional retry policy
         circuit_breaker: Optional circuit breaker
         **kwargs: Additional pool options
@@ -172,7 +178,10 @@ async def create_redis_pool(
             port=6379,
             db=0,
             min_size=1,
-            max_size=5
+            max_size=5,
+            socket_timeout=30,
+            socket_connect_timeout=10,
+            socket_keepalive=True
         )
         ```
     """
@@ -184,6 +193,9 @@ async def create_redis_pool(
         password=password,
         min_size=min_size,
         max_size=max_size,
+        socket_timeout=socket_timeout,
+        socket_connect_timeout=socket_connect_timeout,
+        socket_keepalive=socket_keepalive,
         retry_policy=retry_policy,
         circuit_breaker=circuit_breaker,
         **kwargs,

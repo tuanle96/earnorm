@@ -68,6 +68,9 @@ class RedisPool(AsyncPoolProtocol[DB, COLL]):
         password: str | None = None,
         min_size: int = 2,
         max_size: int = 20,
+        socket_timeout: float | None = None,
+        socket_connect_timeout: float | None = None,
+        socket_keepalive: bool = True,
         retry_policy: RetryPolicy | None = None,
         circuit_breaker: CircuitBreaker | None = None,
         **kwargs: Any,
@@ -82,6 +85,9 @@ class RedisPool(AsyncPoolProtocol[DB, COLL]):
             password: Password for authentication
             min_size: Minimum pool size
             max_size: Maximum pool size
+            socket_timeout: Socket timeout in seconds
+            socket_connect_timeout: Socket connect timeout in seconds
+            socket_keepalive: Whether to enable socket keepalive
             retry_policy: Retry policy
             circuit_breaker: Circuit breaker
             **kwargs: Additional client options
@@ -93,6 +99,9 @@ class RedisPool(AsyncPoolProtocol[DB, COLL]):
         self._password = password
         self._min_size = min_size
         self._max_size = max_size
+        self._socket_timeout = socket_timeout
+        self._socket_connect_timeout = socket_connect_timeout
+        self._socket_keepalive = socket_keepalive
         self._retry_policy = retry_policy
         self._circuit_breaker = circuit_breaker
         self._kwargs = kwargs
@@ -164,6 +173,9 @@ class RedisPool(AsyncPoolProtocol[DB, COLL]):
                         db=self._db,
                         username=self._username,
                         password=self._password,
+                        socket_timeout=self._socket_timeout,
+                        socket_connect_timeout=self._socket_connect_timeout,
+                        socket_keepalive=self._socket_keepalive,
                         **self._kwargs,
                     )
 
@@ -250,15 +262,15 @@ class RedisPool(AsyncPoolProtocol[DB, COLL]):
             conn: Connection to release
         """
         async with self._lock:
-            try:
-                # Move connection back to available set
+            if conn in self._in_use:
                 self._in_use.remove(conn)
-                if await conn.ping():
-                    self._available.add(conn)
-                else:
-                    await conn.close()
-            except ValueError:
-                pass
+                self._available.add(conn)
+                logger.debug(
+                    "Released healthy connection - Pool size: %d, In use: %d, Available: %d",
+                    self.size,
+                    self.in_use,
+                    self.available,
+                )
 
     @property
     def size(self) -> int:
@@ -285,39 +297,39 @@ class RedisPool(AsyncPoolProtocol[DB, COLL]):
         """Get number of connections in use."""
         return len(self._in_use)
 
+    @property
+    def database_name(self) -> str:
+        """Get database name."""
+        return str(self._db)
+
     async def health_check(self) -> bool:
         """Check pool health.
 
         Returns:
-            True if pool is healthy
+            bool: True if pool is healthy
         """
-        if not self._client:
-            return False
-
         try:
+            if not self._client:
+                return False
             result = await self._client.ping()  # type: ignore
             return bool(result)
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.error("Failed to ping Redis: %s", str(e))
+        except Exception:
             return False
 
     def get_stats(self) -> dict[str, Any]:
-        """Get pool statistics."""
+        """Get pool statistics.
+
+        Returns:
+            Dict[str, Any]: Dictionary containing pool statistics
+        """
         return {
-            "host": self._host,
-            "port": self._port,
-            "db": self._db,
             "size": self.size,
             "max_size": self.max_size,
             "min_size": self.min_size,
             "available": self.available,
             "in_use": self.in_use,
+            "database": self.database_name,
         }
-
-    @property
-    def database_name(self) -> str:
-        """Get database name."""
-        return str(self._db)
 
 
 class _ConnectionManager(AsyncContextManager[AsyncConnectionProtocol[DB, COLL]]):

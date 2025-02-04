@@ -68,14 +68,14 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
     It handles all database operations including querying, transactions, and CRUD operations.
 
     Attributes:
-        pool_name: Name of the pool in registry
+        pool_name: Name of the pool in registry (default: mongodb)
     """
 
-    def __init__(self, pool_name: str = "default") -> None:
+    def __init__(self, pool_name: str = "mongodb") -> None:
         """Initialize MongoDB adapter.
 
         Args:
-            pool_name: Name of the pool in registry
+            pool_name: Name of the pool in registry (default: mongodb)
         """
         super().__init__()
         self._pool_name = pool_name

@@ -1,17 +1,4 @@
-"""Registry module for EarnORM.
-
-This module provides centralized registration for all EarnORM services.
-It ensures services are registered in the correct order based on dependencies.
-
-Examples:
-    ```python
-    from earnorm.config import SystemConfig
-    from earnorm.registry import register_all
-
-    config = await SystemConfig.get_instance()
-    await register_all(config)
-    ```
-"""
+"""Registry module for registering services."""
 
 import logging
 from typing import TypeVar, cast
@@ -66,13 +53,20 @@ async def register_environment_services(config: SystemConfig) -> None:
     - Environment singleton
     - Model registry
     - Transaction manager
+
+    Args:
+        config: System configuration instance
     """
     # Create and initialize environment if not already initialized
     env = Environment.get_instance()
     if not getattr(env, "_initialized", False):
         from earnorm.config.data import SystemConfigData
 
-        config_data = SystemConfigData(**config.model_dump())
+        # Get config data excluding descriptor fields and metadata
+        config_dict = config.model_dump()
+
+        # Create SystemConfigData with raw data
+        config_data = SystemConfigData(data=config_dict)
         await env.init(config_data)
 
     # Register in container if not already registered
@@ -110,6 +104,9 @@ async def register_database_services(config: SystemConfig) -> None:
         adapter = MongoAdapter[DatabaseModel]()
         await adapter.init()
         container.register("mongodb_adapter", adapter)
+        # Also register as default database adapter
+        container.register("database_adapter", adapter)
+        logger.info("MongoDB adapter registered successfully")
 
 
 async def register_pool_services(config: SystemConfig) -> None:
@@ -117,78 +114,111 @@ async def register_pool_services(config: SystemConfig) -> None:
 
     This includes:
     - Redis pool for event system
+
+    Args:
+        config: System configuration instance
     """
-    # Skip if no Redis config
-    if not config.redis_host or not config.redis_port or not config.redis_db:
+    # Skip if Redis host is not configured
+    if not config.redis_host:
+        logger.warning("Redis host not configured, skipping Redis pool registration")
         return
 
     # Create and register Redis pool if not exists
     if not container.has("redis_pool"):
+        logger.info(
+            "Creating Redis pool - host: %s, port: %d, db: %d",
+            config.redis_host,
+            config.redis_port,
+            config.redis_db,
+        )
         redis_pool = cast(
             AsyncPoolProtocol[RedisType, None],
             await create_redis_pool(
-                host=config.redis_host or "localhost",
-                port=int(config.redis_port or 6379),
-                db=int(config.redis_db or 0),
-                min_size=int(config.redis_min_pool_size or 1),
-                max_size=int(config.redis_max_pool_size or 10),
-                timeout=int(config.redis_pool_timeout or 10),
+                host=config.redis_host,
+                port=config.redis_port,
+                db=config.redis_db,
+                min_size=config.redis_min_pool_size,
+                max_size=config.redis_max_pool_size,
+                socket_timeout=config.redis_pool_timeout,
+                socket_connect_timeout=config.redis_pool_timeout,
+                socket_keepalive=True,
             ),
         )
         await redis_pool.init()
         PoolRegistry.register("redis", redis_pool)
         container.register("redis_pool", redis_pool)
+        logger.info("Redis pool registered successfully")
 
 
 async def register_cache_services(config: SystemConfig) -> None:
     """Register cache services.
 
     This includes:
-    - Cache manager
-    """
-    from earnorm.cache.core.manager import CacheManager
-
-    # Register cache manager if not exists
-    if not container.has("cache_manager"):
-        container.register(
-            "cache_manager",
-            CacheManager(ttl=int(config.cache_ttl or 60)),
-        )
-
-
-async def register_all(config: SystemConfig) -> None:
-    """Register all services in correct order.
+    - Cache manager that depends on Redis pool
 
     Args:
         config: System configuration instance
 
-    This function registers services in the following order:
-    1. Core DI services
-    2. Environment services
-    3. Database services
-    4. Pool services
-    5. Cache services
-
-    Examples:
-        ```python
-        config = await SystemConfig.get_instance()
-        await register_all(config)
-        ```
+    Raises:
+        ConfigError: If Redis pool is not available
     """
+    from earnorm.cache.core.manager import CacheManager
+    from earnorm.exceptions import ConfigError
+
+    # Register cache manager if not exists
+    if not container.has("cache_manager"):
+        # Check if Redis pool is available
+        if not container.has("redis_pool"):
+            logger.error(
+                "Redis pool not found. Cache manager requires Redis pool to be initialized first"
+            )
+            raise ConfigError(
+                "Redis pool not found. Cache manager requires Redis pool to be initialized first"
+            )
+
+        logger.info("Using Redis cache backend")
+        container.register(
+            "cache_manager",
+            CacheManager(
+                backend_type="redis",
+                prefix=config.cache_prefix or "earnorm",
+                ttl=int(config.cache_ttl or 60),
+            ),
+        )
+
+
+async def register_all(config: SystemConfig) -> None:
+    """Register all services in the correct order.
+
+    Args:
+        config: System configuration object
+
+    The order of registration is important:
+    1. Core DI services
+    2. Pool services (Redis pool must be registered first)
+    3. Cache services (Cache manager needs Redis pool)
+    4. Database services (Database adapter must be registered before environment)
+    5. Environment services (Environment needs cache manager and database adapter)
+    """
+    # 1. Core DI services
     logger.info("Registering core services")
     await register_core_services()
 
-    logger.info("Registering environment services")
-    await register_environment_services(config)
-
-    logger.info("Registering database services")
-    await register_database_services(config)
-
+    # 2. Pool services - Redis pool must be registered first
     logger.info("Registering pool services")
     await register_pool_services(config)
 
+    # 3. Cache services - Cache manager needs Redis pool
     logger.info("Registering cache services")
     await register_cache_services(config)
+
+    # 4. Database services - Must be registered before environment
+    logger.info("Registering database services")
+    await register_database_services(config)
+
+    # 5. Environment services - Needs cache manager and database adapter
+    logger.info("Registering environment services")
+    await register_environment_services(config)
 
     logger.info("All services registered successfully")
 

@@ -14,7 +14,7 @@ Examples:
     ```
 """
 
-from typing import Any, AsyncContextManager, Dict, Protocol, TypeVar
+from typing import Any, AsyncContextManager, Dict, Protocol, TypeVar, runtime_checkable
 
 from earnorm.pool.protocols.connection import AsyncConnectionProtocol
 
@@ -23,6 +23,7 @@ DBPool = TypeVar("DBPool")
 CollPool = TypeVar("CollPool")
 
 
+@runtime_checkable
 class AsyncPoolProtocol(Protocol[DBPool, CollPool]):
     """Protocol for async connection pools.
 

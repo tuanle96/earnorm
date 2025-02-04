@@ -140,21 +140,16 @@ For more details, refer to the documentation at https://earnorm.readthedocs.io
 import logging
 import signal
 from pathlib import Path
-from typing import Any, Dict, Optional, cast
+from typing import Any, Optional
 
 import yaml
-from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
 
-from earnorm.base.database.adapters.mongo import MongoAdapter
 from earnorm.base.env import Environment
-from earnorm.cache.core.manager import CacheManager
 from earnorm.config.data import SystemConfigData
 from earnorm.config.model import SystemConfig
 from earnorm.di import container
-from earnorm.exceptions import ConfigError, ConfigValidationError, RegistrationError
-from earnorm.pool.backends.mongo import MongoPool
-from earnorm.pool.registry import PoolRegistry
-from earnorm.types import DatabaseModel
+from earnorm.exceptions import ConfigError, ConfigValidationError
+from earnorm.registry import register_all
 
 logger = logging.getLogger(__name__)
 
@@ -215,84 +210,20 @@ async def init(
         except (ConfigError, yaml.YAMLError, ConfigValidationError) as e:
             raise ConfigError(f"Failed to load or validate config: {e}") from e
 
-        # 2. Extract and validate required values
         try:
-            # Validate required fields
-            if not config_dict.get("database_uri"):
-                raise ValueError("database_uri is required")
-            if not config_dict.get("database_name"):
-                raise ValueError("database_name is required")
+            # 2. Create temporary config for service registration
+            config = await SystemConfig.from_data(None, config_data)
+            container.register("config", config)
 
-            # Store validated values with explicit type casting
-            database_uri = str(config_dict["database_uri"])
-            database_name = str(config_dict["database_name"])
+            # 3. Register all services in correct order
+            # This will register cache_manager that env.init() needs
+            await register_all(config)
 
-            # Handle database options with safe type casting
-            raw_options = config_dict.get("database_options")
-            db_options: Dict[str, Any] = {}
-            if isinstance(raw_options, dict):
-                db_options = cast(Dict[str, Any], raw_options)
-            logger.debug("Database options: %s", db_options)
-
-            # Get pool sizes with safe type casting
-            min_pool_size = int(config_dict.get("database_min_pool_size", 5))
-            max_pool_size = int(config_dict.get("database_max_pool_size", 20))
-
-            logger.info("Using database configuration:")
-            logger.info("- URI: %s", database_uri)
-            logger.info("- Database: %s", database_name)
-            logger.info("- Min pool size: %d", min_pool_size)
-            logger.info("- Max pool size: %d", max_pool_size)
-            logger.info("- Options: %s", db_options)
-
-        except Exception as e:
-            raise ConfigError(f"Failed to process config values: {e}") from e
-
-        # 3. Initialize services
-        try:
-            # Create cache manager
-            cache_manager = CacheManager(
-                backend_type="redis",
-                prefix="earnorm",
-                ttl=3600,
-            )
-            container.register("cache_manager", cache_manager)
-
-            # Create and initialize MongoDB pool
-            mongo_pool = MongoPool[
-                AsyncIOMotorDatabase[Dict[str, Any]],
-                AsyncIOMotorCollection[Dict[str, Any]],
-            ](
-                uri=database_uri,
-                database=database_name,
-                min_size=min_pool_size,
-                max_size=max_pool_size,
-                options=db_options,
-            )
-
-            await mongo_pool.init()
-            logger.info("MongoDB pool initialized successfully")
-
-            # Register pool with safe type casting
-            pool_registry = cast(PoolRegistry, await container.get("pool_registry"))
-            pool_registry.register("default", mongo_pool)
-
-            # Create and initialize database adapter
-            adapter = MongoAdapter[DatabaseModel]()
-            await adapter.init()
-            container.register("database_adapter", adapter)
-
-        except Exception as e:
-            logger.error("Failed to initialize services: %s", str(e))
-            raise RegistrationError("Failed to initialize services") from e
-
-        # 4. Initialize Environment and SystemConfig
-        try:
-            # Initialize Environment
+            # 4. Initialize Environment with registered services
             env = Environment.get_instance()
             await env.init(config=config_data)
 
-            # Create and register SystemConfig
+            # 5. Update config with initialized environment
             config = await SystemConfig.from_data(env, config_data)
             container.register("config", config)
 
@@ -301,7 +232,7 @@ async def init(
                 f"Failed to initialize environment and config: {e}"
             ) from e
 
-        # 5. Setup cleanup handlers
+        # 6. Setup cleanup handlers
         if cleanup_handlers:
             logger.info("Setting up cleanup handlers")
             try:

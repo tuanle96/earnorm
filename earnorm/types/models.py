@@ -38,7 +38,7 @@ class ModelProtocol(Protocol):
     _sequence: ClassVar[Optional[str]]
     """ID sequence name."""
 
-    id: int
+    id: str
     """Record ID."""
 
     async def to_dict(self) -> Dict[str, Any]:
@@ -59,7 +59,7 @@ class ModelProtocol(Protocol):
 
     @classmethod
     async def browse(
-        cls, ids: Union[int, List[int]]
+        cls, ids: Union[str, List[str]]
     ) -> Union["ModelProtocol", List["ModelProtocol"]]:
         """Browse records by IDs.
 
@@ -116,7 +116,7 @@ class ModelProtocol(Protocol):
 # Model identifier types
 ModelName = str  # e.g. "res.partner"
 FieldName = str  # e.g. "name"
-RecordID = int  # Record ID type
+RecordID = str  # Record ID type (changed from int to str)
 
 # Type alias for database model
 DatabaseModel = ModelProtocol  # Type alias for database-backed models

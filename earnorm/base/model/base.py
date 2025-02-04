@@ -72,6 +72,7 @@ Examples:
     ...     .execute()
 """
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import (
@@ -87,6 +88,7 @@ from typing import (
     Sequence,
     Set,
     Tuple,
+    Type,
     TypeVar,
     Union,
     cast,
@@ -97,30 +99,25 @@ from bson import ObjectId
 from earnorm.base.database.query.interfaces.domain import DomainExpression
 from earnorm.base.database.query.interfaces.domain import DomainOperator as Operator
 from earnorm.base.database.query.interfaces.domain import LogicalOperator as LogicalOp
-from earnorm.base.database.query.interfaces.operations.aggregate import (
-    AggregateProtocol as AggregateQuery,
-)
-from earnorm.base.database.query.interfaces.operations.join import (
-    JoinProtocol as JoinQuery,
-)
+from earnorm.base.database.query.interfaces.operations.aggregate import AggregateProtocol as AggregateQuery
+from earnorm.base.database.query.interfaces.operations.join import JoinProtocol as JoinQuery
 from earnorm.base.database.query.interfaces.query import QueryProtocol as AsyncQuery
 from earnorm.base.database.transaction.base import Transaction
 from earnorm.base.env import Environment
 from earnorm.base.model.descriptors import FieldsDescriptor
 from earnorm.base.model.meta import ModelMeta
 from earnorm.di import Container
-from earnorm.exceptions import (
-    DatabaseError,
-    FieldValidationError,
-    UniqueConstraintError,
-)
-from earnorm.fields import BaseField
+from earnorm.exceptions import DatabaseError, FieldValidationError, UniqueConstraintError
+from earnorm.fields.base import BaseField
+from earnorm.fields.relation.base import RelationField
 from earnorm.types import DatabaseModel, ValueType
 from earnorm.types.models import ModelProtocol
 
 logger = logging.getLogger(__name__)
 
 ModelT = TypeVar("ModelT", bound=ModelProtocol)
+T = TypeVar("T", bound="BaseModel")
+V = TypeVar("V")
 
 
 class ContainerProtocol(Protocol):
@@ -170,10 +167,10 @@ class BaseModel(metaclass=ModelMeta):
     _env: Environment  # Environment instance
 
     # Model fields (will be set by metaclass)
-    __fields__ = FieldsDescriptor()  # Descriptor for accessing fields
-    id: int = 0  # Record ID with default value
+    __fields__ = FieldsDescriptor()
+    # id field is defined in ModelMeta.DEFAULT_FIELDS as StringField
 
-    _ids: Tuple[Any, ...]  # Record IDs with proper type
+    _ids: Tuple[str, ...]  # Record IDs with proper type
     _changed: Set[str]  # Changed fields with proper type
 
     def __init__(self, env: Optional[Environment] = None) -> None:
@@ -191,6 +188,8 @@ class BaseModel(metaclass=ModelMeta):
         object.__setattr__(self, "_deleted", False)
         object.__setattr__(self, "_ids", ())
         object.__setattr__(self, "_prefetch_ids", ())
+        # Initialize id field in _data
+        self._data["id"] = ""
 
         if not self._name:
             raise ValueError("Model must define _name attribute")
@@ -219,8 +218,8 @@ class BaseModel(metaclass=ModelMeta):
     def _browse(
         cls,
         env: Environment,
-        ids: Sequence[int],
-        prefetch_ids: Optional[Sequence[int]] = None,
+        ids: Sequence[str],
+        prefetch_ids: Optional[Sequence[str]] = None,
     ) -> Self:
         """Create recordset instance.
 
@@ -231,32 +230,86 @@ class BaseModel(metaclass=ModelMeta):
 
         Returns:
             Self: New recordset instance
+
+        Raises:
+            ValueError: If any ID is invalid
         """
         records = object.__new__(cls)
         records._env = env
-        records._ids = tuple(ids)
-        records._prefetch_ids = tuple(prefetch_ids or ids)
+
+        # Validate and convert IDs
+        validated_ids: List[str] = []
+        for id_value in ids:
+            if not id_value:
+                continue
+            try:
+                # Ensure ID is string and valid
+                str_id = str(id_value).strip()
+                if not str_id:
+                    continue
+                # Validate ObjectId format
+                _ = ObjectId(str_id)
+                validated_ids.append(str_id)
+            except Exception as e:
+                logger.warning(f"Invalid ID skipped: {id_value} - {str(e)}")
+                continue
+
+        records._ids = tuple(validated_ids)
+
+        # Handle prefetch IDs
+        if prefetch_ids:
+            validated_prefetch: List[str] = []
+            for pid in prefetch_ids:
+                if not pid:
+                    continue
+                try:
+                    str_pid = str(pid).strip()
+                    if not str_pid:
+                        continue
+                    _ = ObjectId(str_pid)
+                    validated_prefetch.append(str_pid)
+                except Exception as e:
+                    logger.warning(f"Invalid prefetch ID skipped: {pid} - {str(e)}")
+                    continue
+            records._prefetch_ids = tuple(validated_prefetch)
+        else:
+            records._prefetch_ids = records._ids
+
         records._data = {}
         records._changed = set()
         records._deleted = False
         records._set_instance_name(cls._get_instance_name())
+
+        # Set id field in _data
+        records._data["id"] = records._ids[0] if records._ids else ""
         return records
 
     @classmethod
-    async def browse(
-        cls, ids: Union[int, List[int]]
-    ) -> Union[ModelProtocol, List[ModelProtocol]]:
+    async def browse(cls, ids: Union[str, List[str]]) -> Self:
         """Browse records by IDs.
+
+        This method always returns a recordset instance, whether browsing a single ID
+        or multiple IDs.
 
         Args:
             ids: Record ID or list of record IDs
 
         Returns:
-            Single record or list of records
+            Self: A recordset containing the records with the given IDs
+
+        Examples:
+            >>> # Browse single record
+            >>> user = await User.browse("123")
+            >>> print(user.name)
+
+            >>> # Browse multiple records
+            >>> users = await User.browse(["123", "456"])
+            >>> for user in users:
+            ...     print(user.name)
         """
-        if isinstance(ids, int):
+        if isinstance(ids, str):
             return cls._browse(cls._env, [ids])
-        return [cls._browse(cls._env, [id]) for id in ids]
+        return cls._browse(cls._env, ids)
 
     @classmethod
     async def _where_calc(
@@ -270,7 +323,7 @@ class BaseModel(metaclass=ModelMeta):
         Returns:
             Query instance
         """
-        query = await cls._env.adapter.query(cls)
+        query = await cls._env.adapter.query(cast(Type[ModelProtocol], cls))
         if domain:
             expr = DomainExpression(cast(List[Any], list(domain)))
             query = query.filter(expr.to_list())
@@ -326,7 +379,7 @@ class BaseModel(metaclass=ModelMeta):
 
         # Execute query and return recordset
         ids = await query.execute()
-        return cls._browse(cls._env, cast(Sequence[int], ids), cast(Sequence[int], ids))
+        return cls._browse(cls._env, cast(Sequence[str], ids), cast(Sequence[str], ids))
 
     async def _validate_create(self, vals: Dict[str, Any]) -> None:
         """Validate record creation.
@@ -406,32 +459,6 @@ class BaseModel(metaclass=ModelMeta):
             if not self._ids:
                 logger.error("No records to update - IDs are empty")
                 raise ValueError("No records to update")
-
-            # Convert all IDs to strings in a type-safe way
-            def convert_id(model_id: Any) -> str:
-                if isinstance(model_id, (str, int)):
-                    return str(model_id)
-                return str(getattr(model_id, "id", model_id))
-
-            id_list = [convert_id(model_id) for model_id in self._ids]
-
-            # Create query to check existence
-            domain_tuple = cast(
-                Tuple[str, Operator, ValueType],
-                ("id", "in", id_list),
-            )
-            query = await self._where_calc([domain_tuple])
-
-            # Count matching records
-            count = await query.count()
-
-            if count != len(self._ids):
-                logger.error(
-                    "Record count mismatch - Expected: %d, Found: %d",
-                    len(self._ids),
-                    count,
-                )
-                raise ValueError("Some records do not exist")
 
             # Validate field values
             for name, value in vals.items():
@@ -586,19 +613,43 @@ class BaseModel(metaclass=ModelMeta):
             record_id = await self._env.adapter.insert_one(
                 self._name, db_vals  # Collection name from model
             )
+            # Convert ID to string if needed
+            str_id = str(record_id) if record_id else None
+            if not str_id:
+                raise ValueError("Failed to get record ID after creation")
+            self._ids = (str_id,)
+            # Set id field in _data
+            self._data["id"] = str_id
         except Exception as e:
             raise DatabaseError(
                 message=f"Failed to create record: {e}", backend=backend
             ) from e
 
-        # Update record ID
-        self._ids = (record_id,)
+        # Update cache for new record
+        try:
+            cache_manager = await self._env.cache_manager
+            for field_name, value in db_vals.items():
+                await cache_manager.set(
+                    f"{self._name}:{field_name}:{str_id}",
+                    value,
+                    ttl=3600,  # Cache for 1 hour
+                )
+        except Exception as e:
+            logger.warning(f"Failed to update cache for new record: {e}")
+            # Don't raise exception as the record was created successfully
 
     async def _write(self, vals: Dict[str, Any]) -> None:
         """Write values to database.
 
+        This method updates records in the database with the given values.
+        It ensures all IDs are valid strings before converting to ObjectId.
+
         Args:
-            vals: Values to write
+            vals: Field values to update
+
+        Raises:
+            DatabaseError: If database operation fails
+            ValueError: If any ID is invalid
         """
         try:
             # Validate write operation
@@ -612,21 +663,31 @@ class BaseModel(metaclass=ModelMeta):
 
             # Process each model ID
             for model_id in self._ids:
-                logger.debug("Processing model with ID: %s", model_id)
+                # Ensure model_id is valid
+                if not model_id:
+                    raise ValueError("Empty ID is not allowed")
 
-                # Convert ID to ObjectId if string
-                if isinstance(model_id, str):
-                    _id = ObjectId(model_id)
-                elif hasattr(model_id, "id"):
-                    _id = ObjectId(str(getattr(model_id, "id")))
-                else:
-                    _id = model_id
+                try:
+                    str_id = str(model_id).strip()
+                    if not str_id:
+                        raise ValueError("Empty ID after conversion")
+                    _id = ObjectId(str_id)
+                except Exception as e:
+                    raise ValueError(
+                        f"Invalid ID format: {model_id}. Must be a valid ObjectId"
+                    ) from e
+
+                logger.debug("Processing model with ID: %s", model_id)
 
                 # Create update operation
                 update_op = {"filter": {"_id": _id}, "update": {"$set": db_vals}}
                 logger.debug("Created update operation: %s", update_op)
 
                 updates.append(update_op)
+
+            if not updates:
+                logger.warning("No valid records to update")
+                return
 
             logger.debug("Attempting bulk update with %d operations", len(updates))
             result = await self._env.adapter.bulk_write(self._name, updates)
@@ -640,6 +701,12 @@ class BaseModel(metaclass=ModelMeta):
                         f"{self._name}:{field_name}:{record_id}", value
                     )
 
+        except ValueError as e:
+            logger.error("Invalid ID error: %s", str(e), exc_info=True)
+            raise DatabaseError(
+                backend=self._env.adapter.backend_type,
+                message=str(e),
+            ) from e
         except Exception as e:
             logger.error("Failed to update records: %s", str(e), exc_info=True)
             raise DatabaseError(
@@ -648,24 +715,13 @@ class BaseModel(metaclass=ModelMeta):
             ) from e
 
     async def _unlink(self) -> bool:
-        """Delete records in recordset.
-
-        Returns:
-            bool: True if records were deleted successfully
-        """
+        """Delete records in recordset."""
         if not self._ids:
             return False
 
         try:
-            # Get actual ID values from model objects in a database-agnostic way
-            delete_ids = []
-            for model_id in self._ids:
-                if isinstance(model_id, (str, int)):
-                    delete_ids.append(model_id)  # type: ignore
-                elif hasattr(model_id, "id"):
-                    delete_ids.append(getattr(model_id, "id"))  # type: ignore
-                else:
-                    delete_ids.append(model_id)  # type: ignore
+            # Convert all IDs to string format
+            delete_ids = [str(model_id) for model_id in self._ids]
 
             # Delete records using adapter's interface
             result = await self._env.adapter.delete_many_by_filter(
@@ -825,7 +881,9 @@ class BaseModel(metaclass=ModelMeta):
             Aggregate query builder
         """
         logger.debug("Creating aggregate query for model: %s", cls._name)
-        query = await cls._env.adapter.get_aggregate_query(cls)
+        query = await cls._env.adapter.get_aggregate_query(
+            cast(Type[ModelProtocol], cls)
+        )
         return query
 
     @classmethod
@@ -850,7 +908,7 @@ class BaseModel(metaclass=ModelMeta):
             cls._name,
             model,
         )
-        query = await cls._env.adapter.get_join_query(cls)
+        query = await cls._env.adapter.get_join_query(cast(Type[ModelProtocol], cls))
         return query.join(model, on, join_type)
 
     @classmethod
@@ -861,7 +919,7 @@ class BaseModel(metaclass=ModelMeta):
             Group query builder
         """
         logger.debug("Creating group query for model: %s", cls._name)
-        query = await cls._env.adapter.get_group_query(cls)
+        query = await cls._env.adapter.get_group_query(cast(Type[ModelProtocol], cls))
         return query
 
     async def _check_unique_constraints(self, vals: Dict[str, Any]) -> None:
@@ -1000,7 +1058,9 @@ class BaseModel(metaclass=ModelMeta):
         Returns:
             Transaction context manager
         """
-        return await self._env.adapter.transaction(model_type=type(self))
+        return await self._env.adapter.transaction(
+            model_type=cast(Type[ModelProtocol], type(self))
+        )
 
     @classmethod
     async def _get_env(cls) -> Environment:
@@ -1069,3 +1129,180 @@ class BaseModel(metaclass=ModelMeta):
         db_vals["updated_at"] = datetime.now(UTC)
 
         return db_vals
+
+    async def _read_from_cache(self, field_name: str) -> Any:
+        """Read field value from cache.
+
+        Args:
+            field_name: Name of the field to read
+
+        Returns:
+            Any: Cached value or None if not found
+
+        Examples:
+            >>> user = User.browse(1)
+            >>> name = await user._read_from_cache("name")
+            >>> print(name)  # "John" or None if not cached
+        """
+        cache_manager = await self._env.cache_manager
+        key = f"{self._name}:{field_name}:{self.id}"
+        return await cache_manager.get(key)
+
+    async def _write_to_cache(self, field_name: str, value: Any) -> None:
+        """Write field value to cache.
+
+        Args:
+            field_name: Name of the field to write
+            value: Value to cache
+
+        Examples:
+            >>> user = User.browse(1)
+            >>> await user._write_to_cache("name", "John")
+        """
+        cache_manager = await self._env.cache_manager
+        key = f"{self._name}:{field_name}:{self.id}"
+        await cache_manager.set(key, value)
+
+    async def _invalidate_cache(self, field_names: Optional[List[str]] = None) -> None:
+        """Invalidate cache for specified fields.
+
+        Args:
+            field_names: List of field names to invalidate, or None to invalidate all
+
+        Examples:
+            >>> user = User.browse(1)
+            >>> await user._invalidate_cache(["name", "email"])  # Invalidate specific fields
+            >>> await user._invalidate_cache()  # Invalidate all fields
+        """
+        cache_manager = await self._env.cache_manager
+        if field_names is None:
+            # Invalidate all fields
+            field_names = list(self.__fields__.keys())
+        for field_name in field_names:
+            for record_id in self._ids:
+                key = f"{self._name}:{field_name}:{record_id}"
+                await cache_manager.delete(key)
+
+    async def _prefetch_fields(self, field_names: List[str]) -> None:
+        """Prefetch field values for recordset.
+
+        This method prefetches values for specified fields and their related fields.
+        It helps reduce the number of database queries by loading data in batches.
+
+        Args:
+            field_names: List of field names to prefetch
+
+        Examples:
+            >>> users = User.search([("age", ">", 18)])
+            >>> await users._prefetch_fields(["company_id", "role_ids"])
+        """
+        cache_manager = await self._env.cache_manager
+
+        # Group fields by model
+        field_groups: Dict[str, List[str]] = {}
+        for field_name in field_names:
+            field = self.__fields__[field_name]
+            if isinstance(field, RelationField):
+                model_name = field.model_ref
+                if isinstance(model_name, str):
+                    if model_name not in field_groups:
+                        field_groups[model_name] = []
+                    field_groups[model_name].append(field_name)
+
+        # Prefetch each group
+        for model_name, model_fields in field_groups.items():
+            # Get related record IDs
+            related_ids: Set[str] = set()
+            for field_name in model_fields:
+                cached_values: List[Any] = await asyncio.gather(
+                    *(self._read_from_cache(field_name) for _ in self._ids),
+                    return_exceptions=True,
+                )
+                for value in cached_values:
+                    if value is not None:
+                        if isinstance(value, (list, tuple)):
+                            # Handle list/tuple of IDs
+                            for item in value:  # type: ignore
+                                try:
+                                    # Convert any value to string safely
+                                    str_id = str(item) if item is not None else None  # type: ignore
+                                    if str_id is not None:
+                                        related_ids.add(str_id)
+                                except (ValueError, TypeError):
+                                    continue
+                        else:
+                            try:
+                                # Handle single ID value
+                                str_id = str(value) if value is not None else None
+                                if str_id is not None:
+                                    related_ids.add(str_id)
+                            except (ValueError, TypeError):
+                                continue
+
+            if related_ids:
+                # Get related model class
+                model_cls = await self._env.get_model(model_name)
+                if model_cls:
+                    model_cls = cast(Type[BaseModel], model_cls)
+                    # Load related records
+                    related_records = await model_cls.browse(list(related_ids))
+                    records_list = (
+                        [related_records]
+                        if not isinstance(related_records, list)
+                        else related_records
+                    )
+
+                    # Cache related records
+                    for record in records_list:
+                        record_data = await record.to_dict()
+                        for fname, value in record_data.items():
+                            await cache_manager.set(
+                                f"{model_name}:{fname}:{record.id}", value, ttl=3600
+                            )
+
+    async def prefetch(self, *fields: str) -> None:
+        """Prefetch specified fields.
+
+        This is a convenience method that calls _prefetch_fields internally.
+
+        Args:
+            *fields: Field names to prefetch
+
+        Examples:
+            >>> users = User.search([("age", ">", 18)])
+            >>> await users.prefetch("company_id", "role_ids")
+        """
+        await self._prefetch_fields(list(fields))
+
+    @property
+    def id(self) -> str:
+        """Get ID of first record in recordset.
+
+        Returns:
+            str: ID of first record or empty string if recordset is empty.
+                 Always returns a string, converting from ObjectId if needed.
+
+        Examples:
+            >>> user = await User.browse("123")
+            >>> print(user.id)  # "123"
+            >>> users = await User.search([])
+            >>> print(users.id)  # ""
+        """
+        raw_id = self._data.get("id")
+        if raw_id is None:
+            return ""
+        return str(raw_id)
+
+    @id.setter
+    def id(self, value: str) -> None:
+        """Set ID of first record in recordset.
+
+        Args:
+            value: ID value to set. Must be a string or convertible to string.
+
+        Examples:
+            >>> user = User()
+            >>> user.id = "123"
+            >>> print(user.id)  # "123"
+        """
+        self._data["id"] = str(value) if value else ""
