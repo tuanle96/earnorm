@@ -1,4 +1,4 @@
-FROM python:3.8-slim
+FROM python:3.12
 
 # Prevent Python from writing pyc files to disc and from buffering stdout and stderr
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -33,4 +33,4 @@ COPY .pre-commit-config.yaml ./
 RUN git init && pre-commit install-hooks
 
 # Set the default shell to bash
-ENV SHELL /bin/bash 
+ENV SHELL /bin/bash

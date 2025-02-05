@@ -26,13 +26,14 @@ Examples:
     ```
 """
 
+import hashlib
 import logging
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type, Union
 
 from earnorm.cache.core.backend import BaseCacheBackend
-from earnorm.cache.core.exceptions import CacheError
 from earnorm.cache.core.serializer import SerializerProtocol
 from earnorm.cache.serializers.json import JsonSerializer
+from earnorm.exceptions import CacheError
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,8 @@ class CacheManager:
     - TTL support
     - Error handling
     - Batch operations
+    - Query result caching
+    - Model data caching
 
     Examples:
         ```python
@@ -65,13 +68,14 @@ class CacheManager:
         value = await cache.get("key")
         await cache.delete("key")
 
-        # Batch operations
-        await cache.set_many({
-            "key1": "value1",
-            "key2": "value2"
-        })
-        values = await cache.get_many(["key1", "key2"])
-        await cache.delete_many(["key1", "key2"])
+        # Model caching
+        await cache.set_model("user", "123", {"name": "John"})
+        user = await cache.get_model("user", "123")
+
+        # Query caching
+        query_hash = cache.get_query_hash({"age": {"$gt": 18}})
+        await cache.set_query("user", query_hash, [{"id": "1"}], limit=10)
+        results = await cache.get_query("user", query_hash, limit=10)
         ```
     """
 
@@ -93,7 +97,9 @@ class CacheManager:
             CacheError: If backend type is not supported
         """
         if backend_type not in ["redis"]:
-            raise CacheError(f"Unsupported backend type: {backend_type}")
+            raise CacheError(
+                f"Unsupported backend type: {backend_type}", backend="redis"
+            )
 
         self._backend_type = backend_type
         self._prefix = prefix
@@ -131,9 +137,11 @@ class CacheManager:
                 serializer = self._get_serializer()
 
                 # Create backend instance
-                self._backend = backend_class(serializer=serializer)
+                self._backend = backend_class(
+                    serializer=serializer, prefix=self._prefix, ttl=self._ttl
+                )
             except Exception as e:
-                raise CacheError("Failed to initialize backend") from e
+                raise CacheError("Failed to initialize backend", backend="redis") from e
         return self._backend
 
     def _get_backend_class(self) -> Type[BaseCacheBackend]:
@@ -149,7 +157,9 @@ class CacheManager:
             from earnorm.cache.backends.redis import RedisBackend
 
             return RedisBackend
-        raise CacheError(f"Unsupported backend type: {self._backend_type}")
+        raise CacheError(
+            f"Unsupported backend type: {self._backend_type}", backend="redis"
+        )
 
     def _get_serializer(self) -> SerializerProtocol:
         """Get serializer.
@@ -163,21 +173,131 @@ class CacheManager:
         try:
             return JsonSerializer()
         except Exception as e:
-            raise CacheError("Failed to create serializer") from e
+            raise CacheError("Failed to create serializer", backend="redis") from e
 
-    async def get(self, key: str) -> Optional[str]:
+    def get_query_hash(self, query: Dict[str, Any]) -> str:
+        """Generate hash for query parameters.
+
+        Args:
+            query: Query parameters
+
+        Returns:
+            str: Query hash
+        """
+        # Sort query parameters for consistent hashing
+        sorted_query = {str(k): str(v) for k, v in sorted(query.items())}
+        query_str = ":".join(f"{k}={v}" for k, v in sorted_query.items())
+        return hashlib.md5(query_str.encode()).hexdigest()[:16]
+
+    async def get_model(
+        self, model_name: str, record_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Get model data from cache.
+
+        Args:
+            model_name: Name of the model
+            record_id: Record ID
+
+        Returns:
+            Optional[Dict[str, Any]]: Model data or None if not found
+        """
+        key = f"model:{model_name}:record:{record_id}"
+        return await self.get(key)
+
+    async def set_model(
+        self,
+        model_name: str,
+        record_id: str,
+        data: Dict[str, Any],
+        ttl: Optional[int] = None,
+    ) -> None:
+        """Set model data in cache.
+
+        Args:
+            model_name: Name of the model
+            record_id: Record ID
+            data: Model data
+            ttl: Optional TTL in seconds
+        """
+        key = f"model:{model_name}:record:{record_id}"
+        await self.set(key, data, ttl)
+
+    async def get_query(
+        self, model_name: str, query_hash: str, **params: Union[str, int]
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Get query results from cache.
+
+        Args:
+            model_name: Name of the model
+            query_hash: Query hash
+            **params: Additional query parameters (e.g. limit, offset)
+
+        Returns:
+            Optional[List[Dict[str, Any]]]: Query results or None if not found
+        """
+        key = f"query:{model_name}:{query_hash}"
+        if params:
+            key = f"{key}:" + ":".join(f"{k}={v}" for k, v in sorted(params.items()))
+        return await self.get(key)
+
+    async def set_query(
+        self,
+        model_name: str,
+        query_hash: str,
+        results: List[Dict[str, Any]],
+        ttl: Optional[int] = None,
+        **params: Union[str, int],
+    ) -> None:
+        """Set query results in cache.
+
+        Args:
+            model_name: Name of the model
+            query_hash: Query hash
+            results: Query results
+            ttl: Optional TTL in seconds
+            **params: Additional query parameters (e.g. limit, offset)
+        """
+        key = f"query:{model_name}:{query_hash}"
+        if params:
+            key = f"{key}:" + ":".join(f"{k}={v}" for k, v in sorted(params.items()))
+        await self.set(key, results, ttl)
+
+    async def invalidate_model(self, model_name: str, record_id: str) -> None:
+        """Invalidate model cache.
+
+        Args:
+            model_name: Name of the model
+            record_id: Record ID
+        """
+        key = f"model:{model_name}:record:{record_id}"
+        await self.delete(key)
+
+    async def invalidate_query(self, model_name: str) -> None:
+        """Invalidate all query results for model.
+
+        Args:
+            model_name: Name of the model
+        """
+        pattern = f"query:{model_name}:*"
+        await self.delete(pattern)
+
+    async def get(self, key: str) -> Optional[Any]:
         """Get value from cache.
 
         Args:
             key: Cache key
 
         Returns:
-            Optional[str]: Cached value or None if not found
+            Optional[Any]: Cached value or None if not found
 
         Raises:
             CacheError: If failed to get value
         """
-        return await self.backend.get(key)
+        try:
+            return await self.backend.get(key)
+        except Exception as e:
+            logger.error(f"Failed to get cache value: {str(e)}")
+            return None
 
     async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
         """Set value in cache.
@@ -190,7 +310,10 @@ class CacheManager:
         Raises:
             CacheError: If failed to set value
         """
-        await self.backend.set(key, value, ttl)
+        try:
+            await self.backend.set(key, value, ttl)
+        except Exception as e:
+            logger.error(f"Failed to set cache value: {str(e)}")
 
     async def delete(self, key: str) -> None:
         """Delete value from cache.
@@ -201,7 +324,10 @@ class CacheManager:
         Raises:
             CacheError: If failed to delete value
         """
-        await self.backend.delete(key)
+        try:
+            await self.backend.delete(key)
+        except Exception as e:
+            logger.error(f"Failed to delete cache value: {str(e)}")
 
     async def get_many(self, keys: List[str]) -> Dict[str, Any]:
         """Get multiple values from cache.
@@ -215,7 +341,11 @@ class CacheManager:
         Raises:
             CacheError: If failed to get values
         """
-        return await self.backend.get_many(keys)
+        try:
+            return await self.backend.get_many(keys)
+        except Exception as e:
+            logger.error(f"Failed to get multiple cache values: {str(e)}")
+            return {}
 
     async def set_many(
         self, mapping: Dict[str, Any], ttl: Optional[int] = None
@@ -229,7 +359,10 @@ class CacheManager:
         Raises:
             CacheError: If failed to set values
         """
-        await self.backend.set_many(mapping, ttl)
+        try:
+            await self.backend.set_many(mapping, ttl)
+        except Exception as e:
+            logger.error(f"Failed to set multiple cache values: {str(e)}")
 
     async def delete_many(self, keys: List[str]) -> None:
         """Delete multiple values from cache.
@@ -240,28 +373,33 @@ class CacheManager:
         Raises:
             CacheError: If failed to delete values
         """
-        await self.backend.delete_many(keys)
+        try:
+            await self.backend.delete_many(keys)
+        except Exception as e:
+            logger.error(f"Failed to delete multiple cache values: {str(e)}")
+
+    async def close(self) -> None:
+        """Close cache backend."""
+        if self._backend:
+            await self._backend.close()
+
+    async def cleanup(self) -> None:
+        """Cleanup cache backend."""
+        if self._backend:
+            await self._backend.cleanup()
 
     async def queue_write(
         self, key: str, value: Any, ttl: Optional[int] = None
     ) -> None:
-        """Queue write operation for batch processing.
+        """Queue value for asynchronous write to cache.
 
         Args:
             key: Cache key
             value: Value to cache
             ttl: Optional TTL in seconds
-
-        Raises:
-            CacheError: If failed to queue write operation
         """
-        # For now, just write immediately since we don't have batch processing yet
-        await self.set(key, value, ttl)
-
-    async def close(self) -> None:
-        """Close cache backend."""
-        await self.backend.close()
-
-    async def cleanup(self) -> None:
-        """Cleanup cache backend."""
-        await self.backend.cleanup()
+        try:
+            # For now, implement as write-through since queue is not implemented yet
+            await self.set(key, value, ttl)
+        except Exception as e:
+            logger.error(f"Failed to queue cache write: {str(e)}")

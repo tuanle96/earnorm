@@ -43,13 +43,6 @@ See Also:
 """
 
 from earnorm.cache.backends.redis import RedisBackend
-from earnorm.cache.core.exceptions import (
-    CacheError,
-    CacheConnectionError,
-    LockError,
-    SerializationError,
-    ValidationError,
-)
 from earnorm.cache.core.lock import DistributedLock
 from earnorm.cache.core.manager import CacheManager
 from earnorm.cache.core.metrics import CacheMetrics, MetricsCollector
@@ -63,12 +56,6 @@ __all__ = [
     "DistributedLock",
     "CacheMetrics",
     "MetricsCollector",
-    # Exceptions
-    "CacheError",
-    "CacheConnectionError",
-    "LockError",
-    "SerializationError",
-    "ValidationError",
     # Decorators
     "cached",
 ]

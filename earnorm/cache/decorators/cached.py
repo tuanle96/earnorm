@@ -39,6 +39,7 @@ import hashlib
 import inspect
 import json
 import logging
+import time
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -50,7 +51,7 @@ from typing import (
     overload,
 )
 
-from earnorm.cache.core.exceptions import CacheError
+from earnorm.exceptions import CacheError
 
 if TYPE_CHECKING:
     from earnorm.cache.core.manager import CacheManager
@@ -107,11 +108,11 @@ def _make_cached_decorator(
 
                     cache_manager = await container.get("cache_manager")
                 except (ImportError, AttributeError, ValueError) as e:
-                    # Log error but continue without caching
                     logger.warning("Failed to get cache manager: %s", e)
                     return await func(*args, **kwargs)
 
             if not cache_manager or not cache_manager.is_connected:
+                logger.debug("Cache manager not available, executing function directly")
                 return await func(*args, **kwargs)
 
             # Generate cache key
@@ -137,27 +138,44 @@ def _make_cached_decorator(
                 arg_key.update(f"{key}:{value}".encode())
 
             cache_key = f"{prefix}:{arg_key.hexdigest()}"
+            logger.debug("Generated cache key: %s", cache_key)
 
             # Try to get from cache
             try:
+                start_time = time.time()
                 cached_value = await cache_manager.get(cache_key)
+                duration = (time.time() - start_time) * 1000
+
                 if cached_value is not None:
+                    logger.debug("Cache HIT for key '%s' (%.2fms)", cache_key, duration)
                     return cached_value
+                else:
+                    logger.debug("Cache MISS for key '%s'", cache_key)
             except CacheError as e:
-                # Log error but continue without caching
-                logger.warning("Failed to get cached value: %s", e)
+                logger.warning(
+                    "Failed to get cached value for key '%s': %s", cache_key, e
+                )
                 return await func(*args, **kwargs)
 
             # Call function and cache result
+            start_time = time.time()
             result = await func(*args, **kwargs)
+            execution_time = (time.time() - start_time) * 1000
+            logger.debug("Function execution completed in %.2fms", execution_time)
 
             try:
                 # Verify result is JSON serializable
+                start_time = time.time()
                 json.dumps(result)
                 await cache_manager.set(cache_key, result, ttl)
+                cache_time = (time.time() - start_time) * 1000
+                logger.debug(
+                    "Successfully cached result for key '%s' (%.2fms)",
+                    cache_key,
+                    cache_time,
+                )
             except (TypeError, ValueError, CacheError) as e:
-                # Log error but continue without caching
-                logger.warning("Failed to cache result: %s", e)
+                logger.warning("Failed to cache result for key '%s': %s", cache_key, e)
 
             return result
 

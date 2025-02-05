@@ -21,17 +21,28 @@ Examples:
 """
 
 import logging
-from contextlib import AsyncExitStack
-from types import TracebackType
-from typing import Any, Dict, List, Optional, Type, TypeVar, Union, cast
+import time
+from typing import (
+    Any,
+    AsyncIterator,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    TypeVar,
+    Union,
+    cast,
+)
 
 from redis.asyncio import Redis
 from redis.asyncio.client import Pipeline
+from redis.exceptions import RedisError
 
 from earnorm.cache.core.backend import BaseCacheBackend
-from earnorm.cache.core.exceptions import CacheError
 from earnorm.cache.core.serializer import SerializerProtocol
-from earnorm.pool.backends.redis.connection import RedisConnection
+from earnorm.exceptions import CacheError
 from earnorm.pool.protocols.pool import AsyncPoolProtocol
 
 logger = logging.getLogger(__name__)
@@ -40,44 +51,26 @@ logger = logging.getLogger(__name__)
 RedisConn = TypeVar("RedisConn", bound=Redis)
 RedisValue = Union[str, bytes, int, float, None]
 RedisPipelineResult = List[RedisValue]
+RedisScanResult = AsyncIterator[Union[str, bytes]]
+RedisKey = Union[str, bytes]
 
 
-class RedisConnectionManager:
-    """Redis connection context manager."""
+class RedisCommandProtocol(Protocol):
+    """Protocol for Redis commands."""
 
-    def __init__(self, pool: AsyncPoolProtocol[Redis, None]) -> None:
-        """Initialize Redis connection manager.
+    async def execute_typed(self, command: str, *args: Any, **kwargs: Any) -> Any:
+        """Execute Redis command with type hints."""
+        ...
 
-        Args:
-            pool: Redis connection pool
-        """
-        self._pool = pool
-        self._stack = AsyncExitStack()
-        self._conn: Optional[RedisConnection[Redis]] = None
-
-    async def __aenter__(self) -> RedisConnection[Redis]:
-        """Enter async context.
-
-        Returns:
-            RedisConnection: Redis connection
-        """
-        conn_ctx = await self._pool.connection()
-        redis_conn = await self._stack.enter_async_context(conn_ctx)
-        self._conn = cast(RedisConnection[Redis], redis_conn)
-        return self._conn
-
-    async def __aexit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[TracebackType],
-    ) -> None:
-        """Exit async context."""
-        await self._stack.aclose()
+    def pipeline(self) -> Pipeline:
+        """Get Redis pipeline."""
+        ...
 
 
 class RedisBackend(BaseCacheBackend):
     """Redis cache backend implementation."""
+
+    CACHE_VERSION = "v1"  # Global cache version
 
     def __init__(
         self,
@@ -96,6 +89,25 @@ class RedisBackend(BaseCacheBackend):
         self._prefix = prefix
         self._ttl = ttl
         self._pool: Optional[AsyncPoolProtocol[Redis, None]] = None
+        self._hit_count: int = 0
+        self._miss_count: int = 0
+
+    @property
+    def hit_ratio(self) -> float:
+        """Get cache hit ratio.
+
+        Returns:
+            float: Cache hit ratio between 0 and 1
+
+        Examples:
+            >>> cache = RedisBackend()
+            >>> cache.hit_ratio
+            0.75
+        """
+        total = self._hit_count + self._miss_count
+        if total == 0:
+            return 0.0
+        return self._hit_count / total
 
     async def _init_pool(self) -> None:
         """Initialize Redis pool from container.
@@ -109,10 +121,12 @@ class RedisBackend(BaseCacheBackend):
 
                 pool = await container.get("redis_pool")
                 if not isinstance(pool, AsyncPoolProtocol):
-                    raise CacheError("Invalid Redis pool type")
+                    raise CacheError("Invalid Redis pool type", backend="redis")
                 self._pool = pool
+                logger.info("Redis pool initialized successfully")
             except Exception as e:
-                raise CacheError("Failed to get Redis pool") from e
+                logger.error("Failed to initialize Redis pool: %s", str(e))
+                raise CacheError("Failed to get Redis pool", backend="redis") from e
 
     async def get_pool(self) -> AsyncPoolProtocol[Redis, None]:
         """Get Redis pool.
@@ -125,19 +139,148 @@ class RedisBackend(BaseCacheBackend):
         """
         await self._init_pool()
         if self._pool is None:
-            raise CacheError("Redis pool is not initialized")
+            raise CacheError("Redis pool is not initialized", backend="redis")
         return self._pool
 
+    def _get_cache_version(self) -> str:
+        """Get current cache version.
+
+        Returns:
+            str: Current cache version string
+        """
+        return self.CACHE_VERSION
+
+    def _get_cache_key(self, key_type: str, *parts: str) -> str:
+        """Generate standardized cache key.
+
+        Args:
+            key_type: Type of key (model, query, etc)
+            parts: Key parts to join
+
+        Returns:
+            str: Standardized cache key with prefix and version
+
+        Examples:
+            >>> backend = RedisBackend(prefix="app")
+            >>> backend._get_cache_key("model", "user", "123")
+            'app:v1:model:user:123'
+            >>> backend._get_cache_key("query", "user", "abc123")
+            'app:v1:query:user:abc123'
+        """
+        key = f"{key_type}:{':'.join(parts)}"
+        return self._prefix_key(key)
+
     def _prefix_key(self, key: str) -> str:
-        """Add prefix to key.
+        """Add prefix and version to key.
 
         Args:
             key: Cache key
 
         Returns:
-            str: Prefixed key
+            str: Prefixed and versioned key
+
+        Examples:
+            >>> backend = RedisBackend(prefix="app")
+            >>> backend._prefix_key("user:1")
+            'app:v1:user:1'
         """
-        return f"{self._prefix}:{key}"
+        # If key already has prefix, return as is
+        if key.startswith(f"{self._prefix}:{self._get_cache_version()}:"):
+            return key
+
+        # Add prefix and version
+        return f"{self._prefix}:{self._get_cache_version()}:{key}"
+
+    def _get_model_key(self, model_name: str, record_id: str) -> str:
+        """Generate cache key for model record.
+
+        Args:
+            model_name: Name of the model
+            record_id: Record ID
+
+        Returns:
+            str: Cache key for model record
+
+        Examples:
+            >>> backend = RedisBackend(prefix="app")
+            >>> backend._get_model_key("user", "123")
+            'app:v1:model:user:record:123'
+        """
+        return self._get_cache_key("model", model_name, "record", record_id)
+
+    def _get_query_key(self, model_name: str, query_hash: str, **params: str) -> str:
+        """Generate cache key for query results.
+
+        Args:
+            model_name: Name of the model
+            query_hash: Hash of query parameters
+            **params: Additional query parameters (e.g. limit, offset)
+
+        Returns:
+            str: Cache key for query results
+
+        Examples:
+            >>> backend = RedisBackend(prefix="app")
+            >>> backend._get_query_key("user", "abc123", limit="10")
+            'app:v1:query:user:abc123:limit:10'
+        """
+        parts = [model_name, query_hash]
+        for k, v in sorted(params.items()):
+            parts.extend([k, str(v)])
+        return self._get_cache_key("query", *parts)
+
+    def _get_model_pattern(self, model_name: str) -> str:
+        """Generate pattern for model keys.
+
+        Args:
+            model_name: Name of the model
+
+        Returns:
+            str: Pattern for model keys
+
+        Examples:
+            >>> backend = RedisBackend(prefix="app")
+            >>> backend._get_model_pattern("user")
+            'app:v1:model:user:*'
+        """
+        return self._get_cache_key("model", model_name, "*")
+
+    def _get_query_pattern(self, model_name: str) -> str:
+        """Generate pattern for query keys.
+
+        Args:
+            model_name: Name of the model
+
+        Returns:
+            str: Pattern for query keys
+
+        Examples:
+            >>> backend = RedisBackend(prefix="app")
+            >>> backend._get_query_pattern("user")
+            'app:v1:query:user:*'
+        """
+        return self._get_cache_key("query", model_name, "*")
+
+    async def _validate_cache_data(self, key: str, value: Any) -> bool:
+        """Validate cache data before setting.
+
+        Args:
+            key: Cache key
+            value: Value to validate
+
+        Returns:
+            bool: True if data is valid, False otherwise
+        """
+        if value is None:
+            logger.warning(f"Attempting to cache None value for key {key}")
+            return False
+
+        if isinstance(value, dict):
+            if not any(v is not None for v in value.values()):  # type: ignore
+                logger.warning(f"All values in dict are None for key {key}")
+                return False
+
+        return True
 
     async def get(self, key: str) -> Optional[Any]:
         """Get value from cache.
@@ -149,22 +292,69 @@ class RedisBackend(BaseCacheBackend):
             Optional[Any]: Cached value or None if not found
 
         Raises:
-            CacheError: If failed to get value
+            CacheError: If Redis operation fails
         """
         try:
+            start_time = time.time()
             pool = await self.get_pool()
-            async with RedisConnectionManager(pool) as conn:
-                value = await conn.execute_typed("get", self._prefix_key(key))
-                value = cast(RedisValue, value)
-                if value is None:
-                    return None
-                if isinstance(value, bytes):
-                    return self._serializer.loads(value.decode())
-                return None
-        except Exception as e:
-            raise CacheError(f"Failed to get value for key {key}") from e
+            async with await pool.connection() as conn:
+                redis_conn = cast(RedisCommandProtocol, conn)
+                prefixed_key = self._prefix_key(key)
+                value = await redis_conn.execute_typed("get", prefixed_key)
+                duration = (time.time() - start_time) * 1000
 
-    async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
+                if value is None:
+                    self._miss_count += 1
+                    logger.debug(f"Cache MISS for key '{key}' in {duration:.2f}ms")
+                    return None
+
+                self._hit_count += 1
+                logger.debug(f"Cache HIT for key '{key}' in {duration:.2f}ms")
+
+                if isinstance(value, bytes):
+                    try:
+                        result = self._serializer.loads(value.decode())
+                        if result is None:
+                            # Invalid cache data, remove it
+                            logger.warning(
+                                f"Invalid cache data for key '{key}', removing..."
+                            )
+                            await self.delete(key)
+                            return None
+
+                        # Validate deserialized data
+                        if not await self._validate_cache_data(key, result):
+                            logger.warning(
+                                f"Invalid cache data format for key '{key}', removing..."
+                            )
+                            await self.delete(key)
+                            return None
+
+                        # Log the actual data for debugging
+                        logger.debug(
+                            f"Deserialized cache data for key '{key}': {result}"
+                        )
+                        return result
+
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to deserialize cache data for key '{key}': {str(e)}"
+                        )
+                        await self.delete(key)
+                        return None
+
+                return None
+
+        except RedisError as e:
+            logger.error(f"Redis error in get(): {str(e)}")
+            raise CacheError(f"Redis error: {str(e)}", backend="redis") from e
+
+    async def set(
+        self,
+        key: str,
+        value: Any,
+        ttl: Optional[int] = None,
+    ) -> None:
         """Set value in cache.
 
         Args:
@@ -173,19 +363,38 @@ class RedisBackend(BaseCacheBackend):
             ttl: Optional TTL in seconds
 
         Raises:
-            CacheError: If failed to set value
+            CacheError: If Redis operation fails
         """
         try:
+            # Validate value before serialization
+            if not await self._validate_cache_data(key, value):
+                logger.warning(f"Invalid cache data for key '{key}', skipping...")
+                return
+
+            # Serialize value
+            data = self._serializer.dumps(value)
+            if not data:
+                logger.error(f"Failed to serialize value for key '{key}'")
+                return
+
+            start_time = time.time()
             pool = await self.get_pool()
-            async with RedisConnectionManager(pool) as conn:
-                await conn.execute_typed(
-                    "set",
-                    self._prefix_key(key),
-                    self._serializer.dumps(value),
-                    ex=ttl or self._ttl,
-                )
-        except Exception as e:
-            raise CacheError(f"Failed to set value for key {key}") from e
+            async with await pool.connection() as conn:
+                redis_conn = cast(RedisCommandProtocol, conn)
+                # Set new value
+                cache_key = self._prefix_key(key)
+                ttl = ttl or self._ttl
+                success = await redis_conn.execute_typed("setex", cache_key, ttl, data)
+
+                duration = (time.time() - start_time) * 1000
+                if success:
+                    logger.debug(f"Cache SET for key '{key}' in {duration:.2f}ms")
+                else:
+                    logger.warning(f"Failed to set cache for key '{key}'")
+
+        except RedisError as e:
+            logger.error(f"Redis error in set(): {str(e)}")
+            raise CacheError(f"Redis error: {str(e)}", backend="redis") from e
 
     async def delete(self, key: str) -> None:
         """Delete value from cache.
@@ -194,14 +403,100 @@ class RedisBackend(BaseCacheBackend):
             key: Cache key
 
         Raises:
-            CacheError: If failed to delete value
+            CacheError: If Redis operation fails
         """
         try:
+            start_time = time.time()
             pool = await self.get_pool()
-            async with RedisConnectionManager(pool) as conn:
-                await conn.execute_typed("del", self._prefix_key(key))
-        except Exception as e:
-            raise CacheError(f"Failed to delete value for key {key}") from e
+            async with await pool.connection() as conn:
+                redis_conn = cast(RedisCommandProtocol, conn)
+                # Delete all versions
+                pattern = self._prefix_key(key)
+                deleted = 0
+                cursor = "0"
+
+                while True:  # Continue until cursor is 0
+                    # Execute scan command for each iteration
+                    result = await redis_conn.execute_typed(
+                        "scan", cursor, match=pattern
+                    )
+                    if not result or len(result) != 2:
+                        break
+
+                    cursor_result: Tuple[Union[str, bytes], Sequence[RedisKey]] = cast(
+                        Tuple[Union[str, bytes], Sequence[RedisKey]], result
+                    )
+                    cursor, keys = cursor_result
+                    cursor = str(cursor)  # Convert cursor to string
+
+                    if isinstance(keys, (list, tuple)):
+                        for cache_key in keys:
+                            if isinstance(cache_key, bytes):
+                                if await redis_conn.execute_typed("delete", cache_key):
+                                    deleted += 1
+
+                    if cursor == "0":  # Stop when cursor returns to 0
+                        break
+
+                duration = (time.time() - start_time) * 1000
+                if deleted > 0:
+                    logger.debug(
+                        f"Cache DELETE {deleted} keys for '{key}' in {duration:.2f}ms"
+                    )
+
+        except RedisError as e:
+            logger.error(f"Redis error in delete(): {str(e)}")
+            raise CacheError(f"Redis error: {str(e)}", backend="redis") from e
+
+    async def clear(self) -> bool:
+        """Clear all cache entries.
+
+        Returns:
+            bool: True if cache was cleared successfully
+
+        Raises:
+            CacheError: If Redis operation fails
+        """
+        try:
+            start_time = time.time()
+            pool = await self.get_pool()
+            async with await pool.connection() as conn:
+                redis_conn = cast(RedisCommandProtocol, conn)
+                # Delete all keys with prefix
+                pattern = self._prefix_key("*")
+                deleted = 0
+                cursor = "0"
+
+                while True:  # Continue until cursor is 0
+                    # Execute scan command for each iteration
+                    result = await redis_conn.execute_typed(
+                        "scan", cursor, match=pattern
+                    )
+                    if not result or len(result) != 2:
+                        break
+
+                    cursor_result: Tuple[Union[str, bytes], Sequence[RedisKey]] = cast(
+                        Tuple[Union[str, bytes], Sequence[RedisKey]], result
+                    )
+                    cursor, keys = cursor_result
+                    cursor = str(cursor)  # Convert cursor to string
+
+                    if isinstance(keys, (list, tuple)):
+                        for cache_key in keys:
+                            if isinstance(cache_key, bytes):
+                                if await redis_conn.execute_typed("delete", cache_key):
+                                    deleted += 1
+
+                    if cursor == "0":  # Stop when cursor returns to 0
+                        break
+
+                duration = (time.time() - start_time) * 1000
+                logger.debug(f"Cache CLEAR {deleted} keys in {duration:.2f}ms")
+                return deleted > 0
+
+        except RedisError as e:
+            logger.error(f"Redis error in clear(): {str(e)}")
+            raise CacheError(f"Redis error: {str(e)}", backend="redis") from e
 
     async def get_many(self, keys: List[str]) -> Dict[str, Any]:
         """Get multiple values from cache.
@@ -220,13 +515,14 @@ class RedisBackend(BaseCacheBackend):
 
         try:
             pool = await self.get_pool()
-            async with RedisConnectionManager(pool) as conn:
+            async with await pool.connection() as conn:
+                redis_conn = cast(RedisCommandProtocol, conn)
                 # Get values using pipeline
-                pipe: Pipeline = conn.pipeline()
+                pipe = redis_conn.pipeline()
                 prefixed_keys = [self._prefix_key(key) for key in keys]
                 for key in prefixed_keys:
                     pipe.get(key)
-                result: List[Any] = await pipe.execute()
+                result = await pipe.execute()  # type: ignore
                 values = cast(List[Optional[RedisValue]], result)
 
                 # Build result dictionary
@@ -236,7 +532,7 @@ class RedisBackend(BaseCacheBackend):
                         result_dict[key] = self._serializer.loads(value.decode())
                 return result_dict
         except Exception as e:
-            raise CacheError("Failed to get multiple values") from e
+            raise CacheError("Failed to get multiple values", backend="redis") from e
 
     async def set_many(
         self, mapping: Dict[str, Any], ttl: Optional[int] = None
@@ -255,9 +551,10 @@ class RedisBackend(BaseCacheBackend):
 
         try:
             pool = await self.get_pool()
-            async with RedisConnectionManager(pool) as conn:
+            async with await pool.connection() as conn:
+                redis_conn = cast(RedisCommandProtocol, conn)
                 # Set values using pipeline
-                pipe = conn.pipeline()
+                pipe = redis_conn.pipeline()
                 for key, value in mapping.items():
                     pipe.set(
                         self._prefix_key(key),
@@ -266,7 +563,7 @@ class RedisBackend(BaseCacheBackend):
                     )
                 await pipe.execute()
         except Exception as e:
-            raise CacheError("Failed to set multiple values") from e
+            raise CacheError("Failed to set multiple values", backend="redis") from e
 
     async def delete_many(self, keys: List[str]) -> None:
         """Delete multiple values from cache.
@@ -282,11 +579,12 @@ class RedisBackend(BaseCacheBackend):
 
         try:
             pool = await self.get_pool()
-            async with RedisConnectionManager(pool) as conn:
+            async with await pool.connection() as conn:
+                redis_conn = cast(RedisCommandProtocol, conn)
                 # Delete values using pipeline
-                pipe = conn.pipeline()
+                pipe = redis_conn.pipeline()
                 for key in keys:
                     pipe.delete(self._prefix_key(key))
                 await pipe.execute()
         except Exception as e:
-            raise CacheError("Failed to delete multiple values") from e
+            raise CacheError("Failed to delete multiple values", backend="redis") from e

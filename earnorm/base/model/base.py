@@ -97,12 +97,8 @@ from typing import (
 from earnorm.base.database.query.interfaces.domain import DomainExpression
 from earnorm.base.database.query.interfaces.domain import DomainOperator as Operator
 from earnorm.base.database.query.interfaces.domain import LogicalOperator as LogicalOp
-from earnorm.base.database.query.interfaces.operations.aggregate import (
-    AggregateProtocol as AggregateQuery,
-)
-from earnorm.base.database.query.interfaces.operations.join import (
-    JoinProtocol as JoinQuery,
-)
+from earnorm.base.database.query.interfaces.operations.aggregate import AggregateProtocol as AggregateQuery
+from earnorm.base.database.query.interfaces.operations.join import JoinProtocol as JoinQuery
 from earnorm.base.database.query.interfaces.query import QueryProtocol as AsyncQuery
 from earnorm.base.database.transaction.base import Transaction
 from earnorm.base.env import Environment
@@ -110,11 +106,7 @@ from earnorm.base.model.data_store import ModelDataStore
 from earnorm.base.model.descriptors import FieldsDescriptor
 from earnorm.base.model.meta import ModelMeta
 from earnorm.di import Container
-from earnorm.exceptions import (
-    DatabaseError,
-    FieldValidationError,
-    UniqueConstraintError,
-)
+from earnorm.exceptions import DatabaseError, FieldValidationError, UniqueConstraintError
 from earnorm.fields.base import BaseField
 from earnorm.fields.relation.base import RelationField
 from earnorm.types import DatabaseModel, ValueType
@@ -1190,9 +1182,11 @@ class BaseModel(metaclass=ModelMeta):
             cache_manager = await self._env.cache_manager
             cache_key = f"{self._name}:dict:{self.id}"
             cached_dict = await cache_manager.get(cache_key)
-            if isinstance(cached_dict, dict):
+            if isinstance(cached_dict, dict) and any(
+                v is not None for v in cached_dict.values()  # type: ignore
+            ):
                 logger.debug(f"Got cached dict for {self._name}:{self.id}")
-                return cached_dict
+                return cached_dict  # type: ignore
 
             # Ensure data is loaded
             if not self._has_data and self.id:
@@ -1211,29 +1205,41 @@ class BaseModel(metaclass=ModelMeta):
 
             # Convert fields
             result: Dict[str, Any] = {}
+            conversion_errors = []
+
             for name, field in self.__fields__.items():
                 raw_value = self._data.get(name)
                 try:
                     value = await self._convert_field_value(field, raw_value, backend)
                     result[name] = value
                 except Exception as e:
-                    logger.error(f"Failed to convert field {name}: {e}")
-                    result[name] = None
+                    conversion_errors.append(f"Field {name}: {str(e)}")  # type: ignore
+                    result[name] = raw_value  # Use raw value instead of None
 
-            # Cache converted dict
-            logger.debug(f"Caching dict for {self._name}:{self.id}")
-            await cache_manager.set(cache_key, result)
+            if conversion_errors:
+                logger.error(
+                    f"Errors converting fields for {self._name}:{self.id}:\n"
+                    + "\n".join(conversion_errors)  # type: ignore
+                )
+
+            # Only cache if we have some non-None values
+            if any(v is not None for v in result.values()):
+                logger.debug(f"Caching dict for {self._name}:{self.id}")
+                await cache_manager.set(cache_key, result)
+            else:
+                logger.warning(
+                    f"Not caching result for {self._name}:{self.id} as all values are None"
+                )
 
             return result
 
         except DatabaseError:
             # Re-raise database errors
             raise
-
         except Exception as e:
             logger.error(f"Failed to convert model to dict: {e}", exc_info=True)
-            # Return empty values as fallback
-            return {name: None for name in self.__fields__}
+            # Return raw data as fallback
+            return self._data or {name: None for name in self.__fields__}
 
     def from_dict(self, data: Dict[str, Any]) -> None:
         """Update model from dictionary.
@@ -1739,7 +1745,29 @@ class BaseModel(metaclass=ModelMeta):
         try:
             if raw_value is None:
                 return None
-            return await field.from_db(raw_value, backend)
+
+            # Log raw value for debugging
+            logger.debug(f"Converting field {field.name} with raw value: {raw_value}")
+
+            # Validate raw value before conversion
+            if not await field.validate(raw_value):
+                logger.warning(f"Invalid raw value for field {field.name}: {raw_value}")
+                return raw_value
+
+            # Convert value
+            converted = await field.from_db(raw_value, backend)
+
+            # Validate converted value
+            if not await field.validate(converted):
+                logger.warning(
+                    f"Invalid converted value for field {field.name}: {converted}"
+                )
+                return raw_value
+
+            return converted
+
         except Exception as e:
-            self.logger.warning(f"Failed to convert field {field.name}: {e}")
-            return None
+            logger.warning(
+                f"Failed to convert field {field.name}: {e}. Using raw value."
+            )
+            return raw_value

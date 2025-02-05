@@ -30,9 +30,9 @@ Examples:
 """
 
 from earnorm.cache.core.backend import CacheBackendProtocol
-from earnorm.cache.core.exceptions import CacheError
 from earnorm.cache.core.manager import CacheManager
 from earnorm.cache.core.metrics import CacheMetrics
+from earnorm.exceptions import CacheError
 
 __all__ = [
     "CacheBackendProtocol",
