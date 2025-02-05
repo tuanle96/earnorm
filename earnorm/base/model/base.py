@@ -454,23 +454,25 @@ class BaseModel(metaclass=ModelMeta):
             if use_cache:
                 logger.debug("Caching query results")
                 # Convert docs to serializable format before caching
-                serializable_docs = []
+                serializable_docs: List[Dict[str, Any]] = []
                 for doc in docs:
                     if isinstance(doc, dict):
                         # If doc is already a dict, use it
                         serializable_docs.append(
-                            {k: v for k, v in doc.items() if not isinstance(v, type)}
+                            {k: v for k, v in doc.items() if not isinstance(v, type)}  # type: ignore
                         )
                     else:
                         # If doc is a model instance, convert to dict
                         serializable_docs.append(
                             {
                                 k: v
-                                for k, v in doc._data.items()
+                                for k, v in doc._data.items()  # type: ignore
                                 if not isinstance(v, type)
                             }
                         )
                 logger.debug("Serializable docs: %s", serializable_docs)
+                cache_manager = await cls._env.cache_manager
+                cache_key = f"query:{cls._name}:{hash(str(domain))}"
                 await cache_manager.set(
                     cache_key, serializable_docs, ttl=300
                 )  # Cache for 5 minutes

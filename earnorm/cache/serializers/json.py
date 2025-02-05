@@ -176,7 +176,10 @@ class JsonSerializer(SerializerProtocol):
             except ValueError:
                 return data
         elif isinstance(data, dict):
-            return {str(k): self._convert_datetime_strings(v) for k, v in data.items()}
+            return {
+                str(key): self._convert_datetime_strings(value)  # type: ignore
+                for key, value in data.items()  # type: ignore
+            }
         elif isinstance(data, list):
-            return [self._convert_datetime_strings(i) for i in data]
+            return [self._convert_datetime_strings(item) for item in data]  # type: ignore
         return data
