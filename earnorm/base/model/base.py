@@ -398,13 +398,14 @@ class BaseModel(metaclass=ModelMeta):
             # Convert values to database format
             db_vals = await self._convert_to_db(vals)
 
-            # Update records
-            for record_id in self._ids:
-                await self._env.adapter.update(
-                    cast(Type[ModelProtocol], type(self)),
-                    {"_id": record_id},
-                    db_vals,
-                )
+            # Create domain expression for id filter
+            domain_expr = DomainExpression([("id", "in", list(self._ids))])
+
+            await self._env.adapter.update(
+                cast(Type[ModelProtocol], type(self)),
+                domain_expr,
+                db_vals,
+            )
 
             return self
 
@@ -734,15 +735,17 @@ class BaseModel(metaclass=ModelMeta):
         db_vals: Dict[str, Any] = {}
         backend = cls._env.adapter.backend_type
 
-        # Convert all fields, including those not in vals
-        for name, field in cls.__fields__.items():
-            if name in vals:
-                # Convert user-provided value
+        # Only convert fields that are in vals
+        for name, value in vals.items():
+            if name in cls.__fields__:
+                field = cls.__fields__[name]
                 if not field.readonly:
-                    db_vals[name] = await field.to_db(vals[name], backend)
-            else:
-                # Handle auto fields (created_at, updated_at)
-                db_vals[name] = await field.to_db(None, backend)
+                    db_vals[name] = await field.to_db(value, backend)
+
+        # Always update updated_at field if it exists
+        if "updated_at" in cls.__fields__ and "updated_at" not in vals:
+            field = cls.__fields__["updated_at"]
+            db_vals["updated_at"] = await field.to_db(None, backend)
 
         return db_vals
 

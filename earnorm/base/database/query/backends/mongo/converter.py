@@ -10,7 +10,10 @@ Examples:
     >>> # Result: {"$and": [{"age": {"$gt": 18}}, {"status": "active"}]}
 """
 
-from typing import Any, List, Union
+import logging
+from typing import Any, List, Protocol, Union
+
+from bson.objectid import ObjectId
 
 from earnorm.base.database.query.interfaces.domain import (
     DomainExpression,
@@ -20,12 +23,22 @@ from earnorm.base.database.query.interfaces.domain import (
 from earnorm.types import JsonDict
 
 
+class LoggerProtocol(Protocol):
+    """Protocol for logger interface."""
+
+    def warning(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
+    def error(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
+    def debug(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
+
+
 class MongoConverter:
     """MongoDB domain converter implementation.
 
     This class provides MongoDB-specific implementation for converting domain expressions
     to MongoDB query format.
     """
+
+    logger: LoggerProtocol = logging.getLogger(__name__)
 
     # Mapping of domain operators to MongoDB operators
     OPERATOR_MAP = {
@@ -93,9 +106,22 @@ class MongoConverter:
         Returns:
             MongoDB query format
         """
-        field = leaf.field
+        # Convert id field to _id for MongoDB
+        field = "_id" if leaf.field == "id" else leaf.field
         operator = leaf.operator
         value = leaf.value
+
+        # Convert ObjectId if field is _id
+        if field == "_id":
+            try:
+                if operator == "=":
+                    value = ObjectId(value)
+                elif operator == "in":
+                    value = [ObjectId(v) for v in value]
+            except Exception as e:
+                self.logger.warning(f"Failed to convert to ObjectId: {e}")
+                # Keep original value if conversion fails
+                pass
 
         # Handle special cases
         if operator == "=":

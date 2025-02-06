@@ -19,6 +19,7 @@ from typing import (
     Type,
     TypeVar,
     Union,
+    cast,
     get_args,
     get_origin,
     overload,
@@ -34,12 +35,14 @@ from motor.motor_asyncio import (
 from pymongo.operations import DeleteOne, InsertOne, UpdateOne
 
 from earnorm.base.database.adapter import DatabaseAdapter, FieldType
+from earnorm.base.database.query.backends.mongo.converter import MongoConverter
 from earnorm.base.database.query.backends.mongo.operations.aggregate import (
     MongoAggregate,
 )
 from earnorm.base.database.query.backends.mongo.operations.join import MongoJoin
 from earnorm.base.database.query.backends.mongo.query import MongoQuery
 from earnorm.base.database.query.core.query import BaseQuery
+from earnorm.base.database.query.interfaces.domain import DomainExpression
 from earnorm.base.database.query.interfaces.operations.aggregate import (
     AggregateProtocol as AggregateQuery,
 )
@@ -464,7 +467,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
     async def update(
         self,
         model: Type[ModelT],
-        filter_or_ops: Dict[str, Any],
+        filter_or_ops: Union[Dict[str, Any], DomainExpression],
         values: Dict[str, Any],
     ) -> int: ...
 
@@ -478,13 +481,18 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
     async def update(
         self,
         model: Union[ModelT, Type[ModelT]],
-        filter_or_ops: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
+        filter_or_ops: Optional[
+            Union[Dict[str, Any], DomainExpression, List[Dict[str, Any]]]
+        ] = None,
         values: Optional[Dict[str, Any]] = None,
     ) -> Union[ModelT, int, Dict[str, int]]:
         """Update one or multiple records."""
         try:
             # Case 1: Update single model instance
-            if isinstance(model, DatabaseModel):
+            if self.is_model_instance(model):
+                # cast to instance
+                model = cast(ModelT, model)
+
                 if not model.id:
                     raise ValueError("Model has no ID")
 
@@ -498,13 +506,28 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                 return model
 
             # Case 2: Update multiple records by filter
-            if isinstance(filter_or_ops, dict) and values:
+            if (
+                self.is_model_class(model)
+                and (
+                    isinstance(filter_or_ops, dict)
+                    or isinstance(filter_or_ops, DomainExpression)
+                )
+                and values
+            ):
                 collection = self._get_collection(model)
-                result = await collection.update_many(filter_or_ops, {"$set": values})
+
+                # Convert DomainExpression to MongoDB filter using MongoConverter
+                mongo_filter = (
+                    MongoConverter().convert(filter_or_ops.to_list())
+                    if isinstance(filter_or_ops, DomainExpression)
+                    else filter_or_ops
+                )
+
+                result = await collection.update_many(mongo_filter, {"$set": values})
                 return result.modified_count
 
             # Case 3: Bulk operations
-            if isinstance(filter_or_ops, list):
+            if self.is_model_class(model) and isinstance(filter_or_ops, list):
                 collection = self._get_collection(model)
                 operations: List[
                     Union[UpdateOne, InsertOne[Dict[str, Any]], DeleteOne]

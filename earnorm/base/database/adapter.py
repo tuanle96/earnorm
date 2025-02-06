@@ -23,11 +23,29 @@ from abc import ABC, abstractmethod
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Dict, Generic, List, Literal, Optional, Type, TypeVar, Union, get_args, get_origin, overload
+from typing import (
+    Any,
+    Dict,
+    Generic,
+    List,
+    Literal,
+    Optional,
+    Type,
+    TypeVar,
+    Union,
+    get_args,
+    get_origin,
+    overload,
+)
 
 from earnorm.base.database.query.core.query import BaseQuery
-from earnorm.base.database.query.interfaces.operations.aggregate import AggregateProtocol as AggregateQuery
-from earnorm.base.database.query.interfaces.operations.join import JoinProtocol as JoinQuery
+from earnorm.base.database.query.interfaces.domain import DomainExpression
+from earnorm.base.database.query.interfaces.operations.aggregate import (
+    AggregateProtocol as AggregateQuery,
+)
+from earnorm.base.database.query.interfaces.operations.join import (
+    JoinProtocol as JoinQuery,
+)
 from earnorm.base.database.transaction.base import TransactionManager
 from earnorm.types import DatabaseModel
 
@@ -346,43 +364,16 @@ class DatabaseAdapter(Generic[ModelT], ABC):
 
     @abstractmethod
     @overload
-    async def update(self, model: ModelT) -> ModelT:
-        """Update a single record.
-
-        Args:
-            model: Model instance to update
-
-        Returns:
-            Updated model instance
-
-        Raises:
-            DatabaseError: If update fails
-            ValueError: If model has no ID
-        """
-        ...
+    async def update(self, model: ModelT) -> ModelT: ...
 
     @abstractmethod
     @overload
     async def update(
         self,
         model: Type[ModelT],
-        filter_or_ops: Dict[str, Any],
+        filter_or_ops: Union[Dict[str, Any], DomainExpression],
         values: Dict[str, Any],
-    ) -> int:
-        """Update multiple records by filter.
-
-        Args:
-            model: Model type
-            filter_or_ops: Filter to match records
-            values: Values to update
-
-        Returns:
-            Number of records updated
-
-        Raises:
-            DatabaseError: If update fails
-        """
-        ...
+    ) -> int: ...
 
     @abstractmethod
     @overload
@@ -390,39 +381,22 @@ class DatabaseAdapter(Generic[ModelT], ABC):
         self,
         model: Type[ModelT],
         filter_or_ops: List[Dict[str, Any]],
-    ) -> Dict[str, int]:
-        """Bulk update multiple records.
-
-        Args:
-            model: Model type
-            filter_or_ops: List of update operations. Each operation should be a dict with:
-                - filter: Dict[str, Any] - Filter to match records
-                - values: Dict[str, Any] - Values to update
-                - operation: str - Operation type ('update', 'insert', 'delete')
-
-        Returns:
-            Dict containing operation counts:
-            - updated: Number of records updated
-            - inserted: Number of records inserted
-            - deleted: Number of records deleted
-
-        Raises:
-            DatabaseError: If bulk update fails
-        """
-        ...
+    ) -> Dict[str, int]: ...
 
     @abstractmethod
     async def update(
         self,
         model: Union[ModelT, Type[ModelT]],
-        filter_or_ops: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
+        filter_or_ops: Optional[
+            Union[Dict[str, Any], DomainExpression, List[Dict[str, Any]]]
+        ] = None,
         values: Optional[Dict[str, Any]] = None,
     ) -> Union[ModelT, int, Dict[str, int]]:
         """Update one or multiple records.
 
         This method supports three modes:
         1. Update single record from model instance
-        2. Update multiple records by filter
+        2. Update multiple records by filter or domain expression
         3. Bulk update multiple records with different operations
 
         Args:
@@ -430,12 +404,13 @@ class DatabaseAdapter(Generic[ModelT], ABC):
             filter_or_ops: One of:
                 - None: When updating single model instance
                 - Dict: Filter for updating multiple records
+                - DomainExpression: Domain expression for filtering records
                 - List[Dict]: List of bulk operations
-            values: Values to update (only used with filter)
+            values: Values to update (only used with filter or domain expression)
 
         Returns:
             - Updated model instance when updating single record
-            - Number of records updated when using filter
+            - Number of records updated when using filter/domain expression
             - Dict of operation counts when doing bulk update
 
         Raises:
@@ -453,6 +428,19 @@ class DatabaseAdapter(Generic[ModelT], ABC):
             ...     User,
             ...     {"status": "inactive"},
             ...     {"status": "active"}
+            ... )
+            >>> print(f"Updated {updated} records")
+
+            >>> # Update multiple records by domain expression
+            >>> domain = DomainExpression([
+            ...     ("age", ">", 18),
+            ...     "&",
+            ...     ("status", "=", "active")
+            ... ])
+            >>> updated = await adapter.update(
+            ...     User,
+            ...     domain,
+            ...     {"group": "adult"}
             ... )
             >>> print(f"Updated {updated} records")
 
@@ -948,3 +936,11 @@ class DatabaseAdapter(Generic[ModelT], ABC):
             Backend type (e.g. 'mongodb', 'postgresql', etc.)
         """
         pass
+
+    def is_model_class(self, obj: Any) -> bool:
+        """Check if object is a model class."""
+        return isinstance(obj, type) and isinstance(obj, DatabaseModel)
+
+    def is_model_instance(self, obj: Any) -> bool:
+        """Check if object is a model instance."""
+        return not isinstance(obj, type) and isinstance(obj, DatabaseModel)
