@@ -793,3 +793,141 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         except Exception as e:
             self.logger.error(f"Failed to convert value: {e}")
             raise ValueError(f"Failed to convert value: {e}") from e
+
+    async def fetch_all(
+        self,
+        collection: str,
+        ids: List[str],
+        fields: List[str],
+    ) -> List[Dict[str, Any]]:
+        """Fetch multiple records by IDs.
+
+        Args:
+            collection: Collection name
+            ids: List of record IDs to fetch
+            fields: List of fields to fetch
+
+        Returns:
+            List of records
+
+        Raises:
+            DatabaseError: If fetch fails
+        """
+        try:
+            # Convert string IDs to ObjectIds
+            object_ids = [ObjectId(id) for id in ids]
+
+            # Get collection
+            coll = await self.get_collection(collection)
+
+            # Build projection
+            proj = {field: 1 for field in fields} if fields else None
+
+            # Find documents
+            cursor = coll.find({"_id": {"$in": object_ids}}, projection=proj)
+            docs = await cursor.to_list(length=None)
+
+            # Convert ObjectIds to strings
+            for doc in docs:
+                doc["id"] = str(doc.pop("_id"))
+
+            return docs
+
+        except Exception as e:
+            self.logger.error(f"Failed to fetch documents by IDs: {e}")
+            raise DatabaseError(
+                message=f"Failed to fetch documents by IDs: {e}", backend="mongodb"
+            ) from e
+
+    async def create(self, model_type: Type[ModelT], values: Dict[str, Any]) -> str:
+        """Create a new record.
+
+        Args:
+            model_type: Type of model to create
+            values: Field values
+
+        Returns:
+            Created record ID
+
+        Raises:
+            DatabaseError: If creation fails
+        """
+        try:
+            # Get table name
+            table_name = self._get_collection_name(model_type)
+            if not table_name:
+                raise ValueError(
+                    f"Model {model_type.__name__} has no table or name defined"
+                )
+
+            # Insert document
+            return await self.insert_one(table_name, values)
+
+        except Exception as e:
+            self.logger.error(f"Failed to create record: {e}")
+            raise DatabaseError(
+                message=f"Failed to create record: {str(e)}",
+                backend=self.backend_type,
+            ) from e
+
+    async def read_one(
+        self, model_type: Type[ModelT], id: str, fields: Optional[List[str]] = None
+    ) -> Optional[ModelT]:
+        """Read a single record from the database.
+
+        This method retrieves a single record from the database by its ID.
+        It supports field selection to optimize data retrieval.
+
+        Args:
+            model_type: Type of model to read
+            id: Record ID to read
+            fields: Optional list of fields to read. If None, all fields are read.
+
+        Returns:
+            Optional[ModelT]: Model instance if found, None otherwise
+
+        Raises:
+            DatabaseError: If read operation fails
+            ValueError: If ID is invalid
+        """
+        try:
+            # Get collection name from model type
+            collection_name = self._get_collection_name(model_type)
+            self.logger.debug(
+                f"Reading record from collection {collection_name} with ID {id}"
+            )
+
+            # Find document by ID
+            doc = await self.find_by_id(collection_name, id, fields)
+            if not doc:
+                self.logger.debug(
+                    f"Record with ID {id} not found in collection {collection_name}"
+                )
+                return None
+
+            # Create model instance
+            instance = model_type()
+
+            # Ensure id is a string
+            doc_id = doc.get("id")
+            if doc_id is not None:
+                instance.id = str(doc_id)
+
+            # Set field values
+            for field_name, value in doc.items():
+                if field_name != "id":
+                    setattr(instance, field_name, value)
+
+            self.logger.debug(
+                f"Successfully read record with ID {id} from collection {collection_name}"
+            )
+            return instance
+
+        except ValueError as e:
+            self.logger.error(f"Invalid ID format: {e}")
+            raise ValueError(f"Invalid ID format: {e}") from e
+        except Exception as e:
+            self.logger.error(f"Failed to read record: {e}")
+            raise DatabaseError(
+                message=f"Failed to read record: {e}", backend="mongodb"
+            ) from e

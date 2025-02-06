@@ -197,7 +197,7 @@ class ManyToManyField(RelationField[ModelList[M]]):
             from earnorm.base.env import Environment
 
             env = Environment.get_instance()
-            self._through_class = await env.get_model(self.through)
+            self._through_class = await env.get_model(self.through)  # type: ignore
 
     def _create_back_reference(self) -> "ManyToManyField[M]":
         """Create back reference field.

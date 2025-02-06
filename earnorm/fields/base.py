@@ -8,6 +8,7 @@ It handles:
 - Comparison operations
 """
 
+import logging
 from typing import (
     Any,
     Callable,
@@ -18,15 +19,14 @@ from typing import (
     Optional,
     Pattern,
     Tuple,
+    Type,
     TypeVar,
     Union,
     cast,
-    overload,
 )
 
-from earnorm.exceptions import FieldValidationError
+from earnorm.exceptions import DatabaseError, ValidationError
 from earnorm.fields.adapters.base import DatabaseAdapter
-from earnorm.fields.types import ValidationContext
 from earnorm.types.fields import ComparisonOperator, DatabaseValue
 
 T = TypeVar("T")  # Field value type
@@ -34,6 +34,8 @@ T = TypeVar("T")  # Field value type
 # Type aliases for validation
 ValidatorResult = Union[bool, Tuple[bool, str]]
 ValidatorCallable = Callable[[Any], Coroutine[Any, Any, ValidatorResult]]
+
+logger = logging.getLogger(__name__)
 
 
 class FieldComparison:
@@ -377,6 +379,7 @@ class BaseField(Generic[T]):
     - Value validation and conversion
     - Type checking and constraints
     - Comparison operations for filtering
+    - Descriptor protocol for attribute access
 
     Args:
         **kwargs: Field options passed to subclasses.
@@ -391,18 +394,21 @@ class BaseField(Generic[T]):
     store: bool
     index: bool
     help: str
+    compute: Optional[Callable[..., Coroutine[Any, Any, T]]]
+    depends: List[str]
+    validators: List[Callable[[Any], Coroutine[Any, Any, bool]]]
 
     def __init__(self, **kwargs: Any) -> None:
-        """Initialize field.
+        """Initialize field with options.
 
         Args:
-            **kwargs: Field options passed to subclasses.
+            **kwargs: Field options
         """
-        self.name: str = ""
-        self.model_name: str = ""
-        self._value: Optional[T] = None
+        self.name = ""
+        self.model_name = ""
+        self._value = None
         self._options = kwargs
-        self.required = kwargs.get("required", True)
+        self.required = kwargs.get("required", False)
         self.readonly = kwargs.get("readonly", False)
         self.store = kwargs.get("store", True)
         self.index = kwargs.get("index", False)
@@ -411,7 +417,6 @@ class BaseField(Generic[T]):
         self.depends = kwargs.get("depends", [])
         self.validators = kwargs.get("validators", [])
         self.adapters: Dict[str, DatabaseAdapter[T]] = {}
-        self._comparison = FieldComparison(self.name)
 
     @property
     def comparison(self) -> FieldComparison:
@@ -420,8 +425,7 @@ class BaseField(Generic[T]):
         Returns:
             FieldComparison: Field comparison helper
         """
-        self._comparison.field_name = self.name  # Update field name in case it changed
-        return self._comparison
+        return FieldComparison(self.name)
 
     @property
     def default(self) -> Optional[Any]:
@@ -460,73 +464,184 @@ class BaseField(Generic[T]):
             Optional[T]: Validated value
 
         Raises:
-            FieldValidationError: If validation fails
+            ValidationError: If validation fails
         """
-        # Skip validation for None values if field is not required
         if value is None:
             if self.required:
-                raise FieldValidationError(
-                    message=f"Field '{self.name}' is required",
-                    field_name=self.name,
-                    code="validation_error",
-                )
+                raise ValidationError(f"Field {self.name} is required")
             return None
-
-        # Create validation context
-        context = ValidationContext(
-            field=self,
-            value=value,
-            metadata={},
-        )
 
         # Run validators
         for validator in self.validators:
             try:
-                await validator.validate(value, context)
-            except FieldValidationError as e:
-                raise FieldValidationError(
-                    message=f"{self.name}: {e.message}",
-                    field_name=self.name,
-                    code=e.code or "validation_error",
-                ) from e
+                result: ValidatorResult = await validator(value)
+                if isinstance(result, tuple):
+                    valid, error_message = result
+                else:
+                    valid = result
+                    error_message = f"Validation failed for field {self.name}"
+
+                if not valid:
+                    raise ValidationError(error_message)  # type: ignore
+
+            except Exception as e:
+                if not isinstance(e, ValidationError):
+                    raise ValidationError(str(e)) from e
+                raise
 
         return value
 
-    @overload
-    def __get__(self, instance: None, owner: Any) -> "BaseField[T]": ...
-
-    @overload
-    def __get__(self, instance: Any, owner: Any) -> Optional[T]: ...
-
-    def __get__(
-        self, instance: Optional[Any], owner: Any
+    async def __get__(
+        self, instance: Any, owner: Optional[Type[Any]] = None
     ) -> Union["BaseField[T]", Optional[T]]:
-        """Get field value.
+        """Get field value from instance.
 
-        This method implements the descriptor protocol.
-        When accessed through the class, returns the field instance.
-        When accessed through an instance, returns the field value.
+        This implements the descriptor protocol for attribute access.
+        The process is:
+        1. Return field instance if accessed on class
+        2. Check environment cache first
+        3. Load from database if not in cache
+        4. Update cache with loaded value
+        5. Return value
 
         Args:
-            instance: Model instance or None
+            instance: Model instance
             owner: Model class
 
         Returns:
-            Field instance when accessed through class,
-            field value when accessed through instance
+            Union[BaseField[T], Optional[T]]: Field instance or value
+
+        Raises:
+            DatabaseError: If database operation fails
+            ValidationError: If value validation fails
         """
+        # Return field instance if accessed on class
         if instance is None:
             return self
-        return self._value
+
+        try:
+            # Get environment
+            if not hasattr(instance, "_env"):
+                raise ValueError("Model instance has no environment")
+            env = instance._env
+
+            # Check cache first
+            cached_value = env.get_field_value(instance._name, instance.id, self.name)
+            if cached_value is not None:
+                return cached_value
+
+            # Load from database if not in cache
+            if hasattr(instance, "_has_data") and instance._has_data:
+                value = await self._load_field_value(instance)
+                if value is not None:
+                    # Update cache
+                    await self._update_cache(instance, value)
+                    return value
+
+            # Return None if no value found
+            return None
+
+        except Exception as e:
+            # Log error
+            logger.error(
+                f"Failed to get field value: {str(e)}",
+                extra={
+                    "model": instance._name,
+                    "record_id": instance.id,
+                    "field": self.name,
+                },
+            )
+            # Re-raise as database error
+            if not isinstance(e, DatabaseError):
+                raise DatabaseError(
+                    message=f"Failed to get field value: {str(e)}",
+                    backend="unknown",
+                ) from e
+            raise
 
     def __set__(self, instance: Any, value: Optional[T]) -> None:
-        """Set field value.
+        """Set field value on instance.
+
+        This implements the descriptor protocol for attribute assignment.
+        The process is:
+        1. Skip if field is readonly
+        2. Validate value
+        3. Update environment cache
 
         Args:
-            instance: Model instance.
-            value: Value to set.
+            instance: Model instance
+            value: Field value
+
+        Raises:
+            ValidationError: If value validation fails
+            ValueError: If field is readonly
         """
-        self._value = value
+        if self.readonly:
+            raise ValueError(f"Field {self.name} is readonly")
+
+        try:
+            # Get environment
+            if not hasattr(instance, "_env"):
+                raise ValueError("Model instance has no environment")
+            env = instance._env
+
+            # Update cache
+            env.set_field_value(instance._name, instance.id, self.name, value)
+
+        except Exception as e:
+            logger.error(
+                f"Failed to set field value: {str(e)}",
+                extra={
+                    "model": instance._name,
+                    "record_id": instance.id,
+                    "field": self.name,
+                    "value": value,
+                },
+            )
+            raise
+
+    async def _load_field_value(self, instance: Any) -> Optional[T]:
+        """Load field value from database.
+
+        Args:
+            instance: Model instance
+
+        Returns:
+            Optional[T]: Field value
+
+        Raises:
+            DatabaseError: If database operation fails
+            ValidationError: If value validation fails
+        """
+        # Get database adapter
+        adapter = instance._env.adapter
+
+        # Load record from database
+        record = await adapter.read_one(instance._name, instance.id, fields=[self.name])
+
+        if record:
+            # Convert database value
+            value = await self.from_db(record.get(self.name), adapter.backend_type)
+
+            # Validate value
+            return await self.validate(value)
+
+        return None
+
+    async def _update_cache(self, instance: Any, value: Optional[T]) -> None:
+        """Update environment cache with field value.
+
+        Args:
+            instance: Model instance
+            value: Field value
+
+        Raises:
+            ValueError: If model instance has no environment
+        """
+        if not hasattr(instance, "_env"):
+            raise ValueError("Model instance has no environment")
+
+        instance._env.set_field_value(instance._name, instance.id, self.name, value)
 
     async def convert(self, value: Any) -> Optional[T]:
         """Convert value to field type.

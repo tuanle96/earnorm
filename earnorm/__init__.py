@@ -216,7 +216,6 @@ async def init(
             container.register("config", config)
 
             # 3. Register all services in correct order
-            # This will register cache_manager that env.init() needs
             await register_all(config)
 
             # 4. Initialize Environment with registered services

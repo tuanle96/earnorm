@@ -156,6 +156,41 @@ class BaseQuery(Generic[ModelT], QueryProtocol[ModelT], ABC):
         """
         ...
 
+    @abstractmethod
+    async def to_raw_data(self) -> List[Dict[str, Any]]:
+        """Get raw data from query result.
+
+        This method executes the query and returns raw data instead of model instances.
+        Useful when you only need the raw data without model instantiation.
+
+        Returns:
+            List[Dict[str, Any]]: List of raw data dictionaries
+
+        Example:
+            >>> query = User.search([("age", ">", 18)])
+            >>> raw_data = await query.to_raw_data()
+            >>> print(raw_data)
+            [{"_id": "...", "name": "John", "age": 25}, ...]
+        """
+        pass
+
+    @abstractmethod
+    async def execute(self) -> List[ModelT]:
+        """Execute query and return model instances.
+
+        This method executes the query and returns model instances.
+
+        Returns:
+            List[ModelT]: List of model instances
+
+        Example:
+            >>> query = User.search([("age", ">", 18)])
+            >>> users = await query.execute()
+            >>> print(users[0].name)
+            "John"
+        """
+        pass
+
     def validate(self) -> None:
         """Validate query configuration.
 

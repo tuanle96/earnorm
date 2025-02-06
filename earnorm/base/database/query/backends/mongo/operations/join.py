@@ -152,6 +152,71 @@ class MongoJoin(JoinProtocol[ModelT, JoinT]):
         if not self._conditions:
             raise ValueError("Join conditions are required")
 
+    def get_pipeline_stages(self) -> List[JsonDict]:
+        """Get MongoDB aggregation pipeline stages for this join.
+
+        Returns:
+            List[JsonDict]: List of pipeline stages
+        """
+        if not self._model or not self._conditions:
+            return []
+
+        # Get foreign collection name
+        foreign_collection = (
+            self._model
+            if isinstance(self._model, str)
+            else getattr(self._model, "__collection__", self._model.__name__.lower())
+        )
+
+        # Build $lookup stage
+        lookup_stage = {
+            "$lookup": {
+                "from": foreign_collection,
+                "let": {field: f"${field}" for field in self._conditions.keys()},
+                "pipeline": [
+                    {
+                        "$match": {
+                            "$expr": {
+                                "$and": [
+                                    {
+                                        "$eq": [
+                                            f"${foreign_field}",
+                                            f"$$${local_field}",
+                                        ]
+                                    }
+                                    for local_field, foreign_field in self._conditions.items()
+                                ]
+                            }
+                        }
+                    }
+                ],
+                "as": foreign_collection,
+            }
+        }
+
+        # For inner join, add $unwind stage
+        stages = [lookup_stage]
+        if self._join_type == "inner":
+            stages.append(
+                {
+                    "$unwind": {
+                        "path": f"${foreign_collection}",
+                        "preserveNullAndEmptyArrays": False,
+                    }
+                }
+            )
+        elif self._join_type == "left":
+            stages.append(
+                {
+                    "$unwind": {
+                        "path": f"${foreign_collection}",
+                        "preserveNullAndEmptyArrays": True,
+                    }
+                }
+            )
+
+        return stages
+
     def to_pipeline(self) -> List[JsonDict]:
         """Convert join operation to MongoDB pipeline.
 

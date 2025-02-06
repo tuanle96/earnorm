@@ -10,6 +10,9 @@ from typing import (
     runtime_checkable,
 )
 
+from .models import ModelProtocol as DatabaseModel
+from .models import RecordID
+
 
 @runtime_checkable
 class DatabaseProtocol(Protocol):
@@ -95,19 +98,23 @@ class DatabaseProtocol(Protocol):
         ...
 
     async def fetch_all(
-        self, query: str, params: Optional[Dict[str, Any]] = None
+        self,
+        collection: str,
+        ids: List[str],
+        fields: List[str],
     ) -> List[Dict[str, Any]]:
-        """Fetch all rows.
+        """Fetch multiple records by IDs.
 
         Args:
-            query: Query string
-            params: Query parameters
+            collection: Collection/table name
+            ids: List of record IDs to fetch
+            fields: List of fields to fetch
 
         Returns:
-            List of rows
+            List of records
 
         Raises:
-            DatabaseError: If query execution fails
+            DatabaseError: If fetch fails
         """
         ...
 
@@ -125,6 +132,21 @@ class DatabaseProtocol(Protocol):
 
         Raises:
             DatabaseError: If query execution fails
+        """
+        ...
+
+    async def create(self, model: DatabaseModel, values: Dict[str, Any]) -> RecordID:
+        """Create a new record.
+
+        Args:
+            model: Model instance
+            values: Field values
+
+        Returns:
+            Created record ID
+
+        Raises:
+            DatabaseError: If creation fails
         """
         ...
 

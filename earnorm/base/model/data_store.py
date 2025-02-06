@@ -4,9 +4,8 @@ This module provides classes for managing model data with proper type hints.
 It includes:
 1. Record data management
 2. Changed fields tracking
-3. Cache operations
-4. Type safety
-5. Serialization/deserialization
+3. Type safety
+4. Serialization/deserialization
 """
 
 from typing import Any, Dict, Generic, Protocol, Set, TypeVar
@@ -58,18 +57,6 @@ class ModelDataProtocol(Protocol):
         """Check if field is changed."""
         ...
 
-    def get_cache(self, key: str, default: Any = None) -> Any:
-        """Get cached value."""
-        ...
-
-    def set_cache(self, key: str, value: Any) -> None:
-        """Set cached value."""
-        ...
-
-    def clear_cache(self) -> None:
-        """Clear all cached values."""
-        ...
-
 
 class ModelDataStore(Generic[ModelT]):
     """Data store for model instances.
@@ -77,14 +64,13 @@ class ModelDataStore(Generic[ModelT]):
     This class manages:
     1. Record data storage and access
     2. Changed fields tracking
-    3. Field-level caching
-    4. Type safety through generics
+    3. Type safety through generics
 
     Args:
         model: Model instance to store data for
     """
 
-    __slots__ = ("_model", "_data", "_changed", "_cache")
+    __slots__ = ("_model", "_data", "_changed")
 
     def __init__(self, model: ModelT) -> None:
         """Initialize data store.
@@ -95,7 +81,6 @@ class ModelDataStore(Generic[ModelT]):
         self._model = model
         self._data: Dict[str, Any] = {}
         self._changed: Set[str] = set()
-        self._cache: Dict[str, Any] = {}
 
     def get_data(self) -> Dict[str, Any]:
         """Get record data.
@@ -113,7 +98,6 @@ class ModelDataStore(Generic[ModelT]):
         """
         self._data = value.copy()
         self.clear_changed()
-        self.clear_cache()
 
     def has_data(self) -> bool:
         """Check if data exists.
@@ -145,8 +129,6 @@ class ModelDataStore(Generic[ModelT]):
         if field_name not in self._data or self._data[field_name] != value:
             self._data[field_name] = value
             self.mark_changed(field_name)
-            if field_name in self._cache:
-                del self._cache[field_name]
 
     def has_field(self, field_name: str) -> bool:
         """Check if field exists.
@@ -190,31 +172,6 @@ class ModelDataStore(Generic[ModelT]):
         """
         return field_name in self._changed
 
-    def get_cache(self, key: str, default: Any = None) -> Any:
-        """Get cached value.
-
-        Args:
-            key: Cache key
-            default: Default value if not found
-
-        Returns:
-            Any: Cached value or default
-        """
-        return self._cache.get(key, default)
-
-    def set_cache(self, key: str, value: Any) -> None:
-        """Set cached value.
-
-        Args:
-            key: Cache key
-            value: Value to cache
-        """
-        self._cache[key] = value
-
-    def clear_cache(self) -> None:
-        """Clear all cached values."""
-        self._cache.clear()
-
 
 class ModelDataManager:
     """Default implementation of ModelDataProtocol."""
@@ -248,11 +205,11 @@ class ModelDataManager:
         return self._store.has_field(field_name)
 
     def get_changed(self) -> Set[str]:
-        """Get set of changed fields."""
+        """Get changed fields."""
         return self._store.get_changed()
 
     def clear_changed(self) -> None:
-        """Clear set of changed fields."""
+        """Clear changed fields."""
         self._store.clear_changed()
 
     def mark_changed(self, field_name: str) -> None:
@@ -262,19 +219,3 @@ class ModelDataManager:
     def is_changed(self, field_name: str) -> bool:
         """Check if field is changed."""
         return self._store.is_changed(field_name)
-
-    def get_cache(self, key: str, default: Any = None) -> Any:
-        """Get cached value."""
-        return self._store.get_cache(key, default)
-
-    def set_cache(self, key: str, value: Any) -> None:
-        """Set cached value."""
-        self._store.set_cache(key, value)
-
-    def clear_cache(self) -> None:
-        """Clear all cached values."""
-        self._store.clear_cache()
-
-
-# Type alias for data store
-DataStore = ModelDataStore[ModelT]

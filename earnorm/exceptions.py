@@ -3,7 +3,7 @@
 This module contains all custom exceptions used in EarnORM.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 
 class EarnORMError(Exception):
@@ -418,203 +418,6 @@ class RetryError(PoolError):
         super().__init__(message, backend=backend, context=context)
 
 
-# Cache-related exceptions
-class CacheError(EarnORMError):
-    """Base class for cache-related errors.
-
-    This error is raised when a cache operation fails.
-
-    Attributes:
-        message: Error message
-        backend: Cache backend name (e.g. 'redis', 'memcached')
-
-    Examples:
-        >>> raise CacheError("Failed to connect", backend="redis")
-        CacheError: redis: Failed to connect
-    """
-
-    def __init__(self, message: str, *, backend: str) -> None:
-        """Initialize cache error.
-
-        Args:
-            message: Error message
-            backend: Cache backend name
-        """
-        self.backend = backend
-        super().__init__(f"{backend}: {message}")
-
-
-class CacheConnectionError(CacheError):
-    """Error raised when cache connection fails.
-
-    This error is raised when the cache backend cannot establish
-    a connection to the cache server.
-
-    Examples:
-        >>> raise CacheConnectionError("Connection refused", backend="redis")
-        CacheConnectionError: redis: Connection refused: Connection refused
-    """
-
-    def __init__(self, message: str, *, backend: str) -> None:
-        """Initialize cache connection error.
-
-        Args:
-            message: Error message
-            backend: Cache backend name
-        """
-        super().__init__(f"Connection error: {message}", backend=backend)
-
-
-class CacheKeyError(CacheError):
-    """Error raised when cache key is invalid.
-
-    This error is raised when a cache key is invalid,
-    typically when it contains invalid characters or is too long.
-
-    Attributes:
-        key: The invalid cache key
-
-    Examples:
-        >>> raise CacheKeyError("Key too long", key="very:long:key...", backend="redis")
-        CacheKeyError: redis: Invalid key 'very:long:key...': Key too long
-    """
-
-    def __init__(self, message: str, *, key: str, backend: str) -> None:
-        """Initialize cache key error.
-
-        Args:
-            message: Error message
-            key: The invalid cache key
-            backend: Cache backend name
-        """
-        self.key = key
-        super().__init__(f"Invalid key '{key}': {message}", backend=backend)
-
-
-class CacheValidationError(CacheError):
-    """Error raised when cache data validation fails.
-
-    This error is raised when the data being cached fails validation,
-    typically when required fields are missing or have invalid values.
-
-    Attributes:
-        data_type: Type of data that failed validation
-        validation_errors: List of validation error messages
-
-    Examples:
-        >>> errors = ["Missing required field 'name'", "Invalid age value"]
-        >>> raise CacheValidationError(
-        ...     "Invalid user data",
-        ...     data_type="User",
-        ...     validation_errors=errors,
-        ...     backend="redis"
-        ... )
-        CacheValidationError: redis: Invalid user data: User validation failed: Missing required field 'name', Invalid age value
-    """
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        data_type: str,
-        validation_errors: List[str],
-        backend: str,
-    ) -> None:
-        """Initialize cache validation error.
-
-        Args:
-            message: Error message
-            data_type: Type of data that failed validation
-            validation_errors: List of validation error messages
-            backend: Cache backend name
-        """
-        self.data_type = data_type
-        self.validation_errors = validation_errors
-        error_list = ", ".join(validation_errors)
-        super().__init__(
-            f"{message}: {data_type} validation failed: {error_list}", backend=backend
-        )
-
-
-class CacheSerializationError(CacheError):
-    """Error raised when cache serialization/deserialization fails.
-
-    This error is raised when the cache backend cannot serialize
-    or deserialize data, typically due to invalid data types or
-    corrupted data.
-
-    Attributes:
-        operation: The operation that failed ('serialize' or 'deserialize')
-        data_type: Type of data that failed serialization
-
-    Examples:
-        >>> raise CacheSerializationError(
-        ...     "Cannot serialize datetime",
-        ...     operation="serialize",
-        ...     data_type="datetime",
-        ...     backend="redis"
-        ... )
-        CacheSerializationError: redis: Serialization failed: Cannot serialize datetime (type=datetime)
-    """
-
-    def __init__(
-        self, message: str, *, operation: str, data_type: str, backend: str
-    ) -> None:
-        """Initialize cache serialization error.
-
-        Args:
-            message: Error message
-            operation: The operation that failed ('serialize' or 'deserialize')
-            data_type: Type of data that failed serialization
-            backend: Cache backend name
-        """
-        self.operation = operation
-        self.data_type = data_type
-        super().__init__(
-            f"{operation.title()} failed: {message} (type={data_type})", backend=backend
-        )
-
-
-class CacheVersionError(CacheError):
-    """Error raised when cache version is invalid or incompatible.
-
-    This error is raised when there is a version mismatch between
-    cached data and current schema, typically after a schema change
-    or during cache migration.
-
-    Attributes:
-        current_version: Current cache version
-        data_version: Version of the cached data
-
-    Examples:
-        >>> raise CacheVersionError(
-        ...     "Incompatible schema version",
-        ...     current_version="v2",
-        ...     data_version="v1",
-        ...     backend="redis"
-        ... )
-        CacheVersionError: redis: Version mismatch: expected v2, got v1: Incompatible schema version
-    """
-
-    def __init__(
-        self, message: str, *, current_version: str, data_version: str, backend: str
-    ) -> None:
-        """Initialize cache version error.
-
-        Args:
-            message: Error message
-            current_version: Current cache version
-            data_version: Version of the cached data
-            backend: Cache backend name
-        """
-        self.current_version = current_version
-        self.data_version = data_version
-        super().__init__(
-            f"Version mismatch: expected {current_version}, got {data_version}: {message}",
-            backend=backend,
-        )
-
-
 # Dependency Injection related exceptions
 class DIError(EarnORMError):
     """Base class for all DI exceptions.
@@ -799,3 +602,9 @@ class SerializationError(EarnORMError):
         self.backend = backend
         self.original_error = original_error
         super().__init__(f"{backend}: {message}")
+
+
+class CacheError(EarnORMError):
+    """Raised when a cache operation fails."""
+
+    pass

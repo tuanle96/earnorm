@@ -183,17 +183,6 @@ class SystemConfigData:
         description="Redis connection timeout in seconds",
     )
 
-    # Cache Configuration
-    cache_backend = StringField(
-        default="redis", choices=["redis", "memory"], description="Cache backend type"
-    )
-    cache_ttl = IntegerField(
-        default=3600,
-        min_value=1,
-        max_value=86400,  # 24 hours
-        description="Default cache TTL in seconds",
-    )
-
     # Event Configuration
     event_enabled = BooleanField(
         default=True,

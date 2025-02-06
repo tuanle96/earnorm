@@ -36,6 +36,14 @@ __all__ = (
     "JsonDict",
     "DomainOperator",
     "ValueType",
+    # Model types
+    "ModelProtocol",
+    "DatabaseModel",
+    "FieldName",
+    "ModelName",
+    "RecordID",
+    # Database types
+    "DatabaseProtocol",
     # Field types
     "FieldValue",
     "FieldOptions",
@@ -51,12 +59,4 @@ __all__ = (
     "FieldProtocol",
     "RelationProtocol",
     "ComparisonOperator",
-    # Model types
-    "ModelProtocol",
-    "DatabaseModel",
-    "FieldName",
-    "ModelName",
-    "RecordID",
-    # Database types
-    "DatabaseProtocol",
 )

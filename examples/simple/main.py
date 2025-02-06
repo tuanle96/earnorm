@@ -17,7 +17,7 @@ from earnorm.base.model import BaseModel
 
 # Configure logging
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s",
 )
 logger = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ class User(BaseModel):
             limit=10,
         )
         # Filter active users
-        return users.filtered(lambda user: user.age is not None and user.age > 18)
+        return await users.filtered(lambda user: user.age is not None and user.age > 18)
 
 
 async def main():
@@ -103,7 +103,12 @@ async def main():
         # CREATE - Create a new user
         logger.info("Creating new user...")
         new_user = await User.create(
-            {"name": "John Doe", "email": "john@example.com", "age": 25}
+            {
+                "name": "John Doe",
+                "email": "john@example.com",
+                "age": 25,
+                "status": "active",
+            }
         )
         logger.info(f"Created user: {await new_user.to_dict()}")
 
@@ -116,82 +121,82 @@ async def main():
 
         # READ - Search user by email
         logger.info("Searching user by email: john@example.com")
-        users = await User.search(domain=[("email", "=", "john@example.com")], limit=1)
+        users = await User.search(domain=[("email", "=", "john@example.com")])
         if users:
             user_data = await users[0].to_dict()
             logger.info(f"Found user by email: {user_data}")
 
             # UPDATE - Update user age
-            logger.info(f"Updating user {user_data['name']}'s age...")
-            await users[0].write({"age": 26})
-            updated_data = await users[0].to_dict()
-            logger.info(f"Updated user data: {updated_data}")
+            # logger.info(f"Updating user {user_data['name']}'s age...")
+            # await users[0].write({"age": 26})
+            # updated_data = await users[0].to_dict()
+            # logger.info(f"Updated user data: {updated_data}")
 
             # DELETE - Delete single user
-            logger.info(f"Deleting user: {updated_data['name']}")
-            success = await users[0].unlink()
-            logger.info(f"User deletion {'successful' if success else 'failed'}")
+            # logger.info(f"Deleting user: {updated_data['name']}")
+            # success = await users[0].unlink()
+            # logger.info(f"User deletion {'successful' if success else 'failed'}")
 
         # ===== BULK OPERATIONS =====
         logger.info("=== Starting Bulk Operations ===")
 
         # BULK CREATE - Create multiple users
-        logger.info("Creating multiple users...")
-        bulk_users = []
-        test_data = [
-            {"name": "Alice Smith", "email": "alice@example.com", "age": 22},
-            {"name": "Bob Johnson", "email": "bob@example.com", "age": 19},
-            {"name": "Charlie Brown", "email": "charlie@example.com", "age": 25},
-            {"name": "David Wilson", "email": "david@example.com", "age": 17},
-            {"name": "Eve Anderson", "email": "eve@example.com", "age": 28},
-        ]
+        # logger.info("Creating multiple users...")
+        # bulk_users = []
+        # test_data = [
+        #     {"name": "Alice Smith", "email": "alice@example.com", "age": 22},
+        #     {"name": "Bob Johnson", "email": "bob@example.com", "age": 19},
+        #     {"name": "Charlie Brown", "email": "charlie@example.com", "age": 25},
+        #     {"name": "David Wilson", "email": "david@example.com", "age": 17},
+        #     {"name": "Eve Anderson", "email": "eve@example.com", "age": 28},
+        # ]
 
-        for data in test_data:
-            user = await User.create(data)
-            bulk_users.append(user)
-            logger.info(f"Created user: {await user.to_dict()}")
+        # for data in test_data:
+        #     user = await User.create(data)
+        #     bulk_users.append(user)  # type: ignore
+        #     logger.info(f"Created user: {await user.to_dict()}")
 
-        # BULK READ - Search all users
-        logger.info("Searching all users...")
-        all_users = await User.search(domain=[], limit=10)
-        users_data = [await u.to_dict() for u in all_users]
-        logger.info(f"Found {len(all_users)} users: {users_data}")
+        # # BULK READ - Search all users
+        # logger.info("Searching all users...")
+        # all_users = await User.search(domain=[], limit=10)
+        # users_data = [await u.to_dict() for u in all_users]
+        # logger.info(f"Found {len(all_users)} users: {users_data}")
 
-        # BULK READ - Search by age range
-        logger.info("Searching users by age range (18-25)...")
-        age_range_users = await User.search(
-            domain=[("age", ">=", 18), ("age", "<=", 25)], limit=10
-        )
-        age_range_data = [await u.to_dict() for u in age_range_users]
-        logger.info(
-            f"Found {len(age_range_users)} users in age range: {age_range_data}"
-        )
+        # # BULK READ - Search by age range
+        # logger.info("Searching users by age range (18-25)...")
+        # age_range_users = await User.search(
+        #     domain=[("age", ">=", 18), ("age", "<=", 25)], limit=10
+        # )
+        # age_range_data = [await u.to_dict() for u in age_range_users]
+        # logger.info(
+        #     f"Found {len(age_range_users)} users in age range: {age_range_data}"
+        # )
 
-        # BULK UPDATE - Update all adult users
-        logger.info("Updating all adult users...")
-        adult_users = await User.search(domain=[("age", ">=", 18)], limit=10)
-        if adult_users:
-            await adult_users.write({"status": "active"})
-            updated_data = [await u.to_dict() for u in adult_users]
-            logger.info(f"Updated {len(adult_users)} adult users: {updated_data}")
+        # # BULK UPDATE - Update all adult users
+        # logger.info("Updating all adult users...")
+        # adult_users = await User.search(domain=[("age", ">=", 18)], limit=10)
+        # if adult_users:
+        #     await adult_users.write({"status": "active"})
+        #     updated_data = [await u.to_dict() for u in adult_users]
+        #     logger.info(f"Updated {len(adult_users)} adult users: {updated_data}")
 
-        # BULK DELETE - Delete users under 18
-        logger.info("Deleting users under 18...")
-        minor_users = await User.search(domain=[("age", "<", 18)], limit=10)
-        minor_data = [await u.to_dict() for u in minor_users]
-        logger.info(f"Found {len(minor_users)} users under 18: {minor_data}")
-        if minor_users:
-            success = await minor_users.unlink()
-            logger.info(
-                f"Deletion of minor users {'successful' if success else 'failed'}"
-            )
+        # # BULK DELETE - Delete users under 18
+        # logger.info("Deleting users under 18...")
+        # minor_users = await User.search(domain=[("age", "<", 18)], limit=10)
+        # minor_data = [await u.to_dict() for u in minor_users]
+        # logger.info(f"Found {len(minor_users)} users under 18: {minor_data}")
+        # if minor_users:
+        #     success = await minor_users.unlink()
+        #     logger.info(
+        #         f"Deletion of minor users {'successful' if success else 'failed'}"
+        #     )
 
-        # Cleanup remaining users
-        logger.info("Cleaning up all remaining users...")
-        remaining_users = await User.search(domain=[], limit=100)
-        if remaining_users:
-            await remaining_users.unlink()
-            logger.info(f"Deleted {len(remaining_users)} remaining users")
+        # # Cleanup remaining users
+        # logger.info("Cleaning up all remaining users...")
+        # remaining_users = await User.search(domain=[], limit=100)
+        # if remaining_users:
+        #     await remaining_users.unlink()
+        #     logger.info(f"Deleted {len(remaining_users)} remaining users")
 
     except Exception as e:
         logger.error(f"Error occurred: {str(e)}", exc_info=True)

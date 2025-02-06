@@ -342,3 +342,64 @@ class DatabaseAdapter(Generic[ModelT], ABC):
             ValueError: If conversion fails
         """
         pass
+
+    @abstractmethod
+    async def fetch_all(
+        self,
+        collection: str,
+        ids: List[str],
+        fields: List[str],
+    ) -> List[Dict[str, Any]]:
+        """Fetch multiple records by IDs.
+
+        Args:
+            collection: Collection/table name
+            ids: List of record IDs to fetch
+            fields: List of fields to fetch
+
+        Returns:
+            List of records
+
+        Raises:
+            DatabaseError: If fetch fails
+        """
+        pass
+
+    @abstractmethod
+    async def create(self, model_type: Type[ModelT], values: Dict[str, Any]) -> str:
+        """Create a new record.
+
+        Args:
+            model_type: Model type
+            values: Field values
+
+        Returns:
+            Created record ID
+
+        Raises:
+            DatabaseError: If creation fails
+        """
+        pass
+
+    @abstractmethod
+    async def read_one(
+        self, model_type: Type[ModelT], id: str, fields: Optional[List[str]] = None
+    ) -> Optional[ModelT]:
+        """Read a single record from the database.
+
+        This method retrieves a single record from the database by its ID.
+        It supports field selection to optimize data retrieval.
+
+        Args:
+            model_type: Type of model to read
+            id: Record ID to read
+            fields: Optional list of fields to read. If None, all fields are read.
+
+        Returns:
+            Optional[ModelT]: Model instance if found, None otherwise
+
+        Raises:
+            DatabaseError: If read operation fails
+            ValueError: If ID is invalid
+        """
+        pass

@@ -78,7 +78,7 @@ class BaseWindow(BaseOperation[ModelT], WindowProtocol[ModelT]):
         self._alias = alias
         return f"{self._window_expr} AS {alias}" if self._window_expr else alias
 
-    def row_number(self) -> "BaseWindow[ModelT]":
+    def row_number(self, alias: str = "row_number") -> "BaseWindow[ModelT]":
         """ROW_NUMBER() window function.
 
         Returns:
@@ -87,7 +87,7 @@ class BaseWindow(BaseOperation[ModelT], WindowProtocol[ModelT]):
         self._window_expr = {"$rowNumber": {}}
         return self
 
-    def rank(self) -> "BaseWindow[ModelT]":
+    def rank(self, alias: str = "rank") -> "BaseWindow[ModelT]":
         """RANK() window function.
 
         Returns:
@@ -96,7 +96,7 @@ class BaseWindow(BaseOperation[ModelT], WindowProtocol[ModelT]):
         self._window_expr = {"$rank": {}}
         return self
 
-    def dense_rank(self) -> "BaseWindow[ModelT]":
+    def dense_rank(self, alias: str = "dense_rank") -> "BaseWindow[ModelT]":
         """DENSE_RANK() window function.
 
         Returns:

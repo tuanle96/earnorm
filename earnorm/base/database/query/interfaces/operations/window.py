@@ -16,7 +16,7 @@ from abc import abstractmethod
 from typing import Any, List, Optional, TypeVar
 
 from earnorm.base.database.query.interfaces.operations.base import OperationProtocol
-from earnorm.types import DatabaseModel
+from earnorm.types import DatabaseModel, JsonDict
 
 ModelT = TypeVar("ModelT", bound=DatabaseModel)
 
@@ -30,7 +30,7 @@ class WindowProtocol(OperationProtocol[ModelT]):
         partition_by: Optional[List[str]] = None,
         order_by: Optional[List[str]] = None,
     ) -> "WindowProtocol[ModelT]":
-        """Set window clause.
+        """Set window frame.
 
         Args:
             partition_by: Fields to partition by
@@ -54,29 +54,38 @@ class WindowProtocol(OperationProtocol[ModelT]):
         ...
 
     @abstractmethod
-    def row_number(self) -> "WindowProtocol[ModelT]":
-        """ROW_NUMBER() window function.
+    def row_number(self, alias: str = "row_number") -> "WindowProtocol[ModelT]":
+        """Add row number.
+
+        Args:
+            alias: Alias for row number field
 
         Returns:
-            Window expression
+            Self for chaining
         """
         ...
 
     @abstractmethod
-    def rank(self) -> "WindowProtocol[ModelT]":
-        """RANK() window function.
+    def rank(self, alias: str = "rank") -> "WindowProtocol[ModelT]":
+        """Add rank.
+
+        Args:
+            alias: Alias for rank field
 
         Returns:
-            Window expression
+            Self for chaining
         """
         ...
 
     @abstractmethod
-    def dense_rank(self) -> "WindowProtocol[ModelT]":
-        """DENSE_RANK() window function.
+    def dense_rank(self, alias: str = "dense_rank") -> "WindowProtocol[ModelT]":
+        """Add dense rank.
+
+        Args:
+            alias: Alias for dense rank field
 
         Returns:
-            Window expression
+            Self for chaining
         """
         ...
 
@@ -133,5 +142,21 @@ class WindowProtocol(OperationProtocol[ModelT]):
 
         Returns:
             Window expression
+        """
+        ...
+
+    def validate(self) -> None:
+        """Validate window configuration.
+
+        Raises:
+            ValueError: If window configuration is invalid
+        """
+        ...
+
+    def get_pipeline_stages(self) -> List[JsonDict]:
+        """Get MongoDB aggregation pipeline stages for this window function.
+
+        Returns:
+            List[JsonDict]: List of pipeline stages
         """
         ...

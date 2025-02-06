@@ -123,3 +123,19 @@ class AggregateProtocol(OperationProtocol[ModelT]):
             Self for chaining
         """
         ...
+
+    def validate(self) -> None:
+        """Validate aggregate configuration.
+
+        Raises:
+            ValueError: If aggregate configuration is invalid
+        """
+        ...
+
+    def get_pipeline_stages(self) -> List[JsonDict]:
+        """Get MongoDB aggregation pipeline stages for this aggregation.
+
+        Returns:
+            List[JsonDict]: List of pipeline stages
+        """
+        ...

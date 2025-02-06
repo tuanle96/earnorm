@@ -1,14 +1,14 @@
 # Database Configuration
 database_backend: mongodb
-database_uri: mongodb://103.199.19.42:27017/earnbase?retryWrites=true&retryReads=true
+database_uri: mongodb://localhost:27017/earnbase?retryWrites=true&retryReads=true
 database_name: earnbase
 database_username: # optional
 database_password: # optional
 database_min_pool_size: 5
 database_max_pool_size: 20
 database_pool_timeout: 30
-database_max_lifetime: 3600  # 1 hour
-database_idle_timeout: 300   # 5 minutes
+database_max_lifetime: 3600 # 1 hour
+database_idle_timeout: 300 # 5 minutes
 database_ssl: false
 database_ssl_ca: # optional
 database_ssl_cert: # optional
@@ -31,10 +31,6 @@ redis_db: 0
 redis_min_pool_size: 5
 redis_max_pool_size: 20
 redis_pool_timeout: 30
-
-# Cache Configuration
-cache_backend: redis
-cache_ttl: 3600  # 1 hour
 
 # Version
 version: 1.0.0

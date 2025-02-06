@@ -10,10 +10,10 @@ Examples:
 """
 
 from abc import abstractmethod
-from typing import Any, Dict, Generic, Optional, Type, TypeVar, Union
+from typing import Any, Dict, Generic, List, Optional, Type, TypeVar, Union
 
 from earnorm.base.database.query.interfaces.operations.base import OperationProtocol
-from earnorm.types import DatabaseModel
+from earnorm.types import DatabaseModel, JsonDict
 
 ModelT = TypeVar("ModelT", bound=DatabaseModel)
 JoinT = TypeVar("JoinT", bound=DatabaseModel)
@@ -95,5 +95,21 @@ class JoinProtocol(OperationProtocol[ModelT], Generic[ModelT, JoinT]):
 
         Returns:
             Self for chaining
+        """
+        ...
+
+    def validate(self) -> None:
+        """Validate join configuration.
+
+        Raises:
+            ValueError: If join configuration is invalid
+        """
+        ...
+
+    def get_pipeline_stages(self) -> List[JsonDict]:
+        """Get MongoDB aggregation pipeline stages for this join.
+
+        Returns:
+            List[JsonDict]: List of pipeline stages
         """
         ...

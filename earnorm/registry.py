@@ -150,43 +150,6 @@ async def register_pool_services(config: SystemConfig) -> None:
         logger.info("Redis pool registered successfully")
 
 
-async def register_cache_services(config: SystemConfig) -> None:
-    """Register cache services.
-
-    This includes:
-    - Cache manager that depends on Redis pool
-
-    Args:
-        config: System configuration instance
-
-    Raises:
-        ConfigError: If Redis pool is not available
-    """
-    from earnorm.cache.core.manager import CacheManager
-    from earnorm.exceptions import ConfigError
-
-    # Register cache manager if not exists
-    if not container.has("cache_manager"):
-        # Check if Redis pool is available
-        if not container.has("redis_pool"):
-            logger.error(
-                "Redis pool not found. Cache manager requires Redis pool to be initialized first"
-            )
-            raise ConfigError(
-                "Redis pool not found. Cache manager requires Redis pool to be initialized first"
-            )
-
-        logger.info("Using Redis cache backend")
-        container.register(
-            "cache_manager",
-            CacheManager(
-                backend_type="redis",
-                prefix=config.cache_prefix or "earnorm",
-                ttl=int(config.cache_ttl or 60),
-            ),
-        )
-
-
 async def register_all(config: SystemConfig) -> None:
     """Register all services in the correct order.
 
@@ -207,10 +170,6 @@ async def register_all(config: SystemConfig) -> None:
     # 2. Pool services - Redis pool must be registered first
     logger.info("Registering pool services")
     await register_pool_services(config)
-
-    # 3. Cache services - Cache manager needs Redis pool
-    logger.info("Registering cache services")
-    await register_cache_services(config)
 
     # 4. Database services - Must be registered before environment
     logger.info("Registering database services")

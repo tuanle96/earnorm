@@ -53,6 +53,7 @@ from earnorm.base.database.query.interfaces.operations.aggregate import (
 from earnorm.base.database.query.interfaces.operations.join import JoinProtocol
 from earnorm.base.database.query.interfaces.operations.window import WindowProtocol
 from earnorm.base.database.query.interfaces.query import QueryProtocol
+from earnorm.exceptions import DatabaseError
 from earnorm.types import DatabaseModel, JsonDict
 
 from .operations.aggregate import MongoAggregate
@@ -175,116 +176,123 @@ class MongoQuery(BaseQuery[ModelT]):
             )
             return doc
 
-    async def execute(self) -> List[ModelT]:
-        """Execute query and return results.
+    async def to_raw_data(self) -> List[Dict[str, Any]]:
+        """Get raw data from MongoDB query result.
+
+        This method executes the query and returns raw data from MongoDB
+        without converting to model instances.
 
         Returns:
-            List of model instances
+            List[Dict[str, Any]]: List of raw MongoDB documents
+
+        Example:
+            >>> query = User.search([("age", ">", 18)])
+            >>> raw_data = await query.to_raw_data()
+            >>> print(raw_data)
+            [{"_id": "...", "name": "John", "age": 25}, ...]
+
+        Raises:
+            DatabaseError: If query execution fails
         """
-        pipeline: List[JsonDict] = []
+        try:
+            # Build pipeline
+            pipeline = self._build_pipeline()
 
-        # Add filter stage
-        if self._filter:
-            filter_dict = self._filter.copy()
-            if "id" in filter_dict:
-                try:
-                    filter_dict["_id"] = ObjectId(filter_dict.pop("id"))
-                except InvalidId as e:
-                    self.logger.warning(f"Invalid ID in filter: {e}")
-                    filter_dict["_id"] = None
-            pipeline.append({"$match": filter_dict})
+            # If no fields specified, select all fields from model
+            if not self._fields:
+                # Get all fields from model
+                model_fields = list(self._model_type.__fields__.keys())
+                # Map id to _id for MongoDB
+                if "id" in model_fields:
+                    model_fields.remove("id")
+                    model_fields.append("_id")
+                # Add field selection
+                pipeline.append({"$project": {field: 1 for field in model_fields}})
 
-        # Add sort stage
-        if self._sort:
-            # Convert id to _id in sort if exists
-            sort_dict = {}
-            for field, order in self._sort:
-                if field == "id":
-                    sort_dict["_id"] = order
-                else:
-                    sort_dict[field] = order
-            pipeline.append({"$sort": sort_dict})
+            # Execute aggregation
+            cursor = self._collection.aggregate(
+                pipeline=pipeline, allowDiskUse=self._allow_disk_use
+            )
 
-        # Add skip stage
-        if self._skip:
-            pipeline.append({"$skip": self._skip})
+            # Get raw results
+            results = await cursor.to_list(length=None)
 
-        # Add limit stage
-        if self._limit:
-            pipeline.append({"$limit": self._limit})
-
-        # Add custom pipeline stages
-        if self._pipeline:
-            pipeline.extend(self._pipeline)
-
-        # Add projection to rename _id to id
-        pipeline.append({"$addFields": {"id": "$_id"}})
-        pipeline.append({"$project": {"_id": 0}})
-
-        # Handle hint parameter
-        aggregate_kwargs = {"allowDiskUse": self._allow_disk_use, **self._options}
-        if self._hint is not None:
-            if isinstance(self._hint, str):
-                aggregate_kwargs["hint"] = self._hint
-            else:
-                # Convert id to _id in hint if exists
-                hint_dict = {}
-                for field, order in self._hint:
-                    if field == "id":
-                        hint_dict["_id"] = order
-                    else:
-                        hint_dict[field] = order
-                aggregate_kwargs["hint"] = hint_dict
-
-        # Execute pipeline
-        cursor: AsyncIOMotorCommandCursor[JsonDict] = self._collection.aggregate(
-            pipeline, **aggregate_kwargs
-        )
-        docs = [doc async for doc in cursor]
-
-        # Process documents
-        self._processed_docs = []
-        for doc in docs:
-            try:
-                # Convert _id to id with type checking
-                if "_id" in doc:
-                    if isinstance(doc["_id"], (ObjectId, str)):
-                        doc["id"] = str(doc["_id"])
-                    elif doc["_id"] is None:
-                        doc["id"] = None
-                    else:
-                        self.logger.error(
-                            "Invalid _id type: %s for document: %s",
-                            type(doc["_id"]),
-                            doc,
-                        )
+            # Convert field values
+            converted_results = []
+            for result in results:
+                converted_doc = {}
+                for field, value in result.items():
+                    # Convert ObjectId to string
+                    if field == "_id":
+                        converted_doc["id"] = str(value)
                         continue
-                    del doc["_id"]
 
-                # Apply post-processors
-                doc = await self._process_document(doc)
-                self._processed_docs.append(doc)
-            except Exception as e:
-                self.logger.warning(
-                    f"Document processing failed: {str(e)} for document: {doc}",
-                    exc_info=True,
-                )
+                    # Convert other field values
+                    if value is not None:
+                        if isinstance(value, (str, int, float, bool)):
+                            converted_doc[field] = value
+                        else:
+                            # Convert complex types to string
+                            converted_doc[field] = str(value)
+                    else:
+                        converted_doc[field] = None
 
-        # Create model instances
-        results: List[ModelT] = []
-        for doc in self._processed_docs:
-            try:
-                model = self._model_type()
-                if "id" in doc:
-                    model.id = doc["id"]
-                object.__setattr__(model, "_data", doc)
-                object.__setattr__(model, "_ids", (model.id,))
-                results.append(model)
-            except Exception as e:
-                self.logger.warning(f"Error creating model instance: {e}")
-                continue
+                converted_results.append(converted_doc)  # type: ignore
 
-        return results
+            return converted_results  # type: ignore
+
+        except Exception as e:
+            self.logger.error("Failed to execute MongoDB query: %s", str(e))
+            raise DatabaseError(
+                message=f"MongoDB query failed: {str(e)}", backend="mongodb"
+            ) from e
+
+    async def execute(self) -> List[ModelT]:
+        """Execute MongoDB query and return model instances.
+
+        This method executes the query and converts the results to model instances.
+
+        Returns:
+            List[ModelT]: List of model instances
+
+        Example:
+            >>> query = User.search([("age", ">", 18)])
+            >>> users = await query.execute()
+            >>> print(users)
+            [User(id="...", name="John", age=25), ...]
+
+        Raises:
+            DatabaseError: If query execution fails or model instantiation fails
+        """
+        try:
+            # Get raw data
+            results = await self.to_raw_data()
+
+            # Convert to model instances
+            instances: List[ModelT] = []
+            for doc in results:
+                try:
+                    # Create model instance
+                    instance = self._model_type(**doc)
+                    instances.append(instance)
+                except Exception as e:
+                    self.logger.error(
+                        "Failed to create model instance from document %s: %s",
+                        doc,
+                        str(e),
+                    )
+                    raise DatabaseError(
+                        message=f"Failed to create model instance: {str(e)}",
+                        backend="mongodb",
+                    ) from e
+
+            return instances
+
+        except Exception as e:
+            self.logger.error("Failed to execute MongoDB query: %s", str(e))
+            raise DatabaseError(
+                message=f"MongoDB query failed: {str(e)}", backend="mongodb"
+            ) from e
 
     def filter(self, domain: Union[List[Any], JsonDict]) -> "MongoQuery[ModelT]":
         """Filter documents.
@@ -556,3 +564,61 @@ class MongoQuery(BaseQuery[ModelT]):
         """Add fields to prefetch."""
         self._prefetch_fields = fields
         return self
+
+    def _build_pipeline(self) -> List[JsonDict]:
+        """Build MongoDB aggregation pipeline.
+
+        This method builds a MongoDB aggregation pipeline based on:
+        - Filter conditions (_filter)
+        - Field selection (_fields)
+        - Sort order (_sort)
+        - Offset (_skip)
+        - Limit (_limit)
+        - Joins (_joins)
+        - Aggregations (_aggregates)
+        - Window functions (_windows)
+
+        Returns:
+            List[JsonDict]: MongoDB aggregation pipeline stages
+        """
+        pipeline: List[JsonDict] = []
+
+        # Add filter stage if exists
+        if self._filter:
+            pipeline.append({"$match": self._filter})
+
+        # Add field selection if specified
+        if self._fields:
+            # Map id to _id for MongoDB
+            fields = self._fields.copy()
+            if "id" in fields:
+                fields.remove("id")
+                fields.append("_id")
+            pipeline.append({"$project": {field: 1 for field in fields}})
+
+        # Add join stages
+        for join in self._joins:
+            pipeline.extend(join.get_pipeline_stages())
+
+        # Add aggregate stages
+        for aggregate in self._aggregates:
+            pipeline.extend(aggregate.get_pipeline_stages())
+
+        # Add window stages
+        for window in self._windows:
+            pipeline.extend(window.get_pipeline_stages())
+
+        # Add sort stage if exists
+        if self._sort:
+            sort_dict = {field: order for field, order in self._sort}
+            pipeline.append({"$sort": sort_dict})
+
+        # Add skip stage if exists
+        if self._skip:
+            pipeline.append({"$skip": self._skip})
+
+        # Add limit stage if exists
+        if self._limit:
+            pipeline.append({"$limit": self._limit})
+
+        return pipeline
