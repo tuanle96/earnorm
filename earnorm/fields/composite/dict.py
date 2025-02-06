@@ -1,226 +1,214 @@
 """Dictionary field implementation.
 
-This module provides dictionary field type for handling key-value pairs.
+This module provides dictionary field type for handling key-value mappings.
 It supports:
 - Dictionary validation
-- Key/value validation
-- Schema validation
+- Key and value validation
+- Nested dictionaries
+- Type checking
 - Database type mapping
 - Dictionary comparison operations
 
 Examples:
-    >>> class Product(Model):
-    ...     metadata = DictField(
-    ...         key_field=StringField(),
-    ...         value_field=AnyField(),
-    ...     )
+    >>> class User(Model):
+    ...     metadata = DictField(StringField())
     ...     settings = DictField(
-    ...         key_field=StringField(),
-    ...         value_field=AnyField(),
-    ...         schema={
-    ...             "type": "object",
-    ...             "properties": {
-    ...                 "notifications": {"type": "boolean"},
-    ...                 "theme": {"type": "string", "enum": ["light", "dark"]},
-    ...             },
-    ...         },
+    ...         JSONField(),
+    ...         min_length=1,
+    ...         max_length=100
     ...     )
     ...
     ...     # Query examples
-    ...     has_tags = Product.find(Product.metadata.has_key("tags"))
-    ...     dark_theme = Product.find(Product.settings.has_value("dark", path="theme"))
-    ...     configured = Product.find(Product.settings.length_greater_than(0))
+    ...     with_key = User.find(User.metadata.has_key("role"))
+    ...     admins = User.find(User.metadata.has_value("admin"))
 """
 
-from typing import Any, Generic, Optional, TypeVar, cast
-
-from jsonschema import Draft202012Validator, ValidationError, validate
+from typing import Any, Dict, Generic, Mapping, Optional, TypeVar, cast
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
 from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 
-# Type variables for key and value types
-K = TypeVar("K")
-V = TypeVar("V")
+T = TypeVar("T")
 
 
-class DictField(BaseField[dict[K, V]], FieldComparisonMixin, Generic[K, V]):
+class DictField(BaseField[Dict[str, T]], FieldComparisonMixin, Generic[T]):
     """Field for dictionary values.
 
-    This field type handles key-value pairs, with support for:
+    This field type handles dictionaries, with support for:
     - Dictionary validation
-    - Key/value validation
-    - Schema validation
+    - Key and value validation
+    - Nested dictionaries
+    - Type checking
     - Database type mapping
     - Dictionary comparison operations
 
     Attributes:
-        key_field: Field type for dictionary keys
         value_field: Field type for dictionary values
-        schema: JSON schema for validation
+        min_length: Minimum dictionary length
+        max_length: Maximum dictionary length
         backend_options: Database backend options
     """
 
+    _value_field: BaseField[T]
     min_length: Optional[int]
     max_length: Optional[int]
-    schema: Optional[dict[str, Any]]
-    backend_options: dict[str, Any]
+    backend_options: Dict[str, Any]
 
     def __init__(
         self,
-        key_field: BaseField[K],
-        value_field: BaseField[V],
+        value_field: BaseField[T],
         *,
         min_length: Optional[int] = None,
         max_length: Optional[int] = None,
-        schema: Optional[dict[str, Any]] = None,
         **options: Any,
     ) -> None:
         """Initialize dictionary field.
 
         Args:
-            key_field: Field type for dictionary keys
             value_field: Field type for dictionary values
             min_length: Minimum dictionary length
             max_length: Maximum dictionary length
-            schema: JSON schema for validation
             **options: Additional field options
-
-        Raises:
-            ValueError: If min_length or max_length are invalid
-            ValueError: If schema is invalid
         """
-        if min_length is not None and min_length < 0:
-            raise ValueError("min_length must be non-negative")
-        if max_length is not None and max_length < 0:
-            raise ValueError("max_length must be non-negative")
-        if (
-            min_length is not None
-            and max_length is not None
-            and min_length > max_length
-        ):
-            raise ValueError("min_length cannot be greater than max_length")
-
         super().__init__(**options)
 
-        # Store fields as protected attributes
-        object.__setattr__(self, "_key_field", key_field)
-        object.__setattr__(self, "_value_field", value_field)
+        # Store field options
+        self._value_field = value_field  # type: ignore
         self.min_length = min_length
         self.max_length = max_length
-        self.schema = schema
-
-        # Validate schema if provided
-        if schema is not None:
-            try:
-                Draft202012Validator.check_schema(schema)
-            except ValidationError as e:
-                raise ValueError(f"Invalid JSON schema: {str(e)}") from e
 
         # Initialize backend options
-        self.backend_options = {
-            "mongodb": {"type": "object"},
-            "postgres": {"type": "JSONB"},
-            "mysql": {"type": "JSON"},
-        }
+        self.backend_options = {}
+        for backend in ["mongodb", "postgres", "mysql"]:
+            try:
+                from earnorm.database.type_mapping import (
+                    get_field_options,
+                    get_field_type,
+                )
 
-    @property
-    def key_field(self) -> BaseField[K]:
-        """Get key field instance."""
-        return cast(BaseField[K], object.__getattribute__(self, "_key_field"))
+                field_type = get_field_type("dict", backend)
+                field_options = get_field_options(backend)
+                self.backend_options[backend] = {
+                    "type": field_type,
+                    **field_options,
+                }
+            except ImportError:
+                # Fallback options if type_mapping not available
+                self.backend_options[backend] = {
+                    "type": "object" if backend == "mongodb" else "JSON",
+                    "index": False,
+                    "unique": False,
+                }
 
-    @property
-    def value_field(self) -> BaseField[V]:
-        """Get value field instance."""
-        return cast(BaseField[V], object.__getattribute__(self, "_value_field"))
+    async def get_value_field(self) -> BaseField[T]:
+        """Get value field type.
 
-    async def validate(self, value: Any) -> None:
+        Returns:
+            Field type for dictionary values
+        """
+        if not hasattr(self, "_value_field"):
+            raise AttributeError("value_field has not been initialized")
+        return await self._value_field  # type: ignore
+
+    async def setup(self, name: str, model_name: str) -> None:
+        """Set up field.
+
+        This method:
+        1. Sets up base field
+        2. Sets up value field
+
+        Args:
+            name: Field name
+            model_name: Model name
+        """
+        await super().setup(name, model_name)
+        value_field = await self.get_value_field()
+        await value_field.setup(f"{name}.value", model_name)
+
+    async def validate(
+        self, value: Any, context: Optional[Dict[str, Any]] = None
+    ) -> Optional[Dict[str, T]]:
         """Validate dictionary value.
 
         This method validates:
-        - Value is dictionary type
-        - Dictionary length is within limits
-        - Keys and values are valid
-        - Schema validation if provided
+        - Value is a dictionary
+        - Dictionary length
+        - Key types
+        - Value types using value_field
 
         Args:
             value: Value to validate
+            context: Validation context
+
+        Returns:
+            Validated dictionary value
 
         Raises:
             FieldValidationError: If validation fails
         """
-        await super().validate(value)
+        value = await super().validate(value, context)
 
         if value is not None:
-            if not isinstance(value, dict):
+            if not isinstance(value, Mapping):
                 raise FieldValidationError(
-                    message=f"Value must be a dictionary, got {type(value).__name__}",
+                    message=f"Expected dictionary, got {type(value).__name__}",
                     field_name=self.name,
                     code="invalid_type",
                 )
 
-            value_dict = cast(dict[Any, Any], value)
+            dict_value = cast(Dict[Any, Any], value)
 
-            # Check length
-            if self.min_length is not None and len(value_dict) < self.min_length:
+            # Validate length
+            if self.min_length is not None and len(dict_value) < self.min_length:
                 raise FieldValidationError(
                     message=f"Dictionary must have at least {self.min_length} items",
                     field_name=self.name,
                     code="min_length",
                 )
 
-            if self.max_length is not None and len(value_dict) > self.max_length:
+            if self.max_length is not None and len(dict_value) > self.max_length:
                 raise FieldValidationError(
                     message=f"Dictionary cannot have more than {self.max_length} items",
                     field_name=self.name,
                     code="max_length",
                 )
 
-            # Validate schema if provided
-            if self.schema is not None:
-                try:
-                    validate(instance=value_dict, schema=self.schema)
-                except ValidationError as e:
-                    raise FieldValidationError(
-                        message=f"Schema validation failed: {str(e)}",
-                        field_name=self.name,
-                        code="schema_error",
-                    ) from e
-
             # Validate keys and values
-            for key, val in value_dict.items():
+            result: Dict[str, T] = {}
+            for key, val in dict_value.items():
+                key_str = str(key)
+                # Validate value
                 try:
-                    await self.key_field.validate(key)
+                    value_field = await self.get_value_field()
+                    validated_value = await value_field.validate(val, context)
+                    if validated_value is not None:
+                        result[key_str] = validated_value
                 except FieldValidationError as e:
                     raise FieldValidationError(
-                        message=f"Invalid key {key!r}: {str(e)}",
-                        field_name=self.name,
-                        code="invalid_key",
-                    ) from e
-
-                try:
-                    await self.value_field.validate(val)
-                except FieldValidationError as e:
-                    raise FieldValidationError(
-                        message=f"Invalid value for key {key!r}: {str(e)}",
+                        message=f"Invalid value for key '{key_str}': {str(e)}",
                         field_name=self.name,
                         code="invalid_value",
                     ) from e
 
-    async def convert(self, value: Any) -> Optional[dict[K, V]]:
+            return result
+
+        return None
+
+    async def convert(self, value: Any) -> Optional[Dict[str, T]]:
         """Convert value to dictionary.
 
-        Handles:
+        This method handles:
         - None values
         - Dictionary values
         - Mapping values
+        - Value type conversion using value_field
 
         Args:
             value: Value to convert
 
         Returns:
-            Converted dictionary value or None
+            Converted dictionary value
 
         Raises:
             FieldValidationError: If value cannot be converted
@@ -229,45 +217,29 @@ class DictField(BaseField[dict[K, V]], FieldComparisonMixin, Generic[K, V]):
             return None
 
         try:
-            if not isinstance(value, dict):
+            if isinstance(value, Mapping):
+                dict_value = cast(Dict[Any, Any], value)
+                result: Dict[str, T] = {}
+                value_field = self.get_value_field()
+                for key, val in dict_value.items():
+                    key_str = str(key)
+                    converted_value = await value_field.convert(val)  # type: ignore
+                    if converted_value is not None:
+                        result[key_str] = converted_value
+                return result
+            else:
                 raise TypeError(f"Cannot convert {type(value).__name__} to dictionary")
 
-            value_dict = cast(dict[Any, Any], value)
-
-            # Convert keys and values
-            result: dict[K, V] = {}
-            for key, val in value_dict.items():
-                try:
-                    converted_key = await self.key_field.convert(key)
-                    if converted_key is None:
-                        raise ValueError("Dictionary keys cannot be None")
-                except FieldValidationError as e:
-                    raise FieldValidationError(
-                        message=f"Cannot convert key {key!r}: {str(e)}",
-                        field_name=self.name,
-                        code="conversion_error",
-                    ) from e
-
-                try:
-                    converted_value = await self.value_field.convert(val)
-                    if converted_value is not None:
-                        result[converted_key] = converted_value
-                except FieldValidationError as e:
-                    raise FieldValidationError(
-                        message=f"Cannot convert value for key {key!r}: {str(e)}",
-                        field_name=self.name,
-                        code="conversion_error",
-                    ) from e
-
-            return result
         except (TypeError, ValueError) as e:
             raise FieldValidationError(
-                message=f"Cannot convert value to dictionary: {str(e)}",
+                message=str(e),
                 field_name=self.name,
                 code="conversion_error",
             ) from e
 
-    async def to_db(self, value: Optional[dict[K, V]], backend: str) -> DatabaseValue:
+    async def to_db(
+        self, value: Optional[Dict[str, T]], backend: str
+    ) -> Optional[Dict[str, Any]]:
         """Convert dictionary to database format.
 
         Args:
@@ -275,49 +247,22 @@ class DictField(BaseField[dict[K, V]], FieldComparisonMixin, Generic[K, V]):
             backend: Database backend type
 
         Returns:
-            Converted dictionary value or None
-
-        Raises:
-            FieldValidationError: If value cannot be converted
+            Converted dictionary value
         """
         if value is None:
             return None
 
-        try:
-            # Convert keys and values
-            result: dict[Any, Any] = {}
-            for key, val in value.items():
-                try:
-                    converted_key = await self.key_field.to_db(key, backend)
-                    if converted_key is None:
-                        raise ValueError("Dictionary keys cannot be None")
-                except FieldValidationError as e:
-                    raise FieldValidationError(
-                        message=f"Cannot convert key {key!r}: {str(e)}",
-                        field_name=self.name,
-                        code="conversion_error",
-                    ) from e
+        result: Dict[str, Any] = {}
+        value_field = self.get_value_field()
+        for key, val in value.items():
+            db_value = await value_field.to_db(val, backend)  # type: ignore
+            if db_value is not None:
+                result[key] = db_value
+        return result
 
-                try:
-                    converted_value = await self.value_field.to_db(val, backend)
-                    if converted_value is not None:
-                        result[converted_key] = converted_value
-                except FieldValidationError as e:
-                    raise FieldValidationError(
-                        message=f"Cannot convert value for key {key!r}: {str(e)}",
-                        field_name=self.name,
-                        code="conversion_error",
-                    ) from e
-
-            return result
-        except Exception as e:
-            raise FieldValidationError(
-                message=f"Cannot convert dictionary to database format: {str(e)}",
-                field_name=self.name,
-                code="conversion_error",
-            ) from e
-
-    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[dict[K, V]]:
+    async def from_db(
+        self, value: DatabaseValue, backend: str
+    ) -> Optional[Dict[str, T]]:
         """Convert database value to dictionary.
 
         Args:
@@ -325,7 +270,7 @@ class DictField(BaseField[dict[K, V]], FieldComparisonMixin, Generic[K, V]):
             backend: Database backend type
 
         Returns:
-            Converted dictionary value or None
+            Converted dictionary value
 
         Raises:
             FieldValidationError: If value cannot be converted
@@ -333,127 +278,72 @@ class DictField(BaseField[dict[K, V]], FieldComparisonMixin, Generic[K, V]):
         if value is None:
             return None
 
+        if not isinstance(value, Mapping):
+            raise FieldValidationError(
+                message=f"Expected dictionary from database, got {type(value).__name__}",
+                field_name=self.name,
+                code="invalid_type",
+            )
+
         try:
-            if not isinstance(value, dict):
-                raise TypeError(
-                    f"Expected dictionary from database, got {type(value).__name__}"
-                )
-
-            value_dict = cast(dict[Any, Any], value)
-
-            # Convert keys and values
-            result: dict[K, V] = {}
-            for key, val in value_dict.items():
-                try:
-                    converted_key = await self.key_field.from_db(key, backend)
-                    if converted_key is None:
-                        raise ValueError("Dictionary keys cannot be None")
-                except FieldValidationError as e:
-                    raise FieldValidationError(
-                        message=f"Cannot convert key {key!r}: {str(e)}",
-                        field_name=self.name,
-                        code="conversion_error",
-                    ) from e
-
-                try:
-                    converted_value = await self.value_field.from_db(val, backend)
-                    if converted_value is not None:
-                        result[converted_key] = converted_value
-                except FieldValidationError as e:
-                    raise FieldValidationError(
-                        message=f"Cannot convert value for key {key!r}: {str(e)}",
-                        field_name=self.name,
-                        code="conversion_error",
-                    ) from e
-
+            result: Dict[str, T] = {}
+            value_field = self.get_value_field()
+            for key, val in value.items():
+                converted_value = await value_field.from_db(val, backend)  # type: ignore
+                if converted_value is not None:
+                    result[key] = converted_value
             return result
+
         except Exception as e:
             raise FieldValidationError(
-                message=f"Cannot convert database value to dictionary: {str(e)}",
+                message=f"Cannot convert database value: {str(e)}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
 
-    def _prepare_value(self, value: Any) -> DatabaseValue:
-        """Prepare dictionary value for comparison.
-
-        Converts value to dictionary for database comparison.
-
-        Args:
-            value: Value to prepare
-
-        Returns:
-            Prepared dictionary value or None
-        """
-        if value is None:
-            return None
-
-        try:
-            if isinstance(value, dict):
-                return value  # type: ignore
-            return None
-        except (TypeError, ValueError):
-            return None
-
-    def has_key(self, key: K) -> ComparisonOperator:
-        """Check if dictionary has specific key.
+    def has_key(self, key: str) -> ComparisonOperator:
+        """Check if dictionary has key.
 
         Args:
             key: Key to check for
 
         Returns:
-            ComparisonOperator: Comparison operator with field name and value
+            ComparisonOperator: Comparison operator with field name and key
         """
-        return ComparisonOperator(self.name, "has_key", self._prepare_value(key))
+        return ComparisonOperator(self.name, "has_key", key)
 
-    def has_value(self, value: V, path: Optional[str] = None) -> ComparisonOperator:
-        """Check if dictionary has specific value.
+    def has_value(self, value: T) -> ComparisonOperator:
+        """Check if dictionary has value.
 
         Args:
             value: Value to check for
-            path: Optional path to nested value (dot notation)
 
         Returns:
             ComparisonOperator: Comparison operator with field name and value
         """
-        return ComparisonOperator(
-            self.name, "has_value", {"value": self._prepare_value(value), "path": path}
-        )
+        return ComparisonOperator(self.name, "has_value", value)
 
-    def has_all_keys(self, keys: list[K]) -> ComparisonOperator:
-        """Check if dictionary has all specified keys.
+    def matches(self, query: Dict[str, Any]) -> ComparisonOperator:
+        """Check if dictionary matches query.
 
         Args:
-            keys: List of keys to check for
+            query: Query dict to match against
 
         Returns:
-            ComparisonOperator: Comparison operator with field name and values
+            ComparisonOperator: Comparison operator with field name and query
         """
-        prepared_values = [self._prepare_value(key) for key in keys]
-        return ComparisonOperator(self.name, "has_all_keys", prepared_values)
-
-    def has_any_keys(self, keys: list[K]) -> ComparisonOperator:
-        """Check if dictionary has any of specified keys.
-
-        Args:
-            keys: List of keys to check for
-
-        Returns:
-            ComparisonOperator: Comparison operator with field name and values
-        """
-        prepared_values = [self._prepare_value(key) for key in keys]
-        return ComparisonOperator(self.name, "has_any_keys", prepared_values)
+        return ComparisonOperator(self.name, "matches", query)
 
     def length_equals(self, length: int) -> ComparisonOperator:
-        """Check if dictionary length equals value.
+        """Check if dictionary has exact length.
 
         Args:
-            length: Length to compare with
+            length: Length to check for
 
         Returns:
-            ComparisonOperator: Comparison operator with field name and value
+            ComparisonOperator: Comparison operator with field name and length
         """
-        return ComparisonOperator(self.name, "length_eq", length)
+        return ComparisonOperator(self.name, "length_equals", length)
 
     def length_greater_than(self, length: int) -> ComparisonOperator:
         """Check if dictionary length is greater than value.
@@ -462,9 +352,9 @@ class DictField(BaseField[dict[K, V]], FieldComparisonMixin, Generic[K, V]):
             length: Length to compare with
 
         Returns:
-            ComparisonOperator: Comparison operator with field name and value
+            ComparisonOperator: Comparison operator with field name and length
         """
-        return ComparisonOperator(self.name, "length_gt", length)
+        return ComparisonOperator(self.name, "length_greater_than", length)
 
     def length_less_than(self, length: int) -> ComparisonOperator:
         """Check if dictionary length is less than value.
@@ -473,42 +363,9 @@ class DictField(BaseField[dict[K, V]], FieldComparisonMixin, Generic[K, V]):
             length: Length to compare with
 
         Returns:
-            ComparisonOperator: Comparison operator with field name and value
+            ComparisonOperator: Comparison operator with field name and length
         """
-        return ComparisonOperator(self.name, "length_lt", length)
-
-    def matches_schema(self, schema: dict[str, Any]) -> ComparisonOperator:
-        """Check if dictionary matches JSON schema.
-
-        Args:
-            schema: JSON schema to validate against
-
-        Returns:
-            ComparisonOperator: Comparison operator with field name and value
-        """
-        return ComparisonOperator(self.name, "matches_schema", schema)
-
-    def is_subset(self, other: dict[K, V]) -> ComparisonOperator:
-        """Check if dictionary is subset of another dictionary.
-
-        Args:
-            other: Dictionary to compare with
-
-        Returns:
-            ComparisonOperator: Comparison operator with field name and value
-        """
-        return ComparisonOperator(self.name, "is_subset", self._prepare_value(other))
-
-    def is_superset(self, other: dict[K, V]) -> ComparisonOperator:
-        """Check if dictionary is superset of another dictionary.
-
-        Args:
-            other: Dictionary to compare with
-
-        Returns:
-            ComparisonOperator: Comparison operator with field name and value
-        """
-        return ComparisonOperator(self.name, "is_superset", self._prepare_value(other))
+        return ComparisonOperator(self.name, "length_less_than", length)
 
     def is_empty(self) -> ComparisonOperator:
         """Check if dictionary is empty.

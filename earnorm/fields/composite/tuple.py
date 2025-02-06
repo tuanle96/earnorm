@@ -2,150 +2,208 @@
 
 This module provides tuple field type for handling fixed-length sequences of values.
 It supports:
-- Type validation for each element
+- Tuple validation
+- Element validation
 - Length validation
 - Database type mapping
-- Custom validation rules
 - Tuple comparison operations
 
 Examples:
-    >>> class Product(Model):
-    ...     # Tuple of (width, height, depth) in centimeters
-    ...     dimensions = TupleField(
-    ...         fields=(
-    ...             NumberField(min_value=0),  # width
-    ...             NumberField(min_value=0),  # height
-    ...             NumberField(min_value=0),  # depth
-    ...         ),
-    ...         required=True,
+    >>> class Point(Model):
+    ...     coordinates = TupleField(
+    ...         (FloatField(), FloatField(), FloatField()),
+    ...         required=True
     ...     )
-    ...     # Tuple of (latitude, longitude)
-    ...     location = TupleField(
-    ...         fields=(
-    ...             NumberField(min_value=-90, max_value=90),  # latitude
-    ...             NumberField(min_value=-180, max_value=180),  # longitude
-    ...         ),
-    ...         nullable=True,
+    ...     bounds = TupleField(
+    ...         (FloatField(min_value=0), FloatField(min_value=0))
     ...     )
     ...
     ...     # Query examples
-    ...     large_products = Product.find(Product.dimensions.element_greater_than(0, 100))  # width > 100cm
-    ...     us_products = Product.find(Product.location.equals((37.7749, -122.4194)))  # San Francisco
-    ...     nearby = Product.find(Product.location.in_radius((37.7749, -122.4194), 10))  # Within 10km
+    ...     origin = Point.find(Point.coordinates.equals((0, 0, 0)))
+    ...     in_range = Point.find(Point.bounds.contains(5.0))
 """
 
-from typing import Any, Generic, List, Optional, Sequence, Tuple, TypeVar, Union
+import json
+from typing import (
+    Any,
+    Dict,
+    Generic,
+    List,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    TypeVar,
+    Union,
+    cast,
+)
 
+from earnorm.database.mappers import get_mapper
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
 from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 
-# Type variable for tuple elements
-T = TypeVar("T")
+
+class Comparable(Protocol):
+    """Protocol for comparable types."""
+
+    def __lt__(self, other: Any) -> bool: ...
+    def __gt__(self, other: Any) -> bool: ...
+
+
+T = TypeVar("T", bound=Comparable)
 
 
 class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
-    """Field for fixed-length sequences of values.
+    """Field for tuple values.
 
-    This field type handles tuples of values, with support for:
-    - Type validation for each element
-    - Length validation
+    This field type handles fixed-length sequences of values, with support for:
+    - Tuple validation
+    - Element validation
     - Database type mapping
-    - Custom validation rules
     - Tuple comparison operations
 
     Attributes:
-        fields: Sequence of fields for validating tuple elements
+        element_fields: Tuple of field types for elements
         backend_options: Database backend options
     """
 
-    fields: Sequence[BaseField[T]]
-    backend_options: dict[str, Any]
+    element_fields: Tuple[BaseField[T], ...]  # type: ignore
+    backend_options: Dict[str, Any]
 
     def __init__(
         self,
-        fields: Sequence[BaseField[T]],
+        element_fields: Sequence[BaseField[T]],
         **options: Any,
     ) -> None:
         """Initialize tuple field.
 
         Args:
-            fields: Sequence of fields for validating tuple elements
+            element_fields: Sequence of field types for elements
             **options: Additional field options
         """
         super().__init__(**options)
 
-        if not fields:
-            raise ValueError("TupleField requires at least one field")
+        # Store as protected attribute to avoid type issues
+        object.__setattr__(self, "_element_fields", tuple(element_fields))
 
-        self.fields = fields
+        # Initialize backend options using mappers
+        self.backend_options = {}
+        for backend in ["mongodb", "postgres", "mysql"]:
+            mapper = get_mapper(backend)
+            self.backend_options[backend] = {
+                "type": mapper.get_field_type(self),
+                **mapper.get_field_options(self),
+            }
 
-        # Initialize backend options
-        self.backend_options = {
-            "mongodb": {"type": "array"},
-            "postgres": {"type": "JSONB"},
-            "mysql": {"type": "JSON"},
-        }
+    @property
+    def element_fields(self) -> Tuple[BaseField[T], ...]:
+        """Get element fields."""
+        return object.__getattribute__(self, "_element_fields")
 
-    async def validate(self, value: Any) -> None:
+    async def setup(self, name: str, model_name: str) -> None:
+        """Set up the field.
+
+        Args:
+            name: Field name
+            model_name: Model name
+        """
+        await super().setup(name, model_name)
+        for i, field in enumerate(self.element_fields):
+            await field.setup(f"{name}[{i}]", model_name)
+
+    async def validate(
+        self, value: Any, context: Optional[Dict[str, Any]] = None
+    ) -> Optional[Tuple[T, ...]]:
         """Validate tuple value.
 
         This method validates:
-        - Value is a sequence
-        - Value length matches fields length
-        - Each element is valid according to its field
+        - Value can be converted to tuple
+        - Length matches number of element fields
+        - Elements are valid
 
         Args:
             value: Value to validate
+            context: Validation context with following keys:
+                    - model: Model instance
+                    - env: Environment instance
+                    - operation: Operation type (create/write/search...)
+                    - values: Values being validated
+                    - field_name: Name of field being validated
+
+        Returns:
+            Optional[Tuple[T, ...]]: The validated tuple value
 
         Raises:
             FieldValidationError: If validation fails
         """
-        await super().validate(value)
+        value = await super().validate(value, context)
 
         if value is not None:
-            if not isinstance(value, (tuple, list)):
+            # Convert to tuple if needed
+            try:
+                if not isinstance(value, tuple):
+                    value = tuple(value)
+            except (TypeError, ValueError) as e:
                 raise FieldValidationError(
-                    message=f"Value must be a tuple or list, got {type(value).__name__}",
+                    message=f"Cannot convert to tuple: {str(e)}",
                     field_name=self.name,
                     code="invalid_type",
+                    context=context,
                 )
 
-            value_list: List[Any] = list(
-                value  # type: ignore
-            )  # Convert to list for consistent handling
-            if len(value_list) != len(self.fields):
+            value_tuple: Tuple[Any, ...] = cast(Tuple[Any, ...], value)
+
+            # Validate length
+            expected_length = len(self.element_fields)
+            if len(value_tuple) != expected_length:
                 raise FieldValidationError(
-                    message=f"Expected {len(self.fields)} elements, got {len(value_list)}",
+                    message=f"Tuple must have exactly {expected_length} elements",
                     field_name=self.name,
                     code="invalid_length",
+                    context=context,
                 )
 
-            # Validate each element
-            for i, (field, element) in enumerate(zip(self.fields, value_list)):
+            # Create element context
+            element_context = {
+                **(context or {}),
+                "parent_field": self,
+                "parent_value": value_tuple,
+                "validation_path": (
+                    f"{context.get('validation_path', '')}.{self.name}"
+                    if context
+                    else self.name
+                ),
+            }
+
+            # Validate elements
+            validated_elements: List[T] = []
+            for i, (element, field) in enumerate(zip(value_tuple, self.element_fields)):
                 try:
-                    await field.validate(element)  # type: ignore
+                    element_context["index"] = i
+                    validated = await field.validate(element, element_context)
+                    if validated is not None:
+                        validated_elements.append(validated)
                 except FieldValidationError as e:
                     raise FieldValidationError(
                         message=f"Invalid element at index {i}: {str(e)}",
                         field_name=self.name,
                         code="invalid_element",
+                        context=element_context,
                     ) from e
+
+            return tuple(validated_elements)
+
+        return None
 
     async def convert(self, value: Any) -> Optional[Tuple[T, ...]]:
         """Convert value to tuple.
-
-        Handles:
-        - None values
-        - Tuple values
-        - List values
-        - JSON array values
 
         Args:
             value: Value to convert
 
         Returns:
-            Converted tuple or None
+            Converted tuple value or None
 
         Raises:
             FieldValidationError: If value cannot be converted
@@ -154,84 +212,61 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
             return None
 
         try:
-            if isinstance(value, (tuple, list)):
-                value_list: List[Any] = list(
-                    value  # type: ignore
-                )  # Convert to list for consistent handling
-                if len(value_list) != len(self.fields):
-                    raise FieldValidationError(
-                        message=f"Expected {len(self.fields)} elements, got {len(value_list)}",
-                        field_name=self.name,
-                        code="invalid_length",
-                    )
-
-                # Convert each element
-                result: List[T] = []
-                for i, (field, element) in enumerate(zip(self.fields, value_list)):
-                    try:
-                        converted = await field.convert(element)  # type: ignore
-                        result.append(converted)  # type: ignore
-                    except FieldValidationError as e:
-                        raise FieldValidationError(
-                            message=f"Invalid element at index {i}: {str(e)}",
-                            field_name=self.name,
-                            code="invalid_element",
-                        ) from e
-
-                return tuple(result)
-            elif isinstance(value, str):
+            if isinstance(value, str):
                 # Try to parse as JSON array
-                import json
-
                 try:
-                    data = json.loads(value)
-                    if not isinstance(data, list):
+                    value = json.loads(value)
+                    if not isinstance(value, (list, tuple)):
                         raise FieldValidationError(
                             message="JSON value must be an array",
                             field_name=self.name,
                             code="invalid_json",
                         )
-
-                    data_list: List[Any] = list(
-                        data  # type: ignore
-                    )  # Convert to list for consistent handling
-                    if len(data_list) != len(self.fields):
-                        raise FieldValidationError(
-                            message=f"Expected {len(self.fields)} elements, got {len(data_list)}",
-                            field_name=self.name,
-                            code="invalid_length",
-                        )
-
-                    # Convert each element
-                    result: List[T] = []
-                    for i, (field, element) in enumerate(zip(self.fields, data_list)):
-                        try:
-                            converted = await field.convert(element)  # type: ignore
-                            result.append(converted)  # type: ignore
-                        except FieldValidationError as e:
-                            raise FieldValidationError(
-                                message=f"Invalid element at index {i}: {str(e)}",
-                                field_name=self.name,
-                                code="invalid_element",
-                            ) from e
-
-                    return tuple(result)
                 except json.JSONDecodeError as e:
                     raise FieldValidationError(
                         message=f"Invalid JSON array: {str(e)}",
                         field_name=self.name,
                         code="invalid_json",
                     ) from e
-            else:
-                value_type = type(value).__name__
+
+            # Convert to tuple
+            try:
+                value = tuple(cast(Sequence[Any], value))
+            except (TypeError, ValueError) as e:
                 raise FieldValidationError(
-                    message=f"Cannot convert {value_type} to tuple",
+                    message=f"Cannot convert to tuple: {str(e)}",
                     field_name=self.name,
                     code="conversion_error",
+                ) from e
+
+            # Validate length
+            expected_length = len(self.element_fields)
+            if len(value) != expected_length:
+                raise FieldValidationError(
+                    message=f"Tuple must have exactly {expected_length} elements",
+                    field_name=self.name,
+                    code="invalid_length",
                 )
-        except (TypeError, ValueError) as e:
+
+            # Convert elements
+            result: List[T] = []
+            for i, (element, field) in enumerate(zip(value, self.element_fields)):  # type: ignore
+                try:
+                    converted = await field.convert(element)
+                    if converted is not None:
+                        result.append(converted)
+                except FieldValidationError as e:
+                    raise FieldValidationError(
+                        message=f"Cannot convert element at index {i}: {str(e)}",
+                        field_name=self.name,
+                        code="conversion_error",
+                    ) from e
+
+            return tuple(result)
+
+        except Exception as e:
             raise FieldValidationError(
-                message=str(e),
+                message=f"Cannot convert to tuple: {str(e)}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
@@ -242,11 +277,11 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
         """Convert tuple to database format.
 
         Args:
-            value: Tuple to convert
+            value: Tuple value to convert
             backend: Database backend type
 
         Returns:
-            Converted tuple or None
+            Converted tuple value or None
 
         Raises:
             FieldValidationError: If value cannot be converted
@@ -255,28 +290,16 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
             return None
 
         try:
-            # Convert each element
-            value_list: List[Any] = list(
-                value
-            )  # Convert to list for consistent handling
-            result: List[Any] = []
-            for i, (field, element) in enumerate(zip(self.fields, value_list)):
-                try:
-                    converted = await field.to_db(element, backend)  # type: ignore
-                    result.append(converted)
-                except FieldValidationError as e:
-                    raise FieldValidationError(
-                        message=f"Invalid element at index {i}: {str(e)}",
-                        field_name=self.name,
-                        code="invalid_element",
-                    ) from e
-
+            result: List[DatabaseValue] = []
+            for element, field in zip(value, self.element_fields):
+                db_value = await field.to_db(element, backend)
+                result.append(db_value)
             return result
         except Exception as e:
             raise FieldValidationError(
-                message=f"Cannot convert to database format: {str(e)}",
+                message=f"Cannot convert tuple to database format: {str(e)}",
                 field_name=self.name,
-                code="conversion_error",
+                code="db_conversion_error",
             ) from e
 
     async def from_db(
@@ -289,7 +312,7 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
             backend: Database backend type
 
         Returns:
-            Converted tuple or None
+            Converted tuple value or None
 
         Raises:
             FieldValidationError: If value cannot be converted
@@ -297,69 +320,62 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
         if value is None:
             return None
 
+        if not isinstance(value, (list, tuple)):
+            raise FieldValidationError(
+                message=f"Database value must be a list or tuple, got {type(value).__name__}",
+                field_name=self.name,
+                code="invalid_db_type",
+            )
+
         try:
-            if not isinstance(value, (tuple, list)):
-                raise TypeError(
-                    f"Expected list from database, got {type(value).__name__}"
-                )
-
-            value_list: List[Any] = list(
-                value  # type: ignore
-            )  # Convert to list for consistent handling
-            if len(value_list) != len(self.fields):
-                raise FieldValidationError(
-                    message=f"Expected {len(self.fields)} elements, got {len(value_list)}",
-                    field_name=self.name,
-                    code="invalid_length",
-                )
-
-            # Convert each element
             result: List[T] = []
-            for i, (field, element) in enumerate(zip(self.fields, value_list)):
+            for i, (element, field) in enumerate(zip(value, self.element_fields)):
                 try:
-                    converted = await field.from_db(element, backend)  # type: ignore
-                    result.append(converted)  # type: ignore
-                except FieldValidationError as e:
+                    converted = await field.from_db(element, backend)
+                    if converted is not None:
+                        result.append(converted)
+                except Exception as e:
                     raise FieldValidationError(
-                        message=f"Invalid element at index {i}: {str(e)}",
+                        message=f"Cannot convert database value at index {i}: {str(e)}",
                         field_name=self.name,
-                        code="invalid_element",
+                        code="db_conversion_error",
                     ) from e
 
             return tuple(result)
         except Exception as e:
             raise FieldValidationError(
-                message=f"Cannot convert database value: {str(e)}",
+                message=f"Cannot convert database value to tuple: {str(e)}",
                 field_name=self.name,
-                code="conversion_error",
+                code="db_conversion_error",
             ) from e
 
     def _prepare_value(self, value: Any) -> DatabaseValue:
         """Prepare tuple value for comparison.
 
-        Converts value to list for database comparison.
-
         Args:
             value: Value to prepare
 
         Returns:
-            Prepared list value or None
+            Prepared tuple value or None
         """
         if value is None:
             return None
 
         try:
-            if isinstance(value, (tuple, list)):
-                return list(value)  # type: ignore
-            return None
-        except (TypeError, ValueError):
+            if isinstance(value, (list, tuple)):
+                return [
+                    getattr(field, "_prepare_value")(x)
+                    for x, field in zip(value, self.element_fields)  # type: ignore
+                ]
+            return [getattr(self.element_fields[0], "_prepare_value")(value)]
+        except (TypeError, ValueError, AttributeError):
             return None
 
     def equals(self, value: Union[Tuple[T, ...], List[T]]) -> ComparisonOperator:
         """Check if tuple equals value.
 
         Args:
-            value: Value to compare with
+            value: Value to check for
 
         Returns:
             ComparisonOperator: Comparison operator with field name and value
@@ -370,197 +386,95 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
         """Check if tuple does not equal value.
 
         Args:
-            value: Value to compare with
+            value: Value to check for
 
         Returns:
             ComparisonOperator: Comparison operator with field name and value
         """
         return ComparisonOperator(self.name, "not_equals", self._prepare_value(value))
 
-    def element_equals(self, index: int, value: T) -> ComparisonOperator:
-        """Check if tuple element at index equals value.
+    def contains(self, value: T) -> ComparisonOperator:
+        """Check if tuple contains value.
 
         Args:
-            index: Element index
-            value: Value to compare with
+            value: Value to check for
 
         Returns:
             ComparisonOperator: Comparison operator with field name and value
-
-        Raises:
-            ValueError: If index is out of range
         """
-        if not 0 <= index < len(self.fields):
-            raise ValueError(f"Index {index} out of range [0, {len(self.fields)})")
+        return ComparisonOperator(self.name, "contains", self._prepare_value(value))
 
-        return ComparisonOperator(
-            self.name,
-            "element_eq",
-            {"index": index, "value": self._prepare_value(value)},
-        )
-
-    def element_not_equals(self, index: int, value: T) -> ComparisonOperator:
-        """Check if tuple element at index does not equal value.
+    def not_contains(self, value: T) -> ComparisonOperator:
+        """Check if tuple does not contain value.
 
         Args:
-            index: Element index
-            value: Value to compare with
+            value: Value to check for
 
         Returns:
             ComparisonOperator: Comparison operator with field name and value
-
-        Raises:
-            ValueError: If index is out of range
         """
-        if not 0 <= index < len(self.fields):
-            raise ValueError(f"Index {index} out of range [0, {len(self.fields)})")
+        return ComparisonOperator(self.name, "not_contains", self._prepare_value(value))
 
-        return ComparisonOperator(
-            self.name,
-            "element_ne",
-            {"index": index, "value": self._prepare_value(value)},
-        )
-
-    def element_greater_than(self, index: int, value: T) -> ComparisonOperator:
-        """Check if tuple element at index is greater than value.
+    def contains_all(self, values: Union[Tuple[T, ...], List[T]]) -> ComparisonOperator:
+        """Check if tuple contains all values.
 
         Args:
-            index: Element index
-            value: Value to compare with
+            values: Values to check for
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and values
+        """
+        return ComparisonOperator(
+            self.name, "contains_all", self._prepare_value(values)
+        )
+
+    def contains_any(self, values: Union[Tuple[T, ...], List[T]]) -> ComparisonOperator:
+        """Check if tuple contains any value.
+
+        Args:
+            values: Values to check for
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and values
+        """
+        return ComparisonOperator(
+            self.name, "contains_any", self._prepare_value(values)
+        )
+
+    def starts_with(self, value: T) -> ComparisonOperator:
+        """Check if tuple starts with value.
+
+        Args:
+            value: Value to check for
 
         Returns:
             ComparisonOperator: Comparison operator with field name and value
-
-        Raises:
-            ValueError: If index is out of range
         """
-        if not 0 <= index < len(self.fields):
-            raise ValueError(f"Index {index} out of range [0, {len(self.fields)})")
+        return ComparisonOperator(self.name, "starts_with", self._prepare_value(value))
 
-        return ComparisonOperator(
-            self.name,
-            "element_gt",
-            {"index": index, "value": self._prepare_value(value)},
-        )
-
-    def element_less_than(self, index: int, value: T) -> ComparisonOperator:
-        """Check if tuple element at index is less than value.
+    def ends_with(self, value: T) -> ComparisonOperator:
+        """Check if tuple ends with value.
 
         Args:
-            index: Element index
-            value: Value to compare with
+            value: Value to check for
 
         Returns:
             ComparisonOperator: Comparison operator with field name and value
-
-        Raises:
-            ValueError: If index is out of range
         """
-        if not 0 <= index < len(self.fields):
-            raise ValueError(f"Index {index} out of range [0, {len(self.fields)})")
+        return ComparisonOperator(self.name, "ends_with", self._prepare_value(value))
 
-        return ComparisonOperator(
-            self.name,
-            "element_lt",
-            {"index": index, "value": self._prepare_value(value)},
-        )
-
-    def element_in_list(self, index: int, values: List[T]) -> ComparisonOperator:
-        """Check if tuple element at index is in list.
-
-        Args:
-            index: Element index
-            values: List of values to check
+    def is_empty(self) -> ComparisonOperator:
+        """Check if tuple is empty.
 
         Returns:
-            ComparisonOperator: Comparison operator with field name and values
-
-        Raises:
-            ValueError: If index is out of range
+            ComparisonOperator: Comparison operator with field name
         """
-        if not 0 <= index < len(self.fields):
-            raise ValueError(f"Index {index} out of range [0, {len(self.fields)})")
+        return ComparisonOperator(self.name, "is_empty", None)
 
-        prepared_values = [self._prepare_value(value) for value in values]
-        return ComparisonOperator(
-            self.name,
-            "element_in",
-            {"index": index, "values": prepared_values},
-        )
-
-    def element_not_in_list(self, index: int, values: List[T]) -> ComparisonOperator:
-        """Check if tuple element at index is not in list.
-
-        Args:
-            index: Element index
-            values: List of values to check
+    def is_not_empty(self) -> ComparisonOperator:
+        """Check if tuple is not empty.
 
         Returns:
-            ComparisonOperator: Comparison operator with field name and values
-
-        Raises:
-            ValueError: If index is out of range
+            ComparisonOperator: Comparison operator with field name
         """
-        if not 0 <= index < len(self.fields):
-            raise ValueError(f"Index {index} out of range [0, {len(self.fields)})")
-
-        prepared_values = [self._prepare_value(value) for value in values]
-        return ComparisonOperator(
-            self.name,
-            "element_not_in",
-            {"index": index, "values": prepared_values},
-        )
-
-    def in_radius(
-        self, center: Union[Tuple[float, float], List[float]], radius: float
-    ) -> ComparisonOperator:
-        """Check if tuple of (latitude, longitude) is within radius of center.
-
-        This method is specifically for geographic coordinates.
-        The radius is in kilometers.
-
-        Args:
-            center: Center point as (latitude, longitude)
-            radius: Radius in kilometers
-
-        Returns:
-            ComparisonOperator: Comparison operator with field name and values
-
-        Raises:
-            ValueError: If tuple length is not 2
-        """
-        if len(self.fields) != 2:
-            raise ValueError("in_radius requires a tuple of (latitude, longitude)")
-
-        return ComparisonOperator(
-            self.name,
-            "in_radius",
-            {"center": self._prepare_value(center), "radius": radius},
-        )
-
-    def not_in_radius(
-        self, center: Union[Tuple[float, float], List[float]], radius: float
-    ) -> ComparisonOperator:
-        """Check if tuple of (latitude, longitude) is not within radius of center.
-
-        This method is specifically for geographic coordinates.
-        The radius is in kilometers.
-
-        Args:
-            center: Center point as (latitude, longitude)
-            radius: Radius in kilometers
-
-        Returns:
-            ComparisonOperator: Comparison operator with field name and values
-
-        Raises:
-            ValueError: If tuple length is not 2
-        """
-        if len(self.fields) != 2:
-            raise ValueError("not_in_radius requires a tuple of (latitude, longitude)")
-
-        return ComparisonOperator(
-            self.name,
-            "not_in_radius",
-            {"center": self._prepare_value(center), "radius": radius},
-        )
+        return ComparisonOperator(self.name, "is_not_empty", None)

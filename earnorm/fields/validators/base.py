@@ -23,7 +23,18 @@ Examples:
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Final, Generic, List, Optional, Protocol, Sequence, TypeVar, final
+from typing import (
+    Any,
+    Dict,
+    Final,
+    Generic,
+    List,
+    Optional,
+    Protocol,
+    Sequence,
+    TypeVar,
+    final,
+)
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.types import ValidationContext
@@ -41,6 +52,18 @@ class ValidatorProtocol(Protocol[T_contra]):
 
     This protocol defines the interface that all validators must implement.
     """
+
+    async def __call__(self, value: T_contra, context: ValidationContext) -> None:
+        """Validate value.
+
+        Args:
+            value: Value to validate
+            context: Validation context
+
+        Raises:
+            FieldValidationError: If validation fails
+        """
+        pass
 
     async def validate(self, value: T_contra, context: ValidationContext) -> None:
         """Validate value.
@@ -182,6 +205,7 @@ class RequiredValidator(Validator[T]):
             raise FieldValidationError(
                 message=self.message or self.DEFAULT_MESSAGE,
                 field_name=getattr(context.field, "name", "unknown"),
+                code=self.code or self.DEFAULT_CODE,
             )
 
 
@@ -230,6 +254,7 @@ class TypeValidator(Validator[T]):
                 message=self.message
                 or f"Expected {self.value_type.__name__}, got {type(value).__name__}",
                 field_name=getattr(context.field, "name", "unknown"),
+                code=self.code or self.DEFAULT_CODE,
             )
 
 
@@ -243,6 +268,8 @@ class RangeValidator(Validator[T]):
     - Optional bounds (None means no bound)
     - Any comparable type
     """
+
+    DEFAULT_CODE: Final[str] = "invalid_range"
 
     def __init__(
         self,
@@ -279,11 +306,13 @@ class RangeValidator(Validator[T]):
                     message=self.message
                     or f"Value must be greater than {self.min_value}",
                     field_name=getattr(context.field, "name", "unknown"),
+                    code=self.code or self.DEFAULT_CODE,
                 )
             if self.max_value is not None and value > self.max_value:  # type: ignore
                 raise FieldValidationError(
                     message=self.message or f"Value must be less than {self.max_value}",
                     field_name=getattr(context.field, "name", "unknown"),
+                    code=self.code or self.DEFAULT_CODE,
                 )
 
 
@@ -297,11 +326,13 @@ class RegexValidator(Validator[Optional[str]]):
     - Custom error messages
     """
 
+    DEFAULT_CODE: Final[str] = "invalid_format"
+
     def __init__(
         self,
         pattern: str,
         message: Optional[str] = None,
-        code: str = "invalid_format",
+        code: str = DEFAULT_CODE,
     ) -> None:
         """Initialize regex validator.
 
@@ -329,6 +360,7 @@ class RegexValidator(Validator[Optional[str]]):
             raise FieldValidationError(
                 message=self.message or f"Value must match pattern {self.pattern}",
                 field_name=getattr(context.field, "name", "unknown"),
+                code=self.code or self.DEFAULT_CODE,
             )
 
 
@@ -373,5 +405,5 @@ class ChoicesValidator(Validator[T]):
                 message=self.message
                 or f"Value must be one of: {', '.join(str(c) for c in self.choices)}",
                 field_name=getattr(context.field, "name", "unknown"),
-                code=self.code,
+                code=self.code or self.DEFAULT_CODE,
             )

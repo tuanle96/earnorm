@@ -115,7 +115,7 @@ async def main():
         await new_user_one.write({"age": 26})
 
         # try to delete
-        # await new_user_one.unlink()
+        await new_user_one.unlink()
 
         # # print slots
         # print(f"Slots for user one: {new_user_one.__slots__}")
@@ -125,18 +125,18 @@ async def main():
         # print(f"Slots new_user_one|prefetch_ids: {new_user_one._prefetch_ids}")
 
         # CREATE - Create a new user
-        # test_data = [
-        #     {"name": "Alice Smith", "email": "alice@example.com", "age": 22},
-        #     {"name": "Bob Johnson", "email": "bob@example.com", "age": 19},
-        #     {"name": "Charlie Brown", "email": "charlie@example.com", "age": 25},
-        #     {"name": "David Wilson", "email": "david@example.com", "age": 17},
-        #     {"name": "Eve Anderson", "email": "eve@example.com", "age": 28},
-        # ]
-        # new_users = await User.create(test_data)
-        # print(f"Slots new_users|ids: {new_users._ids}")
-        # print(f"Slots new_users|env: {new_users._env}")
-        # print(f"Slots new_users|name: {new_users._name}")
-        # print(f"Slots new_users|prefetch_ids: {new_users._prefetch_ids}")
+        test_data = [
+            {"name": "Alice Smith", "email": "alice@example.com", "age": 22},
+            {"name": "Bob Johnson", "email": "bob@example.com", "age": 19},
+            {"name": "Charlie Brown", "email": "charlie@example.com", "age": 25},
+            {"name": "David Wilson", "email": "david@example.com", "age": 17},
+            {"name": "Eve Anderson", "email": "eve@example.com", "age": 28},
+        ]
+        new_users = await User.create(test_data)
+        print(f"new_users: {new_users}")
+
+        # test write
+        await new_users.write({"name": "Justin"})
 
         # first_new_users = new_users[0]
         # print(f"Slots first_new_users|ids: {first_new_users._ids}")

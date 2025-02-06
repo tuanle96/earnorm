@@ -89,6 +89,7 @@ class MinLengthValidator(Validator[S]):
                 message=self.message
                 or f"Value must be at least {self.min_length} characters long",
                 field_name=getattr(context.field, "name", "unknown"),
+                code=self.code or self.DEFAULT_CODE,
             )
 
 
@@ -130,6 +131,7 @@ class MaxLengthValidator(Validator[S]):
                 message=self.message
                 or f"Value must be at most {self.max_length} characters long",
                 field_name=getattr(context.field, "name", "unknown"),
+                code=self.code or self.DEFAULT_CODE,
             )
 
 
@@ -173,6 +175,7 @@ class PatternValidator(Validator[str]):
                 message=self.message
                 or f"Value must match pattern {self.pattern.pattern}",
                 field_name=getattr(context.field, "name", "unknown"),
+                code=self.code or self.DEFAULT_CODE,
             )
 
 
@@ -223,6 +226,7 @@ class EmailValidator(Validator[str]):
             raise FieldValidationError(
                 message=self.message or "Invalid email address",
                 field_name=getattr(context.field, "name", "unknown"),
+                code=self.code or self.DEFAULT_CODE,
             )
 
 
@@ -286,18 +290,21 @@ class URLValidator(Validator[str]):
                 message=self.message
                 or f"Invalid URL. Allowed schemes: {', '.join(sorted(self.allowed_schemes))}",
                 field_name=getattr(context.field, "name", "unknown"),
+                code=self.code or self.DEFAULT_CODE,
             )
 
 
 class DateTimeValidator(Validator[datetime]):
     """Validator for datetime values."""
 
+    DEFAULT_CODE: Final[str] = "invalid_datetime"
+
     def __init__(
         self,
         min_value: Optional[datetime] = None,
         max_value: Optional[datetime] = None,
         message: Optional[str] = None,
-        code: str = "invalid_datetime",
+        code: str = DEFAULT_CODE,
     ) -> None:
         """Initialize datetime validator.
 
@@ -325,21 +332,25 @@ class DateTimeValidator(Validator[datetime]):
             raise FieldValidationError(
                 message=self.message or f"Value must be after {self.min_value}",
                 field_name=getattr(context.field, "name", "unknown"),
+                code=self.code or self.DEFAULT_CODE,
             )
         if self.max_value and value > self.max_value:
             raise FieldValidationError(
                 message=self.message or f"Value must be before {self.max_value}",
                 field_name=getattr(context.field, "name", "unknown"),
+                code=self.code or self.DEFAULT_CODE,
             )
 
 
 class UniqueValidator(Validator[Sequence[Any]]):
     """Validator for unique values."""
 
+    DEFAULT_CODE: Final[str] = "duplicate_values"
+
     def __init__(
         self,
         message: Optional[str] = None,
-        code: str = "duplicate_values",
+        code: str = DEFAULT_CODE,
     ) -> None:
         """Initialize unique validator.
 
@@ -370,4 +381,5 @@ class UniqueValidator(Validator[Sequence[Any]]):
                 message=self.message
                 or f"Duplicate values found: {', '.join(str(x) for x in duplicates)}",
                 field_name=getattr(context.field, "name", "unknown"),
+                code=self.code or self.DEFAULT_CODE,
             )

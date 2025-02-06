@@ -25,8 +25,8 @@ from typing import Any, Dict, Final, List, Literal, Optional, Union
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 from earnorm.fields.validators.base import TypeValidator, Validator
+from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 
 # Constants
 DEFAULT_VERSION: Final[Optional[Literal[1, 3, 4, 5]]] = 4
@@ -178,7 +178,9 @@ class UUIDField(BaseField[uuid.UUID], FieldComparisonMixin):
         """
         return ComparisonOperator(self.name, "time", timestamp)
 
-    async def validate(self, value: Any) -> None:
+    async def validate(
+        self, value: Any, context: Optional[Dict[str, Any]] = None
+    ) -> Any:
         """Validate UUID value.
 
         This method validates:
@@ -187,11 +189,20 @@ class UUIDField(BaseField[uuid.UUID], FieldComparisonMixin):
 
         Args:
             value: Value to validate
+            context: Validation context with following keys:
+                    - model: Model instance
+                    - env: Environment instance
+                    - operation: Operation type (create/write/search...)
+                    - values: Values being validated
+                    - field_name: Name of field being validated
+
+        Returns:
+            Any: The validated value
 
         Raises:
             FieldValidationError: If validation fails
         """
-        await super().validate(value)
+        value = await super().validate(value, context)
 
         if value is not None:
             if not isinstance(value, uuid.UUID):
@@ -207,6 +218,8 @@ class UUIDField(BaseField[uuid.UUID], FieldComparisonMixin):
                     field_name=self.name,
                     code="invalid_version",
                 )
+
+        return value
 
     async def convert(self, value: Any) -> Optional[uuid.UUID]:
         """Convert value to UUID.

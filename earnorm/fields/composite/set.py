@@ -1,44 +1,66 @@
 """Set field implementation.
 
-This module provides set field type for handling unique collections of values.
+This module provides set field type for handling unique sequences of values.
 It supports:
 - Set validation
-- Item validation
+- Element validation
 - Length validation
 - Database type mapping
 - Set comparison operations
 
 Examples:
-    >>> class Product(Model):
-    ...     tags = SetField(StringField())
-    ...     categories = SetField(
+    >>> class User(Model):
+    ...     roles = SetField(StringField())
+    ...     permissions = SetField(
     ...         StringField(),
     ...         min_length=1,
-    ...         max_length=5,
+    ...         max_length=10
     ...     )
+    ...     tags = SetField(StringField())
     ...
     ...     # Query examples
-    ...     has_tag = Product.find(Product.tags.contains("python"))
-    ...     tech_products = Product.find(Product.categories.is_subset({"tech", "software"}))
-    ...     popular = Product.find(Product.tags.length_greater_than(5))
+    ...     admins = User.find(User.roles.contains("admin"))
+    ...     has_perms = User.find(User.permissions.contains_all(["read", "write"]))
+    ...     tagged = User.find(User.tags.is_not_empty())
 """
 
-from typing import Any, Generic, List, Optional, Sequence, Set, TypeVar, Union, cast
+import json
+from typing import (
+    Any,
+    Dict,
+    Generic,
+    Iterable,
+    List,
+    Optional,
+    Protocol,
+    Set,
+    TypeVar,
+    Union,
+    cast,
+)
 
+from earnorm.database.mappers import get_mapper
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
 from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 
-# Type variable for set items
-T = TypeVar("T")
+
+class Comparable(Protocol):
+    """Protocol for comparable types."""
+
+    def __lt__(self, other: Any) -> bool: ...
+    def __gt__(self, other: Any) -> bool: ...
+
+
+T = TypeVar("T", bound=Comparable)
 
 
 class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
     """Field for set values.
 
-    This field type handles unique collections of values, with support for:
+    This field type handles unique sequences of values, with support for:
     - Set validation
-    - Item validation
+    - Element validation
     - Length validation
     - Database type mapping
     - Set comparison operations
@@ -51,11 +73,11 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
 
     min_length: Optional[int]
     max_length: Optional[int]
-    backend_options: dict[str, Any]
+    backend_options: Dict[str, Any]
 
     def __init__(
         self,
-        field: BaseField[T],
+        element_field: BaseField[T],
         *,
         min_length: Optional[int] = None,
         max_length: Optional[int] = None,
@@ -64,117 +86,300 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
         """Initialize set field.
 
         Args:
-            field: Field type for set items
+            element_field: Field type for set elements
             min_length: Minimum set length
             max_length: Maximum set length
             **options: Additional field options
-
-        Raises:
-            ValueError: If min_length or max_length are invalid
         """
-        if min_length is not None and min_length < 0:
-            raise ValueError("min_length must be non-negative")
-        if max_length is not None and max_length < 0:
-            raise ValueError("max_length must be non-negative")
-        if (
-            min_length is not None
-            and max_length is not None
-            and min_length > max_length
-        ):
-            raise ValueError("min_length cannot be greater than max_length")
-
         super().__init__(**options)
 
-        # Store field as protected attribute
-        object.__setattr__(self, "_field", field)
+        # Store as protected attribute to avoid type issues
+        object.__setattr__(self, "_element_field", element_field)
         self.min_length = min_length
         self.max_length = max_length
 
-        # Initialize backend options
-        self.backend_options = {
-            "mongodb": {"type": "array"},
-            "postgres": {"type": "JSONB"},
-            "mysql": {"type": "JSON"},
-        }
+        # Initialize backend options using mappers
+        self.backend_options = {}
+        for backend in ["mongodb", "postgres", "mysql"]:
+            mapper = get_mapper(backend)
+            self.backend_options[backend] = {
+                "type": mapper.get_field_type(self),
+                **mapper.get_field_options(self),
+            }
 
     @property
-    def field(self) -> BaseField[T]:
-        """Get field instance."""
-        return object.__getattribute__(self, "_field")
+    def element_field(self) -> BaseField[T]:
+        """Get element field instance."""
+        return object.__getattribute__(self, "_element_field")
 
-    async def validate(self, value: Any) -> None:
+    async def setup(self, name: str, model_name: str) -> None:
+        """Set up the field.
+
+        Args:
+            name: Field name
+            model_name: Model name
+        """
+        await super().setup(name, model_name)
+        await self.element_field.setup(f"{name}[]", model_name)
+
+    async def validate(
+        self, value: Any, context: Optional[Dict[str, Any]] = None
+    ) -> Optional[Set[T]]:
         """Validate set value.
 
         This method validates:
-        - Value is set type
-        - Set length is within limits
-        - Each item is valid
+        - Value can be converted to set
+        - Set length is within bounds
+        - Elements are valid
 
         Args:
             value: Value to validate
+            context: Validation context with following keys:
+                    - model: Model instance
+                    - env: Environment instance
+                    - operation: Operation type (create/write/search...)
+                    - values: Values being validated
+                    - field_name: Name of field being validated
+
+        Returns:
+            Optional[Set[T]]: The validated set value
 
         Raises:
             FieldValidationError: If validation fails
         """
-        await super().validate(value)
+        value = await super().validate(value, context)
 
         if value is not None:
-            if not isinstance(value, set):
+            # Convert to set if needed
+            try:
+                if not isinstance(value, set):
+                    value = set(value)
+            except (TypeError, ValueError) as e:
                 raise FieldValidationError(
-                    message=f"Value must be a set, got {type(value).__name__}",
+                    message=f"Cannot convert to set: {str(e)}",
                     field_name=self.name,
                     code="invalid_type",
+                    context=context,
                 )
 
             value_set: Set[Any] = cast(Set[Any], value)
 
-            # Check length
+            # Validate length
             if self.min_length is not None and len(value_set) < self.min_length:
                 raise FieldValidationError(
-                    message=f"Set must have at least {self.min_length} items",
+                    message=f"Set must have at least {self.min_length} elements",
                     field_name=self.name,
                     code="min_length",
+                    context=context,
                 )
 
             if self.max_length is not None and len(value_set) > self.max_length:
                 raise FieldValidationError(
-                    message=f"Set cannot have more than {self.max_length} items",
+                    message=f"Set must have at most {self.max_length} elements",
                     field_name=self.name,
                     code="max_length",
+                    context=context,
                 )
 
-            # Validate each item
-            for item in value_set:
+            # Create element context
+            element_context = {
+                **(context or {}),
+                "parent_field": self,
+                "parent_value": value_set,
+                "validation_path": (
+                    f"{context.get('validation_path', '')}.{self.name}"
+                    if context
+                    else self.name
+                ),
+            }
+
+            # Validate elements
+            validated_elements: Set[T] = set()
+            for i, element in enumerate(value_set):
                 try:
-                    await self.field.validate(item)
+                    element_context["index"] = i
+                    validated = await self.element_field.validate(
+                        element, element_context
+                    )
+                    if validated is not None:
+                        validated_elements.add(validated)
                 except FieldValidationError as e:
                     raise FieldValidationError(
-                        message=f"Invalid item {item!r}: {str(e)}",
+                        message=f"Invalid element at index {i}: {str(e)}",
                         field_name=self.name,
-                        code="invalid_item",
+                        code="invalid_element",
+                        context=element_context,
                     ) from e
 
-    def _prepare_value(self, value: Any) -> DatabaseValue:
-        """Prepare set value for comparison.
+            return validated_elements
 
-        Converts value to list for database comparison.
+        return None
+
+    async def convert(self, value: Any) -> Optional[Set[T]]:
+        """Convert value to set.
 
         Args:
-            value: Value to prepare
+            value: Value to convert
 
         Returns:
-            Prepared list value or None
+            Converted set value or None
+
+        Raises:
+            FieldValidationError: If value cannot be converted
         """
         if value is None:
             return None
 
         try:
-            if isinstance(value, (set, list)):
-                return list(cast(Union[Set[Any], List[Any]], value))
-            elif isinstance(value, (str, bytes)):
-                return [value]
+            if isinstance(value, str):
+                # Try to parse as JSON array
+                try:
+                    value = json.loads(value)
+                    if not isinstance(value, (list, set)):
+                        raise FieldValidationError(
+                            message="JSON value must be an array",
+                            field_name=self.name,
+                            code="invalid_json",
+                        )
+                except json.JSONDecodeError as e:
+                    raise FieldValidationError(
+                        message=f"Invalid JSON array: {str(e)}",
+                        field_name=self.name,
+                        code="invalid_json",
+                    ) from e
+
+            # Convert to set
+            try:
+                value = set(cast(Iterable[Any], value))
+            except (TypeError, ValueError) as e:
+                raise FieldValidationError(
+                    message=f"Cannot convert to set: {str(e)}",
+                    field_name=self.name,
+                    code="conversion_error",
+                ) from e
+
+            # Convert elements
+            result: Set[T] = set()
+            for i, element in enumerate(value):
+                try:
+                    converted = await self.element_field.convert(element)
+                    if converted is not None:
+                        result.add(converted)
+                except FieldValidationError as e:
+                    raise FieldValidationError(
+                        message=f"Cannot convert element at index {i}: {str(e)}",
+                        field_name=self.name,
+                        code="conversion_error",
+                    ) from e
+
+            return result
+
+        except Exception as e:
+            raise FieldValidationError(
+                message=f"Cannot convert to set: {str(e)}",
+                field_name=self.name,
+                code="conversion_error",
+            ) from e
+
+    async def to_db(self, value: Optional[Set[T]], backend: str) -> DatabaseValue:
+        """Convert set to database format.
+
+        Args:
+            value: Set value to convert
+            backend: Database backend type
+
+        Returns:
+            Converted set value or None
+
+        Raises:
+            FieldValidationError: If value cannot be converted
+        """
+        if value is None:
             return None
-        except (TypeError, ValueError):
+
+        try:
+            result: List[DatabaseValue] = []
+            # Convert to list and sort
+            elements: List[T] = list(value)
+            elements.sort()  # Sort in-place since T is Comparable
+            for element in elements:
+                db_value = await self.element_field.to_db(element, backend)
+                result.append(db_value)
+            return result
+        except Exception as e:
+            raise FieldValidationError(
+                message=f"Cannot convert set to database format: {str(e)}",
+                field_name=self.name,
+                code="db_conversion_error",
+            ) from e
+
+    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[Set[T]]:
+        """Convert database value to set.
+
+        Args:
+            value: Database value to convert
+            backend: Database backend type
+
+        Returns:
+            Converted set value or None
+
+        Raises:
+            FieldValidationError: If value cannot be converted
+        """
+        if value is None:
+            return None
+
+        if not isinstance(value, (list, set)):
+            raise FieldValidationError(
+                message=f"Database value must be a list or set, got {type(value).__name__}",
+                field_name=self.name,
+                code="invalid_db_type",
+            )
+
+        try:
+            result: Set[T] = set()
+            for i, element in enumerate(value):
+                try:
+                    converted = await self.element_field.from_db(element, backend)
+                    if converted is not None:
+                        result.add(converted)
+                except Exception as e:
+                    raise FieldValidationError(
+                        message=f"Cannot convert database value at index {i}: {str(e)}",
+                        field_name=self.name,
+                        code="db_conversion_error",
+                    ) from e
+
+            return result
+        except Exception as e:
+            raise FieldValidationError(
+                message=f"Cannot convert database value to set: {str(e)}",
+                field_name=self.name,
+                code="db_conversion_error",
+            ) from e
+
+    def _prepare_value(self, value: Any) -> DatabaseValue:
+        """Prepare set value for comparison.
+
+        Args:
+            value: Value to prepare
+
+        Returns:
+            Prepared set value or None
+        """
+        if value is None:
+            return None
+
+        try:
+            if isinstance(value, (list, set)):
+                # Convert to list and sort
+                elements: List[T] = list(cast(Iterable[T], value))
+                elements.sort()  # Sort in-place since T is Comparable
+                return [
+                    getattr(self.element_field, "_prepare_value")(x) for x in elements
+                ]
+            return [getattr(self.element_field, "_prepare_value")(value)]
+        except (TypeError, ValueError, AttributeError):
             return None
 
     def contains(self, value: T) -> ComparisonOperator:
@@ -199,7 +404,7 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
         """
         return ComparisonOperator(self.name, "not_contains", self._prepare_value(value))
 
-    def contains_all(self, values: Union[Set[T], List[T]]) -> ComparisonOperator:
+    def contains_all(self, values: Union[List[T], Set[T]]) -> ComparisonOperator:
         """Check if set contains all values.
 
         Args:
@@ -208,11 +413,12 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
         Returns:
             ComparisonOperator: Comparison operator with field name and values
         """
-        prepared_values = [self._prepare_value(value) for value in values]
-        return ComparisonOperator(self.name, "contains_all", prepared_values)
+        return ComparisonOperator(
+            self.name, "contains_all", self._prepare_value(values)
+        )
 
-    def contains_any(self, values: Union[Set[T], List[T]]) -> ComparisonOperator:
-        """Check if set contains any of values.
+    def contains_any(self, values: Union[List[T], Set[T]]) -> ComparisonOperator:
+        """Check if set contains any value.
 
         Args:
             values: Values to check for
@@ -220,8 +426,31 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
         Returns:
             ComparisonOperator: Comparison operator with field name and values
         """
-        prepared_values = [self._prepare_value(value) for value in values]
-        return ComparisonOperator(self.name, "contains_any", prepared_values)
+        return ComparisonOperator(
+            self.name, "contains_any", self._prepare_value(values)
+        )
+
+    def is_subset(self, values: Union[List[T], Set[T]]) -> ComparisonOperator:
+        """Check if set is subset of values.
+
+        Args:
+            values: Values to check against
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and values
+        """
+        return ComparisonOperator(self.name, "is_subset", self._prepare_value(values))
+
+    def is_superset(self, values: Union[List[T], Set[T]]) -> ComparisonOperator:
+        """Check if set is superset of values.
+
+        Args:
+            values: Values to check against
+
+        Returns:
+            ComparisonOperator: Comparison operator with field name and values
+        """
+        return ComparisonOperator(self.name, "is_superset", self._prepare_value(values))
 
     def length_equals(self, length: int) -> ComparisonOperator:
         """Check if set length equals value.
@@ -271,159 +500,3 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
             ComparisonOperator: Comparison operator with field name
         """
         return ComparisonOperator(self.name, "is_not_empty", None)
-
-    def is_subset(self, other: Union[Set[T], List[T]]) -> ComparisonOperator:
-        """Check if set is subset of another set.
-
-        Args:
-            other: Set to compare with
-
-        Returns:
-            ComparisonOperator: Comparison operator with field name and value
-        """
-        return ComparisonOperator(self.name, "is_subset", self._prepare_value(other))
-
-    def is_superset(self, other: Union[Set[T], List[T]]) -> ComparisonOperator:
-        """Check if set is superset of another set.
-
-        Args:
-            other: Set to compare with
-
-        Returns:
-            ComparisonOperator: Comparison operator with field name and value
-        """
-        return ComparisonOperator(self.name, "is_superset", self._prepare_value(other))
-
-    def is_disjoint(self, other: Union[Set[T], List[T]]) -> ComparisonOperator:
-        """Check if set has no elements in common with another set.
-
-        Args:
-            other: Set to compare with
-
-        Returns:
-            ComparisonOperator: Comparison operator with field name and value
-        """
-        return ComparisonOperator(self.name, "is_disjoint", self._prepare_value(other))
-
-    def equals(self, other: Union[Set[T], List[T]]) -> ComparisonOperator:
-        """Check if set equals another set.
-
-        Args:
-            other: Set to compare with
-
-        Returns:
-            ComparisonOperator: Comparison operator with field name and value
-        """
-        return ComparisonOperator(self.name, "equals", self._prepare_value(other))
-
-    def not_equals(self, other: Union[Set[T], List[T]]) -> ComparisonOperator:
-        """Check if set does not equal another set.
-
-        Args:
-            other: Set to compare with
-
-        Returns:
-            ComparisonOperator: Comparison operator with field name and value
-        """
-        return ComparisonOperator(self.name, "not_equals", self._prepare_value(other))
-
-    async def convert(self, value: Any) -> Optional[Set[T]]:
-        """Convert value to set.
-
-        This method converts:
-        - Set to set
-        - Sequence to set
-        - None to None
-
-        Args:
-            value: Value to convert
-
-        Returns:
-            Converted set value or None
-
-        Raises:
-            FieldValidationError: If conversion fails
-        """
-        if value is None:
-            return None
-
-        try:
-            if isinstance(value, set):
-                items = cast(Set[Any], value)
-            elif isinstance(value, Sequence):
-                items = set(cast(Sequence[Any], value))
-            else:
-                raise ValueError(f"Cannot convert {type(value).__name__} to set")
-
-            # Convert each item
-            converted_items: Set[T] = set()
-            for item in items:
-                converted_item = await self.field.convert(item)
-                if converted_item is not None:
-                    converted_items.add(converted_item)
-
-            return converted_items
-
-        except (TypeError, ValueError) as e:
-            raise FieldValidationError(
-                message=str(e),
-                field_name=self.name,
-                code="conversion_error",
-            ) from e
-
-    async def to_db(self, value: Optional[Set[T]], backend: str) -> DatabaseValue:
-        """Convert set to database value.
-
-        This method converts:
-        - Set to list
-        - None to None
-
-        Args:
-            value: Value to convert
-            backend: Database backend type
-
-        Returns:
-            Database value
-        """
-        if value is None:
-            return None
-
-        db_items: List[DatabaseValue] = []
-        for item in value:
-            db_item = await self.field.to_db(item, backend=backend)
-            if db_item is not None:
-                db_items.append(db_item)
-
-        return db_items
-
-    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[Set[T]]:
-        """Convert database value to set.
-
-        This method converts:
-        - List to set
-        - None to None
-
-        Args:
-            value: Value to convert
-            backend: Database backend type
-
-        Returns:
-            Set value or None
-        """
-        if value is None:
-            return None
-
-        if not isinstance(value, list):
-            raise FieldValidationError(
-                message=f"Expected list from database, got {type(value).__name__}",
-                field_name=self.name,
-                code="invalid_type",
-            )
-
-        items: Set[T] = set()
-        for item in value:
-            converted_item = await self.field.from_db(item, backend=backend)
-            if converted_item is not None:
-                items.add(converted_item)
-
-        return items

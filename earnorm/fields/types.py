@@ -1,39 +1,47 @@
-"""Field type definitions.
+"""Field types and validation context.
 
-This module provides common type definitions used across field implementations.
-It includes:
-- Validation types
-- Field metadata types
-- Common type aliases
+This module provides type definitions for field validation.
 """
 
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
-from typing import Any, Dict, Tuple, TypeVar, Union
-
-# Type variables
-T = TypeVar("T")  # Field value type
-
-# Type aliases
-ValidatorResult = Union[bool, Tuple[bool, str]]
-ValidationMetadata = Dict[str, Any]
+from typing import Any, Dict, Optional, Protocol
 
 
-@dataclass(frozen=True)
+class EnvironmentProtocol(Protocol):
+    """Protocol for environment interface."""
+
+    pass
+
+
+class ModelProtocol(Protocol):
+    """Protocol for model interface."""
+
+    pass
+
+
+class FieldProtocol(Protocol):
+    """Protocol for field interface."""
+
+    pass
+
+
+@dataclass
 class ValidationContext:
-    """Context for validation.
+    """Validation context for field validation.
 
-    This class provides context information for validation, including:
-    - The field being validated
-    - The value being validated
-    - Additional metadata for validation
-
-    Attributes:
-        field: Field being validated
-        value: Value being validated
-        metadata: Additional validation metadata
+    This class provides context information for field validation:
+    - field: Field being validated
+    - value: Value being validated
+    - model: Model instance
+    - env: Environment instance
+    - operation: Operation type (create/write/search...)
+    - values: All values being validated
     """
 
-    field: Any  # Avoid circular import by using Any
-    value: Any
-    metadata: ValidationMetadata = dataclass_field(default_factory=dict)
+    field: FieldProtocol
+    value: Optional[Any] = None
+    model: Optional[ModelProtocol] = None
+    env: Optional[EnvironmentProtocol] = None
+    operation: Optional[str] = None
+    values: Dict[str, Any] = dataclass_field(default_factory=dict)

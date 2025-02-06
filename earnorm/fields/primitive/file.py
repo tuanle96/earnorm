@@ -39,8 +39,8 @@ from motor.motor_asyncio import AsyncIOMotorGridFSBucket
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 from earnorm.fields.validators.base import TypeValidator, Validator
+from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 
 
 class StorageType(str, Enum):
@@ -177,7 +177,9 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
                 return True
         return False
 
-    async def validate(self, value: Any) -> None:
+    async def validate(
+        self, value: Any, context: Optional[Dict[str, Any]] = None
+    ) -> Any:
         """Validate file value.
 
         This method validates:
@@ -188,11 +190,20 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
 
         Args:
             value: Value to validate
+            context: Validation context with following keys:
+                    - model: Model instance
+                    - env: Environment instance
+                    - operation: Operation type (create/write/search...)
+                    - values: Values being validated
+                    - field_name: Name of field being validated
+
+        Returns:
+            Any: The validated value
 
         Raises:
             FieldValidationError: If validation fails
         """
-        await super().validate(value)
+        value = await super().validate(value, context)
 
         if value is not None:
             if not isinstance(value, Path):
@@ -240,6 +251,8 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
                     field_name=self.name,
                     code="invalid_mime_type",
                 )
+
+        return value
 
     async def convert(self, value: Any) -> Optional[Path]:
         """Convert value to Path.
@@ -369,6 +382,7 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
             raise FieldValidationError(
                 message=f"File size {len(data)} bytes exceeds maximum {self.max_size} bytes",
                 field_name=self.name,
+                code="file_too_large",
             )
 
         # Validate content type
@@ -383,6 +397,7 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
                 message=f"Content type {content_type} not allowed. Allowed \
                 types: {', '.join(sorted(allowed))}",
                 field_name=self.name,
+                code="invalid_content_type",
             )
 
         try:
@@ -409,6 +424,7 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
             raise FieldValidationError(
                 message=f"Storage error: {str(e)}",
                 field_name=self.name,
+                code="storage_error",
             ) from e
 
     async def read(self) -> Optional[bytes]:
@@ -530,6 +546,7 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
                 raise FieldValidationError(
                     message=f"File {path} does not exist",
                     field_name=self.name,
+                    code="file_not_found",
                 )
             with open(path, "rb") as f:
                 return f.read()

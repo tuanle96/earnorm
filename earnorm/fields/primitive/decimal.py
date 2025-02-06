@@ -22,12 +22,12 @@ Examples:
 """
 
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
-from typing import Any, Final, List, Optional, Union
+from typing import Any, Dict, Final, List, Optional, Union
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 from earnorm.fields.validators.base import RangeValidator, TypeValidator, Validator
+from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 
 # Constants
 DEFAULT_MAX_DIGITS: Final[int] = 65
@@ -125,7 +125,9 @@ class DecimalField(BaseField[Decimal], FieldComparisonMixin):
             "mysql": {"type": f"DECIMAL({max_digits}, {decimal_places})"},
         }
 
-    async def validate(self, value: Any) -> None:
+    async def validate(
+        self, value: Any, context: Optional[Dict[str, Any]] = None
+    ) -> Any:
         """Validate decimal value.
 
         This method validates:
@@ -135,11 +137,20 @@ class DecimalField(BaseField[Decimal], FieldComparisonMixin):
 
         Args:
             value: Value to validate
+            context: Validation context with following keys:
+                    - model: Model instance
+                    - env: Environment instance
+                    - operation: Operation type (create/write/search...)
+                    - values: Values being validated
+                    - field_name: Name of field being validated
+
+        Returns:
+            Any: The validated value
 
         Raises:
             FieldValidationError: If validation fails
         """
-        await super().validate(value)
+        value = await super().validate(value, context)
 
         if value is not None:
             if not isinstance(value, Decimal):
@@ -185,6 +196,8 @@ class DecimalField(BaseField[Decimal], FieldComparisonMixin):
                     field_name=self.name,
                     code="decimal_places_exceeded",
                 )
+
+        return value
 
     async def convert(self, value: Any) -> Optional[Decimal]:
         """Convert value to decimal.

@@ -21,12 +21,12 @@ Examples:
     ...     unverified = User.find(User.has_verified_email.negate())
 """
 
-from typing import Any, Final, Optional, Set, Union
+from typing import Any, Dict, Final, Optional, Set, Union
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 from earnorm.fields.validators.base import TypeValidator, Validator
+from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 
 # Constants
 TRUE_VALUES: Final[Set[str]] = {"true", "1", "yes", "on", "t", "y"}
@@ -152,7 +152,9 @@ class BooleanField(BaseField[bool], FieldComparisonMixin):
         """
         return ComparisonOperator(self.name, "negate", None)
 
-    async def validate(self, value: Any) -> None:
+    async def validate(
+        self, value: Any, context: Optional[Dict[str, Any]] = None
+    ) -> Any:
         """Validate boolean value.
 
         This method validates:
@@ -161,11 +163,20 @@ class BooleanField(BaseField[bool], FieldComparisonMixin):
 
         Args:
             value: Value to validate
+            context: Validation context with following keys:
+                    - model: Model instance
+                    - env: Environment instance
+                    - operation: Operation type (create/write/search...)
+                    - values: Values being validated
+                    - field_name: Name of field being validated
+
+        Returns:
+            Any: The validated value
 
         Raises:
             FieldValidationError: If validation fails
         """
-        await super().validate(value)
+        value = await super().validate(value, context)
 
         if value is not None and not isinstance(value, bool):
             raise FieldValidationError(
@@ -173,6 +184,8 @@ class BooleanField(BaseField[bool], FieldComparisonMixin):
                 field_name=self.name,
                 code="invalid_type",
             )
+
+        return value
 
     async def convert(self, value: Any) -> Optional[bool]:
         """Convert value to boolean.

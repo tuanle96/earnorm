@@ -448,25 +448,37 @@ class BaseModel(metaclass=ModelMeta):
             if count != len(self._ids):
                 raise ValueError("Some records do not exist")
 
+            # Create validation context
+            context = {
+                "model": self,
+                "env": self._env,
+                "operation": "write",
+                "values": vals,
+            }
+
             # Validate field values
             for name, value in vals.items():
                 if name not in self.__fields__:
                     raise FieldValidationError(
                         message=f"Field '{name}' does not exist",
                         field_name=name,
+                        code="field_not_found",
                     )
                 field = self.__fields__[name]
                 if field.readonly:
                     raise FieldValidationError(
                         message=f"Field '{name}' is readonly",
                         field_name=name,
+                        code="field_readonly",
                     )
                 try:
-                    await field.validate(value)
+                    field_context = {**context, "field_name": name}
+                    await field.validate(value, context=field_context)
                 except ValueError as e:
                     raise FieldValidationError(
                         message=str(e),
                         field_name=name,
+                        code="field_validation_error",
                     ) from e
 
         except Exception as e:
@@ -562,19 +574,49 @@ class BaseModel(metaclass=ModelMeta):
     async def create(
         cls,
         values: List[Dict[str, Any]],
-    ) -> List[Self]: ...
+    ) -> Self: ...
 
     @classmethod
     async def create(
         cls, values: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None
-    ) -> Union[Self, List[Self]]:
+    ) -> Self:
         """Create one or multiple records.
 
+        This method creates records in the database and returns a recordset containing
+        all created record IDs. It supports three modes:
+        1. Empty recordset (values=None)
+        2. Single record (values=dict)
+        3. Multiple records (values=list of dicts)
+
         Args:
-            values: Values to create records with
+            values: Values to create records with. Can be:
+                   - None: Create empty recordset
+                   - Dict: Create single record
+                   - List[Dict]: Create multiple records
 
         Returns:
-            Union[Self, List[Self]]: Created recordset(s)
+            Self: A recordset containing all created record IDs
+
+        Raises:
+            DatabaseError: If creation fails
+
+        Examples:
+            >>> # Create empty recordset
+            >>> empty = await User.create()
+            >>>
+            >>> # Create single record
+            >>> user = await User.create({
+            ...     "name": "John",
+            ...     "email": "john@example.com"
+            ... })
+            >>>
+            >>> # Create multiple records
+            >>> users = await User.create([
+            ...     {"name": "Alice", "email": "alice@example.com"},
+            ...     {"name": "Bob", "email": "bob@example.com"}
+            ... ])
+            >>> # Update all created records
+            >>> await users.write({"status": "active"})
         """
         if values is None:
             values = {}
@@ -585,20 +627,22 @@ class BaseModel(metaclass=ModelMeta):
 
             # Convert values to database format
             if isinstance(values, list):
+                # Create multiple records
                 db_vals_list: List[Dict[str, Any]] = []
                 for vals in values:
                     db_vals = await cls._convert_to_db(vals)
                     db_vals_list.append(db_vals)
 
-                # Create records
+                # Create records and get IDs
                 record_ids = await cls._env.adapter.create(
                     cast(Type[ModelProtocol], cls),
                     db_vals_list,
                 )
 
-                # Return recordset with all IDs
-                return [cls._browse(env, [str(rid)]) for rid in record_ids]
+                # Return single recordset with all IDs
+                return cls._browse(env, [str(rid) for rid in record_ids])
             else:
+                # Create single record
                 db_vals = await cls._convert_to_db(values)
                 record_id = await cls._env.adapter.create(
                     cast(Type[ModelProtocol], cls),

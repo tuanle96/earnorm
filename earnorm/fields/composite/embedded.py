@@ -2,11 +2,12 @@
 
 This module provides embedded field type for handling nested model instances.
 It supports:
-- Model instance validation
-- Dictionary conversion
-- Lazy loading
+- Model validation
+- Nested validation
 - Database type mapping
-- Embedded model comparison operations
+- Model comparison operations
+- Lazy model loading
+- Recursive validation
 
 Examples:
     >>> class Address(Model):
@@ -16,423 +17,306 @@ Examples:
     ...
     >>> class User(Model):
     ...     name = StringField(required=True)
-    ...     home_address = EmbeddedField(Address)
-    ...     work_address = EmbeddedField(Address, nullable=True)
+    ...     address = EmbeddedField(Address)
+    ...     shipping_address = EmbeddedField(
+    ...         Address,
+    ...         nullable=True,
+    ...         lazy=True
+    ...     )
     ...
     ...     # Query examples
-    ...     us_users = User.find(User.home_address.matches({"country": "US"}))
-    ...     same_city = User.find(User.home_address.equals(User.work_address, ["city"]))
-    ...     has_address = User.find(User.home_address.is_not_null())
+    ...     local = User.find(User.address.city.equals("New York"))
+    ...     international = User.find(
+    ...         User.shipping_address.country.not_equals("USA")
+    ...     )
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Generic, List, Optional, Type, TypeVar
+from typing import (
+    Any,
+    Dict,
+    Generic,
+    Optional,
+    Protocol,
+    Type,
+    TypeVar,
+    Union,
+    runtime_checkable,
+)
 
-from earnorm.exceptions import FieldValidationError
+from earnorm.database.mappers import get_mapper
+from earnorm.exceptions import FieldValidationError, ModelResolutionError
 from earnorm.fields.base import BaseField
-from earnorm.types import ComparisonOperator, DatabaseValue, FieldComparisonMixin
+from earnorm.types.fields import ComparisonOperator, FieldComparisonMixin
 
-if TYPE_CHECKING:
-    from earnorm.base.model.base import BaseModel
-
-    M = TypeVar("M", bound="BaseModel")  # Type variable for embedded model
-else:
-    M = TypeVar("M")  # Type variable for runtime
+JsonDict = Dict[str, Any]
 
 
-class EmbeddedField(BaseField[M], FieldComparisonMixin, Generic[M]):
+@runtime_checkable
+class ModelProtocol(Protocol):
+    """Protocol for model interface."""
+
+    def __init__(self) -> None:
+        """Initialize model instance."""
+        ...
+
+    def from_dict(self, data: JsonDict) -> None:
+        """Load model from dictionary."""
+        ...
+
+    async def validate(self, context: Optional[JsonDict] = None) -> None:
+        """Validate model instance."""
+        ...
+
+    def to_dict(self) -> JsonDict:
+        """Convert model to dictionary."""
+        ...
+
+
+@runtime_checkable
+class Environment(Protocol):
+    """Protocol for environment interface."""
+
+    async def get_model(self, name: str) -> Type[ModelProtocol]:
+        """Get model class by name."""
+        ...
+
+
+@runtime_checkable
+class Container(Protocol):
+    """Protocol for DI container interface."""
+
+    async def get(self, key: str) -> Any:
+        """Get service by key."""
+        ...
+
+    async def get_environment(self) -> Optional[Environment]:
+        """Get environment instance."""
+        ...
+
+
+T = TypeVar("T", bound=ModelProtocol)
+
+
+class EmbeddedField(BaseField[T], FieldComparisonMixin, Generic[T]):
     """Field for embedded model instances.
 
-    This field type handles embedded model instances, with support for:
-    - Model instance validation
-    - Dictionary conversion
-    - Lazy loading
+    This field type handles nested model instances, with support for:
+    - Model validation
+    - Nested validation
     - Database type mapping
-    - Embedded model comparison operations
+    - Model comparison operations
+    - Lazy model loading
+    - Recursive validation
 
     Attributes:
-        model_class: Model class for embedded instances
-        allow_dict: Whether to allow dictionary input
-        lazy_load: Whether to load embedded models lazily
+        model_type: Model class or name
+        lazy: Whether to load model class lazily
+        _model_class: Cached model class instance
         backend_options: Database backend options
     """
 
-    model_class: Type[M]
-    allow_dict: bool
-    lazy_load: bool
-    backend_options: dict[str, Any]
-    _parent_model: Optional[Any]
+    model_type: Union[str, Type[T]]
+    lazy: bool
+    _model_class: Optional[Type[T]]
+    backend_options: Dict[str, Any]
 
     def __init__(
         self,
-        model_class: Type[M],
+        model_type: Union[str, Type[T]],
         *,
-        allow_dict: bool = True,
-        lazy_load: bool = False,
+        lazy: bool = False,
         **options: Any,
     ) -> None:
         """Initialize embedded field.
 
         Args:
-            model_class: Model class for embedded instances
-            allow_dict: Whether to allow dictionary input
-            lazy_load: Whether to load embedded models lazily
+            model_type: Model class or name (if lazy loading)
+            lazy: Whether to load model class lazily
             **options: Additional field options
         """
         super().__init__(**options)
 
-        self.model_class = model_class
-        self.allow_dict = allow_dict
-        self.lazy_load = lazy_load
-        self._parent_model = None
+        # Store model type and lazy loading flag
+        self.model_type = model_type
+        self.lazy = lazy
 
-        # Initialize backend options
-        self.backend_options = {
-            "mongodb": {"type": "object"},
-            "postgres": {"type": "JSONB"},
-            "mysql": {"type": "JSON"},
-        }
+        # Initialize model class
+        if lazy:
+            object.__setattr__(self, "_model_class", None)
+        else:
+            object.__setattr__(self, "_model_class", model_type)
 
-    def _get_model_env(self) -> Any:
-        """Get environment from parent model.
+        # Initialize backend options using mappers
+        self.backend_options = {}
+        for backend in ["mongodb", "postgres", "mysql"]:
+            mapper = get_mapper(backend)
+            self.backend_options[backend] = {
+                "type": mapper.get_field_type(self),
+                **mapper.get_field_options(self),
+            }
+
+    async def get_model_class(self) -> Type[T]:
+        """Get model class instance.
+
+        This method handles lazy loading of model classes.
 
         Returns:
-            Model environment
+            Model class instance
 
         Raises:
-            FieldValidationError: If parent model or environment not found
+            ModelResolutionError: If model class cannot be resolved
         """
-        if self._parent_model is None:
-            raise FieldValidationError(
-                message="Cannot create embedded instance without parent model",
-                field_name=self.name,
-                code="missing_parent",
-            )
+        if self._model_class is not None:
+            return self._model_class
 
-        model_env = getattr(self._parent_model, "env", None)
-        if model_env is None:
-            raise FieldValidationError(
-                message="Parent model has no environment",
-                field_name=self.name,
-                code="missing_env",
-            )
+        if isinstance(self.model_type, str):
+            try:
+                from earnorm.di import container
 
-        return model_env
-
-    async def setup(self, name: str, model_name: str) -> None:
-        """Set up the field.
-
-        Args:
-            name: Field name
-            model_name: Model name
-        """
-        await super().setup(name, model_name)
-        self._parent_model = object.__getattribute__(self, "model")
-
-    async def validate(self, value: Any) -> None:
-        """Validate embedded value.
-
-        This method validates:
-        - Value is model instance or dict (if allowed)
-        - Model instance is valid
-        - Dictionary values can be converted to model instance
-
-        Args:
-            value: Value to validate
-
-        Raises:
-            FieldValidationError: If validation fails
-        """
-        await super().validate(value)
-
-        if value is not None:
-            # Convert dict to model instance for validation
-            if isinstance(value, dict):
-                if not self.allow_dict:
-                    raise FieldValidationError(
-                        message="Dictionary input not allowed",
+                env = await container.get("environment")
+                if env is None:
+                    raise ModelResolutionError(
+                        message="Environment not initialized",
                         field_name=self.name,
-                        code="dict_not_allowed",
                     )
 
-                try:
-                    model_env = self._get_model_env()
-                    value = self.model_class(model_env, **value)  # type: ignore
-                except (TypeError, ValueError) as e:
-                    raise FieldValidationError(
-                        message=str(e),
-                        field_name=self.name,
-                        code="invalid_dict",
-                    ) from e
+                model_class = await env.get_model(self.model_type)
+                object.__setattr__(self, "_model_class", model_class)
+                return model_class
 
-            # Validate model instance
-            if not isinstance(value, self.model_class):
+            except Exception as e:
+                raise ModelResolutionError(
+                    message=f"Cannot resolve model class {self.model_type}: {str(e)}",
+                    field_name=self.name,
+                ) from e
+
+        return self.model_type
+
+    async def prepare_value(self, value: Optional[Union[T, JsonDict]]) -> Optional[T]:
+        """Prepare value for validation.
+
+        This method handles conversion from dictionary to model instance.
+
+        Args:
+            value: Value to prepare
+
+        Returns:
+            Prepared value
+
+        Raises:
+            FieldValidationError: If value cannot be prepared
+        """
+        if value is None:
+            return None
+
+        try:
+            model_class = await self.get_model_class()
+            if isinstance(value, dict):
+                instance = model_class()
+                instance.from_dict(value)
+                return instance
+            elif isinstance(value, model_class):
+                return value
+            else:
                 raise FieldValidationError(
-                    message=f"Value must be a {self.model_class.__name__} instance",
+                    message=(
+                        f"Expected {model_class.__name__} or dict, "
+                        f"got {type(value).__name__}"
+                    ),
                     field_name=self.name,
                     code="invalid_type",
                 )
 
-            try:
-                await value.validate()  # type: ignore
-            except FieldValidationError as e:
-                raise FieldValidationError(
-                    message=str(e),
-                    field_name=self.name,
-                    code="validation_error",
-                ) from e
-
-    async def convert(self, value: Any) -> Optional[M]:
-        """Convert value to model instance.
-
-        Handles:
-        - None values
-        - Model instances
-        - Dictionary values
-        - JSON string values
-
-        Args:
-            value: Value to convert
-
-        Returns:
-            Converted model instance or None
-
-        Raises:
-            FieldValidationError: If value cannot be converted
-        """
-        if value is None:
-            return None
-
-        try:
-            if isinstance(value, self.model_class):
-                return value
-            elif isinstance(value, dict) and self.allow_dict:
-                model_env = self._get_model_env()
-                instance = object.__new__(self.model_class)
-                instance.env = model_env  # type: ignore
-
-                # Convert dictionary to model instance
-                value_dict: dict[str, Any] = value
-                for key, val in value_dict.items():
-                    key_type = type(key).__name__
-                    # Check key type without isinstance since we know it's str from dict
-                    if key_type != "str":
-                        raise FieldValidationError(
-                            message=f"Dictionary key must be string, got {key_type}",
-                            field_name=self.name,
-                            code="invalid_key_type",
-                        )
-                    setattr(instance, key, val)
-                return instance
-            elif isinstance(value, str) and self.allow_dict:
-                # Try to parse as JSON object
-                import json
-
-                try:
-                    data = json.loads(value)
-                    if not isinstance(data, dict):
-                        raise FieldValidationError(
-                            message="JSON value must be an object",
-                            field_name=self.name,
-                            code="invalid_json",
-                        )
-
-                    model_env = self._get_model_env()
-                    instance = object.__new__(self.model_class)
-                    instance.env = model_env  # type: ignore
-
-                    # Convert JSON object to model instance
-                    json_dict: dict[str, Any] = data
-                    for key, val in json_dict.items():
-                        key_type = type(key).__name__
-                        # Check key type without isinstance since we know it's str from dict
-                        if key_type != "str":
-                            raise FieldValidationError(
-                                message=f"Dictionary key must be string, got {key_type}",
-                                field_name=self.name,
-                                code="invalid_key_type",
-                            )
-                        setattr(instance, key, val)
-                    return instance
-                except json.JSONDecodeError as e:
-                    raise FieldValidationError(
-                        message=f"Invalid JSON object: {str(e)}",
-                        field_name=self.name,
-                        code="invalid_json",
-                    ) from e
-            else:
-                # Get type names for error message
-                value_type = type(value).__name__ if value is not None else "None"  # type: ignore
-                model_type = self.model_class.__name__
-                raise FieldValidationError(
-                    message=f"Cannot convert {value_type} to {model_type}",
-                    field_name=self.name,
-                    code="conversion_error",
-                )
-        except (TypeError, ValueError) as e:
+        except Exception as e:
             raise FieldValidationError(
                 message=str(e),
                 field_name=self.name,
-                code="conversion_error",
+                code="validation_error",
             ) from e
 
-    async def to_db(self, value: Optional[M], backend: str) -> DatabaseValue:
-        """Convert model instance to database format.
+    async def validate_value(
+        self,
+        value: Optional[T],
+        context: Optional[JsonDict] = None,
+    ) -> None:
+        """Validate value.
+
+        This method handles validation of model instances.
 
         Args:
-            value: Model instance to convert
-            backend: Database backend type
-
-        Returns:
-            Converted model instance or None
+            value: Value to validate
+            context: Validation context
 
         Raises:
-            FieldValidationError: If value cannot be converted
+            FieldValidationError: If value is invalid
         """
         if value is None:
-            return None
+            return
 
         try:
-            return await value.to_db(backend)  # type: ignore
+            await value.validate(context)
         except Exception as e:
             raise FieldValidationError(
-                message=f"Cannot convert to database format: {str(e)}",
+                message=str(e),
                 field_name=self.name,
-                code="conversion_error",
+                code="validation_error",
             ) from e
 
-    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[M]:
-        """Convert database value to model instance.
-
-        Args:
-            value: Database value to convert
-            backend: Database backend type
-
-        Returns:
-            Converted model instance or None
-
-        Raises:
-            FieldValidationError: If value cannot be converted
-        """
-        if value is None:
-            return None
-
-        try:
-            if not isinstance(value, dict):
-                raise TypeError(
-                    f"Expected dictionary from database, got {type(value).__name__}"
-                )
-
-            model_env = self._get_model_env()
-
-            if self.lazy_load:
-                # Create model instance without validation
-                instance = object.__new__(self.model_class)
-                instance.env = model_env  # type: ignore
-                await instance.from_db(value, backend)  # type: ignore
-                return instance
-            else:
-                # Create and validate model instance
-                instance = object.__new__(self.model_class)
-                instance.env = model_env  # type: ignore
-                await instance.from_db(value, backend)  # type: ignore
-                await instance.validate()  # type: ignore
-                return instance
-        except Exception as e:
-            raise FieldValidationError(
-                message=f"Cannot convert database value: {str(e)}",
-                field_name=self.name,
-                code="conversion_error",
-            ) from e
-
-    def _prepare_value(self, value: Any) -> DatabaseValue:
-        """Prepare embedded value for comparison (sync version).
-
-        This is the sync version required by FieldComparisonMixin.
-        For async operations, use _prepare_value_async instead.
+    def prepare_for_comparison(self, value: Any) -> Optional[JsonDict]:
+        """Prepare model instance for comparison.
 
         Args:
             value: Value to prepare
 
         Returns:
-            Prepared dictionary value or None
+            Prepared model instance as dictionary or None
         """
         if value is None:
             return None
 
         try:
             if isinstance(value, dict):
-                return value  # type: ignore
+                return dict(value)  # type: ignore
+            elif isinstance(value, ModelProtocol):
+                return value.to_dict()
             return None
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, AttributeError):
             return None
 
-    async def _prepare_value_async(self, value: Any) -> DatabaseValue:
-        """Prepare embedded value for comparison (async version).
+    def has_field(self, field_name: str) -> ComparisonOperator:
+        """Check if model has field.
 
         Args:
-            value: Value to prepare
+            field_name: Field name to check for
 
         Returns:
-            Prepared dictionary value or None
+            ComparisonOperator: Comparison operator with field name and value
         """
-        if value is None:
-            return None
+        return ComparisonOperator(self.name, "has_field", field_name)
 
-        try:
-            if isinstance(value, self.model_class):
-                return await value.to_dict()
-            elif isinstance(value, dict):
-                return value  # type: ignore
-            return None
-        except (TypeError, ValueError):
-            return None
-
-    async def matches(self, criteria: Dict[str, Any]) -> ComparisonOperator:
-        """Check if embedded model matches criteria."""
-        prepared_value = await self._prepare_value_async(criteria)
-        return ComparisonOperator(self.name, "matches", prepared_value)
-
-    async def equals(
-        self, other: Any, fields: Optional[List[str]] = None
-    ) -> ComparisonOperator:
-        """Check if embedded model equals another model or dictionary."""
-        prepared_value = await self._prepare_value_async(other)
-        return ComparisonOperator(
-            self.name, "equals", {"value": prepared_value, "fields": fields}
-        )
-
-    async def not_equals(
-        self, other: Any, fields: Optional[List[str]] = None
-    ) -> ComparisonOperator:
-        """Check if embedded model does not equal another model or dictionary."""
-        prepared_value = await self._prepare_value_async(other)
-        return ComparisonOperator(
-            self.name, "not_equals", {"value": prepared_value, "fields": fields}
-        )
-
-    def has_fields(self, fields: List[str]) -> ComparisonOperator:
-        """Check if embedded model has all specified fields with non-null values.
+    def matches(self, query: Dict[str, Any]) -> ComparisonOperator:
+        """Check if model matches query.
 
         Args:
-            fields: List of field names to check
+            query: Query dict to match against
 
         Returns:
-            ComparisonOperator: Comparison operator with field name and fields
+            ComparisonOperator: Comparison operator with field name and value
         """
-        return ComparisonOperator(self.name, "has_fields", fields)
+        return ComparisonOperator(self.name, "matches", query)
 
-    def is_null(self) -> ComparisonOperator:
-        """Check if embedded model is null.
+    def is_empty(self) -> ComparisonOperator:
+        """Check if model has no fields set.
 
         Returns:
             ComparisonOperator: Comparison operator with field name
         """
-        return ComparisonOperator(self.name, "is_null", None)
+        return ComparisonOperator(self.name, "is_empty", None)
 
-    def is_not_null(self) -> ComparisonOperator:
-        """Check if embedded model is not null.
+    def is_not_empty(self) -> ComparisonOperator:
+        """Check if model has any fields set.
 
         Returns:
             ComparisonOperator: Comparison operator with field name
         """
-        return ComparisonOperator(self.name, "is_not_null", None)
+        return ComparisonOperator(self.name, "is_not_empty", None)

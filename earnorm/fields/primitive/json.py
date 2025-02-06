@@ -26,14 +26,14 @@ Examples:
 """
 
 import json
-from typing import Any, Final, Optional
+from typing import Any, Dict, Final, Optional
 
 from jsonschema import Draft202012Validator, ValidationError, validate
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 from earnorm.fields.validators.base import Validator
+from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 
 # Constants
 DEFAULT_ENCODER: Final[type[json.JSONEncoder]] = json.JSONEncoder
@@ -102,7 +102,9 @@ class JSONField(BaseField[Any], FieldComparisonMixin):
             "mysql": {"type": "JSON"},
         }
 
-    async def validate(self, value: Any) -> None:
+    async def validate(
+        self, value: Any, context: Optional[Dict[str, Any]] = None
+    ) -> Any:
         """Validate JSON value.
 
         This method validates:
@@ -111,11 +113,20 @@ class JSONField(BaseField[Any], FieldComparisonMixin):
 
         Args:
             value: Value to validate
+            context: Validation context with following keys:
+                    - model: Model instance
+                    - env: Environment instance
+                    - operation: Operation type (create/write/search...)
+                    - values: Values being validated
+                    - field_name: Name of field being validated
+
+        Returns:
+            Any: The validated value
 
         Raises:
             FieldValidationError: If validation fails
         """
-        await super().validate(value)
+        value = await super().validate(value, context)
 
         if value is not None:
             try:
@@ -138,6 +149,8 @@ class JSONField(BaseField[Any], FieldComparisonMixin):
                     field_name=self.name,
                     code="invalid_json",
                 ) from e
+
+        return value
 
     async def convert(self, value: Any) -> Optional[Any]:
         """Convert value to JSON-compatible type.

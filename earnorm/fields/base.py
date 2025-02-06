@@ -19,21 +19,21 @@ from typing import (
     Optional,
     Pattern,
     Protocol,
-    Tuple,
     Type,
     TypeVar,
     Union,
     cast,
 )
 
-from earnorm.exceptions import DatabaseError, ValidationError
+from earnorm.exceptions import DatabaseError
+from earnorm.fields.types import ValidationContext
 from earnorm.types.fields import ComparisonOperator, DatabaseValue
 
 T = TypeVar("T")  # Field value type
 
 # Type aliases for validation
-ValidatorResult = Union[bool, Tuple[bool, str]]
-ValidatorCallable = Callable[[Any], Coroutine[Any, Any, ValidatorResult]]
+ValidatorResult = bool  # Simplified to just bool for now
+ValidatorCallable = Callable[[Any, ValidationContext], Coroutine[Any, Any, bool]]
 
 logger = logging.getLogger(__name__)
 
@@ -424,7 +424,7 @@ class BaseField(Generic[T]):
     help: str
     compute: Optional[Callable[..., Coroutine[Any, Any, T]]]
     depends: List[str]
-    validators: List[Callable[[Any], Coroutine[Any, Any, bool]]]
+    validators: List[Callable[[Any, ValidationContext], Coroutine[Any, Any, None]]]
     env: EnvironmentProtocol
 
     # Field type information
@@ -478,40 +478,39 @@ class BaseField(Generic[T]):
         self.name = name
         self.model_name = model_name
 
-    async def validate(self, value: Optional[T]) -> Optional[T]:
+    async def validate(
+        self, value: Any, context: Optional[Dict[str, Any]] = None
+    ) -> Any:
         """Validate field value.
 
         Args:
             value: Value to validate
+            context: Validation context with following keys:
+                    - model: Model instance
+                    - env: Environment instance
+                    - operation: Operation type (create/write/search...)
+                    - values: Values being validated
+                    - field_name: Name of field being validated
 
         Returns:
-            Optional[T]: Validated value
+            Validated value
 
         Raises:
-            ValidationError: If validation fails
+            FieldValidationError: If validation fails
         """
-        if value is None:
-            if self.required:
-                raise ValidationError(f"Field {self.name} is required")
-            return None
+        context = context or {}
+        validation_context = ValidationContext(
+            field=self,
+            value=value,
+            model=context.get("model"),
+            env=context.get("env"),
+            operation=context.get("operation"),
+            values=context.get("values", dict()),
+        )
 
         # Run validators
         for validator in self.validators:
-            try:
-                result: ValidatorResult = await validator(value)
-                if isinstance(result, tuple):
-                    valid, error_message = result
-                else:
-                    valid = result
-                    error_message = "Validation failed"
-
-                if not valid:
-                    raise ValidationError(f"{error_message} for field {self.name}")
-
-            except Exception as e:
-                if not isinstance(e, ValidationError):
-                    raise ValidationError(str(e)) from e
-                raise
+            await validator(value, validation_context)
 
         return value
 

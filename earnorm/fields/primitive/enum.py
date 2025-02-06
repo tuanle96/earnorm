@@ -26,12 +26,12 @@ Examples:
 """
 
 from enum import Enum
-from typing import Any, Final, Generic, List, Optional, Type, TypeVar, Union
+from typing import Any, Dict, Final, Generic, List, Optional, Type, TypeVar, Union
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 from earnorm.fields.validators.base import TypeValidator, Validator
+from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 
 # Type variable for enum type
 E = TypeVar("E", bound=Enum)
@@ -115,7 +115,9 @@ class EnumField(BaseField[E], FieldComparisonMixin, Generic[E]):
                 "mysql": {"type": "TEXT"},
             }
 
-    async def validate(self, value: Any) -> None:
+    async def validate(
+        self, value: Any, context: Optional[Dict[str, Any]] = None
+    ) -> Any:
         """Validate enum value.
 
         This method validates:
@@ -124,11 +126,20 @@ class EnumField(BaseField[E], FieldComparisonMixin, Generic[E]):
 
         Args:
             value: Value to validate
+            context: Validation context with following keys:
+                    - model: Model instance
+                    - env: Environment instance
+                    - operation: Operation type (create/write/search...)
+                    - values: Values being validated
+                    - field_name: Name of field being validated
+
+        Returns:
+            Any: The validated value
 
         Raises:
             FieldValidationError: If validation fails
         """
-        await super().validate(value)
+        value = await super().validate(value, context)
 
         if value is not None:
             if not isinstance(value, self.enum_class):
@@ -150,6 +161,8 @@ class EnumField(BaseField[E], FieldComparisonMixin, Generic[E]):
                     field_name=self.name,
                     code="invalid_choice",
                 )
+
+        return value
 
     async def convert(self, value: Any) -> Optional[E]:
         """Convert value to enum.

@@ -366,20 +366,32 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
         prepared_values = [self._prepare_value(value) for value in values]
         return ComparisonOperator(self.name, "not_in", prepared_values)
 
-    async def validate(self, value: Any) -> None:
+    async def validate(
+        self, value: Any, context: Optional[Dict[str, Any]] = None
+    ) -> Any:
         """Validate datetime value.
 
         This method validates:
         - Value is datetime type
-        - Timezone info matches field configuration
+        - Value has correct timezone if required
+        - Auto now and auto now add handling
 
         Args:
             value: Value to validate
+            context: Validation context with following keys:
+                    - model: Model instance
+                    - env: Environment instance
+                    - operation: Operation type (create/write/search...)
+                    - values: Values being validated
+                    - field_name: Name of field being validated
+
+        Returns:
+            Any: The validated value
 
         Raises:
             FieldValidationError: If validation fails
         """
-        await super().validate(value)
+        value = await super().validate(value, context)
 
         if value is not None:
             if not isinstance(value, datetime):
@@ -389,18 +401,21 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
                     code="invalid_type",
                 )
 
+            # Handle timezone
             if self.use_tz and value.tzinfo is None:
-                raise FieldValidationError(
-                    message="Timezone-aware datetime is required",
-                    field_name=self.name,
-                    code="missing_timezone",
-                )
+                value = value.replace(tzinfo=timezone.utc)
             elif not self.use_tz and value.tzinfo is not None:
-                raise FieldValidationError(
-                    message="Naive datetime is required",
-                    field_name=self.name,
-                    code="unexpected_timezone",
-                )
+                value = value.replace(tzinfo=None)
+
+            # Handle auto_now and auto_now_add
+            if context and "operation" in context:
+                operation = context["operation"]
+                if operation == "create" and self.auto_now_add:
+                    value = datetime.now(timezone.utc if self.use_tz else None)
+                elif operation in ("create", "write") and self.auto_now:
+                    value = datetime.now(timezone.utc if self.use_tz else None)
+
+        return value
 
     async def convert(self, value: Any) -> Optional[datetime]:
         """Convert value to datetime.
@@ -672,7 +687,9 @@ class TimeField(BaseField[time]):
             "mysql": {"type": "TIME"},
         }
 
-    async def validate(self, value: Any) -> None:
+    async def validate(
+        self, value: Any, context: Optional[Dict[str, Any]] = None
+    ) -> Any:
         """Validate time value.
 
         This method validates:
@@ -681,18 +698,45 @@ class TimeField(BaseField[time]):
 
         Args:
             value: Value to validate
+            context: Validation context with following keys:
+                    - model: Model instance
+                    - env: Environment instance
+                    - operation: Operation type (create/write/search...)
+                    - values: Values being validated
+                    - field_name: Name of field being validated
+
+        Returns:
+            Any: The validated value
 
         Raises:
             FieldValidationError: If validation fails
         """
-        await super().validate(value)
+        value = await super().validate(value, context)
 
-        if value is not None and not isinstance(value, time):
-            raise FieldValidationError(
-                message=f"Value must be a time, got {type(value).__name__}",
-                field_name=self.name,
-                code="invalid_type",
-            )
+        if value is not None:
+            if not isinstance(value, time):
+                raise FieldValidationError(
+                    message=f"Value must be a time, got {type(value).__name__}",
+                    field_name=self.name,
+                    code="invalid_type",
+                )
+
+            # Validate range
+            if self.min_value is not None and value < self.min_value:
+                raise FieldValidationError(
+                    message=f"Time must be after {self.min_value.strftime(self.format)}",
+                    field_name=self.name,
+                    code="min_value",
+                )
+
+            if self.max_value is not None and value > self.max_value:
+                raise FieldValidationError(
+                    message=f"Time must be before {self.max_value.strftime(self.format)}",
+                    field_name=self.name,
+                    code="max_value",
+                )
+
+        return value
 
     async def convert(self, value: Any) -> Optional[time]:
         """Convert value to time.

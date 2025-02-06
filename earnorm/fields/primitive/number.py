@@ -17,7 +17,7 @@ Examples:
 """
 
 from decimal import Decimal, InvalidOperation
-from typing import Any, Final, Generic, Optional, TypeVar, Union
+from typing import Any, Dict, Final, Generic, Optional, TypeVar, Union
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
@@ -190,7 +190,9 @@ class NumberField(Generic[N], BaseField[N], FieldComparisonMixin):
         """
         return ComparisonOperator(self.name, "is_zero", None)
 
-    async def validate(self, value: Any) -> None:
+    async def validate(
+        self, value: Any, context: Optional[Dict[str, Any]] = None
+    ) -> Any:
         """Validate numeric value.
 
         This method validates:
@@ -200,11 +202,20 @@ class NumberField(Generic[N], BaseField[N], FieldComparisonMixin):
 
         Args:
             value: Value to validate
+            context: Validation context with following keys:
+                    - model: Model instance
+                    - env: Environment instance
+                    - operation: Operation type (create/write/search...)
+                    - values: Values being validated
+                    - field_name: Name of field being validated
+
+        Returns:
+            Any: The validated value
 
         Raises:
             FieldValidationError: If validation fails
         """
-        await super().validate(value)
+        value = await super().validate(value, context)
 
         if value is not None:
             if not isinstance(value, (int, float, Decimal)):
@@ -236,6 +247,8 @@ class NumberField(Generic[N], BaseField[N], FieldComparisonMixin):
                         field_name=self.name,
                         code="invalid_step",
                     )
+
+        return value
 
 
 class IntegerField(NumberField[int]):
@@ -617,7 +630,9 @@ class DecimalField(NumberField[Decimal]):
             },
         }
 
-    async def validate(self, value: Any) -> None:
+    async def validate(
+        self, value: Any, context: Optional[Dict[str, Any]] = None
+    ) -> None:
         """Validate decimal value.
 
         This method validates:
@@ -628,11 +643,17 @@ class DecimalField(NumberField[Decimal]):
 
         Args:
             value: Value to validate
+            context: Validation context with following keys:
+                    - model: Model instance
+                    - env: Environment instance
+                    - operation: Operation type (create/write/search...)
+                    - values: Values being validated
+                    - field_name: Name of field being validated
 
         Raises:
             FieldValidationError: If validation fails
         """
-        await super().validate(value)
+        await super().validate(value, context)
 
         if value is not None:
             if not isinstance(value, Decimal):

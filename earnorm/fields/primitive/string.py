@@ -9,7 +9,7 @@ It includes:
 """
 
 import re
-from typing import Any, Final, List, Optional, Pattern, Union
+from typing import Any, Dict, Final, List, Optional, Pattern, Union
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
@@ -128,7 +128,9 @@ class StringField(BaseField[str], FieldComparisonMixin):
         }
         super().__init__(validators=field_validators, **options_without_validators)
 
-    async def validate(self, value: Optional[str]) -> Optional[str]:
+    async def validate(
+        self, value: Any, context: Optional[Dict[str, Any]] = None
+    ) -> Any:
         """Validate string value.
 
         This method checks:
@@ -138,14 +140,20 @@ class StringField(BaseField[str], FieldComparisonMixin):
 
         Args:
             value: Value to validate
+            context: Validation context with following keys:
+                    - model: Model instance
+                    - env: Environment instance
+                    - operation: Operation type (create/write/search...)
+                    - values: Values being validated
+                    - field_name: Name of field being validated
 
         Returns:
-            Optional[str]: Validated string value
+            Any: The validated value
 
         Raises:
             ValidationError: If validation fails
         """
-        value = await super().validate(value)
+        value = await super().validate(value, context)
         if value is None:
             return None
 

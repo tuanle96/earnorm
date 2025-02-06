@@ -3,7 +3,9 @@
 This module contains all custom exceptions used in EarnORM.
 """
 
-from typing import Any, Dict, Optional
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 
 class EarnORMError(Exception):
@@ -80,26 +82,115 @@ class ConfigBackupError(ConfigError):
         super().__init__(f"Backup error: {message}")
 
 
-class ValidationError(EarnORMError):
-    """Error raised when validation fails.
+@dataclass
+class ValidationError:
+    """Structured validation error with context.
 
-    This error is raised when model validation fails,
-    typically when custom validation rules are not satisfied.
+    This class provides detailed error information including:
+    - Error message
+    - Field name
+    - Error code
+    - Validation context
+    - Parent/child errors for nested validation
 
     Attributes:
         message: Error message
-        code: Error code for identifying validation error type
+        field_name: Name of field that failed validation
+        code: Error code for programmatic handling
+        context: Optional validation context
+        parent: Optional parent error for nested validation
+        children: List of child errors
     """
 
-    def __init__(self, message: str, *, code: Optional[str] = None) -> None:
+    message: str
+    field_name: str
+    code: str
+    context: Optional[Dict[str, Any]] = None
+    parent: Optional["ValidationError"] = None
+    children: List["ValidationError"] = field(default_factory=list)
+    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+
+    def add_child(self, error: "ValidationError") -> None:
+        """Add child error.
+
+        Args:
+            error: Child validation error
+        """
+        self.children.append(error)
+        error.parent = self
+
+    def get_error_tree(self) -> Dict[str, Any]:
+        """Get hierarchical error structure.
+
+        Returns:
+            Dict containing error information and child errors
+        """
+        result = {
+            "message": self.message,
+            "field": self.field_name,
+            "code": self.code,
+            "timestamp": self.timestamp,
+        }
+
+        if self.context:
+            result["context"] = self.context  # type: ignore
+
+        if self.children:
+            result["children"] = [child.get_error_tree() for child in self.children]  # type: ignore
+
+        return result
+
+
+class FieldValidationError(Exception):
+    """Exception for field validation errors.
+
+    This exception wraps ValidationError to provide structured error handling.
+
+    Attributes:
+        error: Underlying ValidationError instance
+    """
+
+    def __init__(
+        self,
+        message: str,
+        field_name: str,
+        code: str,
+        context: Optional[Dict[str, Any]] = None,
+        parent: Optional[ValidationError] = None,
+    ) -> None:
         """Initialize validation error.
 
         Args:
             message: Error message
-            code: Error code for identifying validation error type
+            field_name: Name of field that failed validation
+            code: Error code
+            context: Optional validation context
+            parent: Optional parent error
         """
-        self.code = code or "validation_error"
-        super().__init__(f"{message} (code={self.code})")
+        super().__init__(message)
+        self.error = ValidationError(
+            message=message,
+            field_name=field_name,
+            code=code,
+            context=context,
+            parent=parent,
+        )
+
+    def add_child(self, error: ValidationError) -> None:
+        """Add child error.
+
+        Args:
+            error: Child validation error
+        """
+        self.error.add_child(error)
+
+    def get_error_tree(self) -> Dict[str, Any]:
+        """Get hierarchical error structure.
+
+        Returns:
+            Dict containing error information and child errors
+        """
+        return self.error.get_error_tree()
 
 
 class UniqueConstraintError(ValidationError):
@@ -136,6 +227,7 @@ class UniqueConstraintError(ValidationError):
         self.value = value
         super().__init__(
             f"{field_name}: {message} (value={value})",
+            field_name=field_name,
             code=code or "unique_constraint_error",
         )
 
@@ -167,31 +259,6 @@ class FieldError(EarnORMError):
         self.field_name = field_name
         self.code = code or "field_error"
         super().__init__(f"{field_name}: {message} (code={self.code})")
-
-
-class FieldValidationError(FieldError):
-    """Error raised when field validation fails.
-
-    This error is raised when a field value fails validation,
-    either due to type mismatch, constraint violation, or
-    custom validation rules.
-    """
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        field_name: str,
-        code: Optional[str] = "validation_error",
-    ) -> None:
-        """Initialize validation error.
-
-        Args:
-            message: Error message
-            field_name: Field name
-            code: Error code for identifying validation error type
-        """
-        super().__init__(message, field_name=field_name, code=code)
 
 
 class ModelResolutionError(FieldError):

@@ -19,14 +19,14 @@ Examples:
 """
 
 from datetime import datetime, timedelta
-from typing import Any, Final, Optional, Union
+from typing import Any, Dict, Final, Optional, Union
 
 from bson import ObjectId, errors
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 from earnorm.fields.validators.base import TypeValidator, Validator
+from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 
 # Constants
 DEFAULT_PRIMARY_KEY: Final[bool] = False
@@ -73,7 +73,9 @@ class ObjectIdField(BaseField[ObjectId], FieldComparisonMixin):
             "mysql": {"type": "CHAR(24)"},
         }
 
-    async def validate(self, value: Any) -> None:
+    async def validate(
+        self, value: Any, context: Optional[Dict[str, Any]] = None
+    ) -> Any:
         """Validate ObjectId value.
 
         This method validates:
@@ -82,11 +84,20 @@ class ObjectIdField(BaseField[ObjectId], FieldComparisonMixin):
 
         Args:
             value: Value to validate
+            context: Validation context with following keys:
+                    - model: Model instance
+                    - env: Environment instance
+                    - operation: Operation type (create/write/search...)
+                    - values: Values being validated
+                    - field_name: Name of field being validated
+
+        Returns:
+            Any: The validated value
 
         Raises:
             FieldValidationError: If validation fails
         """
-        await super().validate(value)
+        value = await super().validate(value, context)
 
         if value is not None:
             if not isinstance(value, ObjectId):
@@ -107,6 +118,8 @@ class ObjectIdField(BaseField[ObjectId], FieldComparisonMixin):
                     field_name=self.name,
                     code="invalid_format",
                 ) from e
+
+        return value
 
     async def convert(self, value: Any) -> Optional[ObjectId]:
         """Convert value to ObjectId.
