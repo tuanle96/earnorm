@@ -18,6 +18,7 @@ from typing import (
     List,
     Optional,
     Pattern,
+    Protocol,
     Tuple,
     Type,
     TypeVar,
@@ -26,7 +27,6 @@ from typing import (
 )
 
 from earnorm.exceptions import DatabaseError, ValidationError
-from earnorm.fields.adapters.base import DatabaseAdapter
 from earnorm.types.fields import ComparisonOperator, DatabaseValue
 
 T = TypeVar("T")  # Field value type
@@ -36,6 +36,25 @@ ValidatorResult = Union[bool, Tuple[bool, str]]
 ValidatorCallable = Callable[[Any], Coroutine[Any, Any, ValidatorResult]]
 
 logger = logging.getLogger(__name__)
+
+
+class DatabaseAdapterProtocol(Protocol):
+    """Protocol for database adapter interface."""
+
+    async def convert_value(
+        self, value: Any, field_type: str, target_type: Type[Any]
+    ) -> Any:
+        """Convert value between database and Python types."""
+        ...
+
+
+class EnvironmentProtocol(Protocol):
+    """Protocol for environment interface."""
+
+    @property
+    def adapter(self) -> DatabaseAdapterProtocol:
+        """Get database adapter."""
+        ...
 
 
 class FieldComparison:
@@ -383,6 +402,15 @@ class BaseField(Generic[T]):
 
     Args:
         **kwargs: Field options passed to subclasses.
+
+    Examples:
+        >>> class StringField(BaseField[str]):
+        ...     field_type = "string"
+        ...     python_type = str
+        ...
+        >>> class User(BaseModel):
+        ...     name = StringField(required=True)
+        ...     age = IntegerField()
     """
 
     name: str
@@ -397,6 +425,11 @@ class BaseField(Generic[T]):
     compute: Optional[Callable[..., Coroutine[Any, Any, T]]]
     depends: List[str]
     validators: List[Callable[[Any], Coroutine[Any, Any, bool]]]
+    env: EnvironmentProtocol
+
+    # Field type information
+    field_type: str = ""  # Database field type (e.g. "string", "integer", etc.)
+    python_type: Type[T] = cast(Type[T], Any)  # Python type for the field
 
     def __init__(self, **kwargs: Any) -> None:
         """Initialize field with options.
@@ -416,7 +449,6 @@ class BaseField(Generic[T]):
         self.compute = kwargs.get("compute")
         self.depends = kwargs.get("depends", [])
         self.validators = kwargs.get("validators", [])
-        self.adapters: Dict[str, DatabaseAdapter[T]] = {}
 
     @property
     def comparison(self) -> FieldComparison:
@@ -446,14 +478,6 @@ class BaseField(Generic[T]):
         self.name = name
         self.model_name = model_name
 
-    def register_adapter(self, adapter: DatabaseAdapter[T]) -> None:
-        """Register database adapter.
-
-        Args:
-            adapter: Database adapter instance
-        """
-        self.adapters[adapter.backend_name] = adapter
-
     async def validate(self, value: Optional[T]) -> Optional[T]:
         """Validate field value.
 
@@ -479,10 +503,10 @@ class BaseField(Generic[T]):
                     valid, error_message = result
                 else:
                     valid = result
-                    error_message = f"Validation failed for field {self.name}"
+                    error_message = "Validation failed"
 
                 if not valid:
-                    raise ValidationError(error_message)  # type: ignore
+                    raise ValidationError(f"{error_message} for field {self.name}")
 
             except Exception as e:
                 if not isinstance(e, ValidationError):
@@ -499,10 +523,8 @@ class BaseField(Generic[T]):
         This implements the descriptor protocol for attribute access.
         The process is:
         1. Return field instance if accessed on class
-        2. Check environment cache first
-        3. Load from database if not in cache
-        4. Update cache with loaded value
-        5. Return value
+        2. Load from database if instance has data
+        3. Return value
 
         Args:
             instance: Model instance
@@ -521,21 +543,13 @@ class BaseField(Generic[T]):
 
         try:
             # Get environment
-            if not hasattr(instance, "_env"):
+            if not hasattr(instance, "env"):
                 raise ValueError("Model instance has no environment")
-            env = instance._env
 
-            # Check cache first
-            cached_value = env.get_field_value(instance._name, instance.id, self.name)
-            if cached_value is not None:
-                return cached_value
-
-            # Load from database if not in cache
+            # Load from database if instance has data
             if hasattr(instance, "_has_data") and instance._has_data:
                 value = await self._load_field_value(instance)
                 if value is not None:
-                    # Update cache
-                    await self._update_cache(instance, value)
                     return value
 
             # Return None if no value found
@@ -566,7 +580,6 @@ class BaseField(Generic[T]):
         The process is:
         1. Skip if field is readonly
         2. Validate value
-        3. Update environment cache
 
         Args:
             instance: Model instance
@@ -583,10 +596,9 @@ class BaseField(Generic[T]):
             # Get environment
             if not hasattr(instance, "_env"):
                 raise ValueError("Model instance has no environment")
-            env = instance._env
 
-            # Update cache
-            env.set_field_value(instance._name, instance.id, self.name, value)
+            # Set value directly
+            self._value = value
 
         except Exception as e:
             logger.error(
@@ -614,10 +626,10 @@ class BaseField(Generic[T]):
             ValidationError: If value validation fails
         """
         # Get database adapter
-        adapter = instance._env.adapter
+        adapter = instance.env.adapter
 
         # Load record from database
-        record = await adapter.read_one(instance._name, instance.id, fields=[self.name])
+        record = await adapter.read(type(instance), instance.id, fields=[self.name])
 
         if record:
             # Convert database value
@@ -627,21 +639,6 @@ class BaseField(Generic[T]):
             return await self.validate(value)
 
         return None
-
-    async def _update_cache(self, instance: Any, value: Optional[T]) -> None:
-        """Update environment cache with field value.
-
-        Args:
-            instance: Model instance
-            value: Field value
-
-        Raises:
-            ValueError: If model instance has no environment
-        """
-        if not hasattr(instance, "_env"):
-            raise ValueError("Model instance has no environment")
-
-        instance._env.set_field_value(instance._name, instance.id, self.name, value)
 
     async def convert(self, value: Any) -> Optional[T]:
         """Convert value to field type.
@@ -665,31 +662,43 @@ class BaseField(Generic[T]):
             backend: Database backend type
 
         Returns:
-            DatabaseValue: Database value
+            DatabaseValue: Converted value for database
 
         Raises:
-            ValueError: If backend is not supported
+            DatabaseError: If conversion fails
         """
-        if backend not in self.adapters:
-            raise ValueError(f"Unsupported backend: {backend}")
-        return await self.adapters[backend].to_db_value(value)
+        try:
+            if not hasattr(self, "env"):
+                raise ValueError("Field has no environment")
+
+            return await self.env.adapter.convert_value(
+                value, self.field_type, self.python_type
+            )
+        except Exception as e:
+            raise DatabaseError(message=str(e), backend=backend) from e
 
     async def from_db(self, value: DatabaseValue, backend: str) -> Optional[T]:
         """Convert database value to Python format.
 
         Args:
-            value: Database value
+            value: Value to convert
             backend: Database backend type
 
         Returns:
-            Optional[T]: Python value
+            Optional[T]: Converted value
 
         Raises:
-            ValueError: If backend is not supported
+            DatabaseError: If conversion fails
         """
-        if backend not in self.adapters:
-            raise ValueError(f"Unsupported backend: {backend}")
-        return await self.adapters[backend].from_db_value(value)
+        try:
+            if not hasattr(self, "env"):
+                raise ValueError("Field has no environment")
+
+            return await self.env.adapter.convert_value(
+                value, self.field_type, self.python_type
+            )
+        except Exception as e:
+            raise DatabaseError(message=str(e), backend=backend) from e
 
     def get_backend_options(self, backend: str) -> Dict[str, Any]:
         """Get database-specific options.
@@ -703,12 +712,8 @@ class BaseField(Generic[T]):
         Raises:
             ValueError: If backend is not supported
         """
-        if backend not in self.adapters:
-            raise ValueError(f"Unsupported backend: {backend}")
-        return {
-            "type": self.adapters[backend].get_field_type(),
-            **self.adapters[backend].get_field_options(),
-        }
+        # This method is now empty as the field no longer uses backend-specific options
+        return {}
 
     def setup_triggers(self) -> None:
         """Setup compute triggers.

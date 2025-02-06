@@ -102,7 +102,7 @@ async def main():
 
         # CREATE - Create a new user
         logger.info("Creating new user...")
-        new_user = await User.create(
+        new_user_one = await User.create(
             {
                 "name": "John Doe",
                 "email": "john@example.com",
@@ -110,35 +110,89 @@ async def main():
                 "status": "active",
             }
         )
-        logger.info(f"Created user: {await new_user.to_dict()}")
+        logger.info(f"Created user: {await new_user_one.to_dict()}")
 
-        # READ - Get user by ID
-        logger.info(f"Reading user by ID: {new_user.id}")
-        found_user = await User.browse(new_user.id)
-        if found_user:
-            user_data = await found_user.to_dict()
-            logger.info(f"Found user by ID: {user_data}")
+        await new_user_one.write({"age": 26})
+
+        # try to delete
+        # await new_user_one.unlink()
+
+        # # print slots
+        # print(f"Slots for user one: {new_user_one.__slots__}")
+        # print(f"Slots new_user_one|ids: {new_user_one._ids}")
+        # print(f"Slots new_user_one|env: {new_user_one._env}")
+        # print(f"Slots new_user_one|name: {new_user_one._name}")
+        # print(f"Slots new_user_one|prefetch_ids: {new_user_one._prefetch_ids}")
+
+        # CREATE - Create a new user
+        # test_data = [
+        #     {"name": "Alice Smith", "email": "alice@example.com", "age": 22},
+        #     {"name": "Bob Johnson", "email": "bob@example.com", "age": 19},
+        #     {"name": "Charlie Brown", "email": "charlie@example.com", "age": 25},
+        #     {"name": "David Wilson", "email": "david@example.com", "age": 17},
+        #     {"name": "Eve Anderson", "email": "eve@example.com", "age": 28},
+        # ]
+        # new_users = await User.create(test_data)
+        # print(f"Slots new_users|ids: {new_users._ids}")
+        # print(f"Slots new_users|env: {new_users._env}")
+        # print(f"Slots new_users|name: {new_users._name}")
+        # print(f"Slots new_users|prefetch_ids: {new_users._prefetch_ids}")
+
+        # first_new_users = new_users[0]
+        # print(f"Slots first_new_users|ids: {first_new_users._ids}")
+        # print(f"Slots first_new_users|env: {first_new_users._env}")
+        # print(f"Slots first_new_users|name: {first_new_users._name}")
+        # print(f"Slots first_new_users|prefetch_ids: {first_new_users._prefetch_ids}")
+
+        # search
+
+        # browse for first user to test prefetch
+        # first_new_user = await User.browse("67a464fd7b6393d0963383d7")
+        # print(f"Slots first_new_user|ids: {first_new_user._ids}")
+        # print(f"Slots first_new_user|env: {first_new_user._env}")
+        # print(f"Slots first_new_user|name: {first_new_user._name}")
+        # print(f"Slots first_new_user|age: {await first_new_user.age}")
+        # name_of_user = await first_new_user.age
+        # print(f"name_of_user: {name_of_user}")
+
+        # search
+        # search_users = await User.search(domain=[("age", ">", 18)], limit=10)
+        # print(f"Slots search_users|ids: {search_users._ids}")
+        # print(f"Slots search_users|env: {search_users._env}")
+        # print(f"Slots search_users|name: {search_users._name}")
+        # print(f"Slots search_users|prefetch_ids: {search_users._prefetch_ids}")
+
+        # # READ - Get user by ID
+        # logger.info(f"Reading user by ID: {new_user.id}")
+        # found_user = await User.browse(new_user.id)
+        # if found_user:
+        #     user_data = await found_user.to_dict()
+        #     logger.info(
+        #         f"Found user by ID: {user_data} by id {found_user.id} and email {found_user.email}"
+        # )
 
         # READ - Search user by email
-        logger.info("Searching user by email: john@example.com")
-        users = await User.search(domain=[("email", "=", "john@example.com")])
-        if users:
-            user_data = await users[0].to_dict()
-            logger.info(f"Found user by email: {user_data}")
+        # logger.info("Searching user by email: john@example.com")
+        # users = await User.search(domain=[("email", "=", "john@example.com")])
+        # if users:
+        #     user_data = await users[0].to_dict()
+        #     logger.info(
+        #         f"Found user by email: {user_data} by email {users[0].email} and name {users[0].name}"
+        #     )
 
-            # UPDATE - Update user age
-            # logger.info(f"Updating user {user_data['name']}'s age...")
-            # await users[0].write({"age": 26})
-            # updated_data = await users[0].to_dict()
-            # logger.info(f"Updated user data: {updated_data}")
+        # UPDATE - Update user age
+        # logger.info(f"Updating user {user_data['name']}'s age...")
+        # await users[0].write({"age": 26})
+        # updated_data = await users[0].to_dict()
+        # logger.info(f"Updated user data: {updated_data}")
 
-            # DELETE - Delete single user
-            # logger.info(f"Deleting user: {updated_data['name']}")
-            # success = await users[0].unlink()
-            # logger.info(f"User deletion {'successful' if success else 'failed'}")
+        # DELETE - Delete single user
+        # logger.info(f"Deleting user: {updated_data['name']}")
+        # success = await users[0].unlink()
+        # logger.info(f"User deletion {'successful' if success else 'failed'}")
 
         # ===== BULK OPERATIONS =====
-        logger.info("=== Starting Bulk Operations ===")
+        # logger.info("=== Starting Bulk Operations ===")
 
         # BULK CREATE - Create multiple users
         # logger.info("Creating multiple users...")
@@ -203,14 +257,14 @@ async def main():
         raise
     finally:
         # Cleanup and close connections
-        logger.info("Cleaning up environment...")
+        # logger.info("Cleaning up environment...")
         try:
             from earnorm.base.env import Environment
 
             env = Environment.get_instance()
             if env:
                 await env.destroy()
-                logger.info("Environment cleaned up successfully")
+                # logger.info("Environment cleaned up successfully")
         except Exception as e:
             logger.error(f"Failed to cleanup environment: {str(e)}")
 

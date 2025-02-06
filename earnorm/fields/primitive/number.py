@@ -289,8 +289,34 @@ class IntegerField(NumberField[int]):
             "mysql": {"type": "INT"},
         }
 
+    # async def __get__(
+    #     self, instance: Any, owner: Optional[Type[Any]] = None
+    # ) -> Union["IntegerField", Optional[int]]:
+    #     """Get field value from instance.
+
+    #     This implements the descriptor protocol for attribute access.
+    #     The process is:
+    #     1. Return field instance if accessed on class
+    #     2. Check environment cache first
+    #     3. Load from database if not in cache
+    #     4. Update cache with loaded value
+    #     5. Return value
+
+    #     Args:
+    #         instance: Model instance
+    #         owner: Model class
+
+    #     Returns:
+    #         Union[IntegerField, Optional[int]]: Field instance or value
+    #     """
+    #     if instance is None:
+    #         return self
+    #     return await self.convert(
+    #         instance.env.get_field_value(instance._name, instance.id, self.name)
+    #     )
+
     async def convert(self, value: Any) -> Optional[int]:
-        """Convert value to integer.
+        """_Convert value to integer.
 
         Handles:
         - None values

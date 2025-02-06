@@ -2,27 +2,27 @@
 
 This module provides MongoDB adapter implementation.
 It handles the conversion between string IDs (used by models) and ObjectId (used by MongoDB).
-
-ID Handling:
-    - Models use string IDs for database-agnostic operations
-    - MongoDB uses ObjectId internally
-    - This adapter handles the conversion between these formats:
-        - String ID -> ObjectId when sending to MongoDB
-        - ObjectId -> String ID when receiving from MongoDB
-
-    Examples:
-        >>> # String ID to ObjectId (when writing to MongoDB)
-        >>> object_id = adapter._to_object_id("507f1f77bcf86cd799439011")
-        >>> print(object_id)  # ObjectId("507f1f77bcf86cd799439011")
-
-        >>> # ObjectId to String ID (when reading from MongoDB)
-        >>> str_id = adapter._to_string_id(ObjectId("507f1f77bcf86cd799439011"))
-        >>> print(str_id)  # "507f1f77bcf86cd799439011"
 """
 
+import json
 import logging
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Protocol, Type, TypeVar, Union
+from datetime import date, datetime
+from decimal import Decimal
+from enum import Enum
+from typing import (
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Protocol,
+    Type,
+    TypeVar,
+    Union,
+    get_args,
+    get_origin,
+    overload,
+)
 
 from bson import ObjectId
 from bson.decimal128 import Decimal128
@@ -31,15 +31,15 @@ from motor.motor_asyncio import (
     AsyncIOMotorCollection,
     AsyncIOMotorDatabase,
 )
-from pymongo.operations import DeleteOne, InsertOne, ReplaceOne, UpdateMany, UpdateOne
-from pymongo.results import BulkWriteResult, DeleteResult, InsertOneResult, UpdateResult
+from pymongo.operations import DeleteOne, InsertOne, UpdateOne
 
-from earnorm.base.database.adapter import DatabaseAdapter
+from earnorm.base.database.adapter import DatabaseAdapter, FieldType
 from earnorm.base.database.query.backends.mongo.operations.aggregate import (
     MongoAggregate,
 )
 from earnorm.base.database.query.backends.mongo.operations.join import MongoJoin
 from earnorm.base.database.query.backends.mongo.query import MongoQuery
+from earnorm.base.database.query.core.query import BaseQuery
 from earnorm.base.database.query.interfaces.operations.aggregate import (
     AggregateProtocol as AggregateQuery,
 )
@@ -54,6 +54,20 @@ from earnorm.pool.protocols import AsyncConnectionProtocol
 from earnorm.types import DatabaseModel, JsonDict
 
 ModelT = TypeVar("ModelT", bound=DatabaseModel)
+T = TypeVar("T")
+
+# Type mapping for field conversions
+TYPE_MAPPING = {
+    "string": str,
+    "integer": int,
+    "float": float,
+    "decimal": Decimal,
+    "boolean": bool,
+    "datetime": datetime,
+    "date": date,
+    "array": list,
+    "json": dict,
+}
 
 
 class LoggerProtocol(Protocol):
@@ -228,19 +242,19 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             ValueError: If model has no table or name
         """
         # Use getattr to access protected attributes
-        table = getattr(model_type, "_table", None)
         name = getattr(model_type, "_name", None)
+        table = getattr(model_type, "_table", None)
         if not (table or name):
             raise ValueError(f"Model {model_type} has no table or name")
         return str(table) if table else str(name)
 
     def _get_collection(
-        self, model_type: Type[ModelT]
+        self, model_type: Union[Type[ModelT], str]
     ) -> AsyncIOMotorCollection[Dict[str, Any]]:
-        """Get MongoDB collection for model type.
+        """Get MongoDB collection for model type or collection name.
 
         Args:
-            model_type: Type of model
+            model_type: Type of model or collection name
 
         Returns:
             MongoDB collection
@@ -250,7 +264,13 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         """
         if self._sync_db is None:
             raise RuntimeError("Not connected to MongoDB")
-        return self._sync_db[self._get_collection_name(model_type)]
+
+        collection_name = (
+            self._get_collection_name(model_type)
+            if isinstance(model_type, type)
+            else str(model_type)
+        )
+        return self._sync_db[collection_name]
 
     def _to_object_id(self, str_id: Optional[str]) -> Optional[ObjectId]:
         """Convert string ID to MongoDB ObjectId.
@@ -341,26 +361,39 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             converted_doc["id"] = None
             return converted_doc
 
-    async def query(self, model_type: Type[ModelT]) -> MongoQuery[ModelT]:
-        """Create query for model type.
+    @overload
+    async def query(
+        self, model_type: Type[ModelT], query_type: Literal["base"] = "base"
+    ) -> BaseQuery[ModelT]: ...
 
-        Args:
-            model_type: Model class to query
+    @overload
+    async def query(
+        self, model_type: Type[ModelT], query_type: Literal["aggregate"]
+    ) -> AggregateQuery[ModelT]: ...
 
-        Returns:
-            MongoQuery instance configured for the model
+    @overload
+    async def query(
+        self, model_type: Type[ModelT], query_type: Literal["join"]
+    ) -> JoinQuery[ModelT, Any]: ...
 
-        Examples:
-            >>> query = await adapter.query(User)
-            >>> users = await query.filter({"age": {"$gt": 18}}).all()
-        """
-        collection = await self.get_collection(self._get_collection_name(model_type))
-        query = MongoQuery[ModelT](
-            collection=collection,
-            model_type=model_type,
-        )
-        query.add_postprocessor(self._convert_document)
-        return query
+    async def query(
+        self,
+        model_type: Type[ModelT],
+        query_type: Literal["base", "aggregate", "join"] = "base",
+    ) -> Union[BaseQuery[ModelT], AggregateQuery[ModelT], JoinQuery[ModelT, Any]]:
+        """Create query builder of specified type."""
+        collection = self._get_collection(self._get_collection_name(model_type))
+
+        if query_type == "base":
+            query = MongoQuery[ModelT](collection=collection, model_type=model_type)
+            query.add_postprocessor(self._convert_document)
+            return query
+        elif query_type == "aggregate":
+            return MongoAggregate[ModelT](collection, model_type)
+        elif query_type == "join":
+            return MongoJoin[ModelT, DatabaseModel](collection, model_type)
+        else:
+            raise ValueError(f"Unsupported query type: {query_type}")
 
     async def transaction(
         self, model_type: Type[ModelT]
@@ -383,194 +416,37 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         manager.set_model_type(model_type)
         return manager
 
-    async def insert(self, model: ModelT) -> ModelT:
-        """Insert model into database.
+    @overload
+    async def create(self, model_type: Type[ModelT], values: Dict[str, Any]) -> str: ...
 
-        Args:
-            model: Model to insert
+    @overload
+    async def create(
+        self, model_type: Type[ModelT], values: List[Dict[str, Any]]
+    ) -> List[str]: ...
 
-        Returns:
-            Inserted model with ID
+    async def create(
+        self,
+        model_type: Type[ModelT],
+        values: Union[Dict[str, Any], List[Dict[str, Any]]],
+    ) -> Union[str, List[str]]:
+        """Create one or multiple records."""
+        try:
+            collection = self._get_collection(model_type)
 
-        Raises:
-            ValueError: If failed to get valid ID after insertion
-        """
-        collection: AsyncIOMotorCollection[JsonDict] = await self.get_collection(
-            self._get_collection_name(type(model))
-        )
-        values = await model.to_dict()
-        result: InsertOneResult = await collection.insert_one(values)
-        str_id = self._to_string_id(result.inserted_id)
-        if not str_id:
-            raise ValueError("Failed to get valid ID after insertion")
-        model.id = str_id
-        return model
+            # Handle single record
+            if isinstance(values, dict):
+                result = await collection.insert_one(values)
+                return str(result.inserted_id)
 
-    async def insert_many(self, models: List[ModelT]) -> List[ModelT]:
-        """Insert multiple models into database.
+            # Handle multiple records
+            result = await collection.insert_many(values)
+            return [str(id) for id in result.inserted_ids]
 
-        Args:
-            models: Models to insert
-
-        Returns:
-            Inserted models with IDs
-
-        Raises:
-            ValueError: If failed to get valid ID for any model
-        """
-        if not models:
-            return []
-
-        collection: AsyncIOMotorCollection[JsonDict] = await self.get_collection(
-            self._get_collection_name(type(models[0]))
-        )
-        values: List[JsonDict] = []
-        for model in models:
-            model_dict = await model.to_dict()
-            values.append(model_dict)
-        result = await collection.insert_many(values)
-        for model, _id in zip(models, result.inserted_ids):
-            str_id = self._to_string_id(_id)
-            if not str_id:
-                raise ValueError(f"Failed to get valid ID for model: {model}")
-            model.id = str_id
-        return models
-
-    async def insert_one(self, table_name: str, values: Dict[str, Any]) -> Any:
-        """Insert one document into table.
-
-        Args:
-            table_name: Table name
-            values: Document values
-
-        Returns:
-            Document ID
-        """
-        collection: AsyncIOMotorCollection[JsonDict] = await self.get_collection(
-            table_name
-        )
-        result: InsertOneResult = await collection.insert_one(values)
-        return self._to_string_id(result.inserted_id)
-
-    async def update(self, model: ModelT) -> ModelT:
-        """Update model in database.
-
-        Args:
-            model: Model to update
-
-        Returns:
-            Updated model
-
-        Raises:
-            ValueError: If model has no ID
-        """
-        if not model.id:
-            raise ValueError("Model has no ID")
-
-        collection: AsyncIOMotorCollection[JsonDict] = await self.get_collection(
-            self._get_collection_name(type(model))
-        )
-        values = await model.to_dict()
-        object_id = self._to_object_id(model.id)
-        if not object_id:
-            raise ValueError(f"Invalid MongoDB ObjectId: {model.id}")
-
-        await collection.update_one({"_id": object_id}, {"$set": values})
-        return model
-
-    async def update_many(self, models: List[ModelT]) -> List[ModelT]:
-        """Update multiple models in database.
-
-        Args:
-            models: Models to update
-
-        Returns:
-            Updated models
-
-        Raises:
-            ValueError: If any model has no ID
-        """
-        if not models:
-            return []
-
-        collection: AsyncIOMotorCollection[Dict[str, Any]] = self._get_collection(
-            type(models[0])
-        )
-
-        operations: List[
-            Union[
-                InsertOne[Dict[str, Any]],
-                UpdateOne,
-                DeleteOne,
-                ReplaceOne[Dict[str, Any]],
-                UpdateMany,
-            ]
-        ] = []
-        for model in models:
-            if not model.id:
-                continue
-
-            object_id = self._to_object_id(model.id)
-            if not object_id:
-                self.logger.warning(f"Skipping update for invalid ID: {model.id}")
-                continue
-
-            values = await model.to_dict()
-            operations.append(UpdateOne({"_id": object_id}, {"$set": values}))
-
-        if operations:
-            await collection.bulk_write(operations)  # type: ignore
-
-        return models
-
-    async def delete(self, model: ModelT) -> None:
-        """Delete model from database.
-
-        Args:
-            model: Model to delete
-
-        Raises:
-            ValueError: If model has no ID
-        """
-        if not model.id:
-            raise ValueError("Model has no ID")
-
-        collection: AsyncIOMotorCollection[JsonDict] = await self.get_collection(
-            self._get_collection_name(type(model))
-        )
-        object_id = self._to_object_id(model.id)
-        if not object_id:
-            raise ValueError(f"Invalid MongoDB ObjectId: {model.id}")
-
-        await collection.delete_one({"_id": object_id})
-
-    async def delete_many(self, models: List[ModelT]) -> None:
-        """Delete multiple models in database.
-
-        Args:
-            models: Models to delete
-
-        Raises:
-            ValueError: If any model has no ID
-        """
-        if not models:
-            return
-
-        collection: AsyncIOMotorCollection[JsonDict] = await self.get_collection(
-            self._get_collection_name(type(models[0]))
-        )
-
-        object_ids: List[ObjectId] = []
-        for model in models:
-            if not model.id:
-                raise ValueError("Model has no ID")
-
-            object_id = self._to_object_id(model.id)
-            if not object_id:
-                raise ValueError(f"Invalid MongoDB ObjectId: {model.id}")
-            object_ids.append(object_id)
-
-        await collection.delete_many({"_id": {"$in": object_ids}})
+        except Exception as e:
+            self.logger.error(f"Failed to create records: {e}")
+            raise DatabaseError(
+                message=f"Failed to create records: {e}", backend="mongodb"
+            ) from e
 
     @property
     def backend_type(self) -> str:
@@ -581,353 +457,381 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         """
         return "mongodb"
 
-    async def update_many_by_filter(
-        self, table_name: str, domain_filter: Dict[str, Any], values: Dict[str, Any]
-    ) -> int:
-        """Update multiple documents in table by filter.
+    @overload
+    async def update(self, model: ModelT) -> ModelT: ...
 
-        Args:
-            table_name: Table name
-            filter: Filter to match documents
-            values: Values to update
+    @overload
+    async def update(
+        self,
+        model: Type[ModelT],
+        filter_or_ops: Dict[str, Any],
+        values: Dict[str, Any],
+    ) -> int: ...
 
-        Returns:
-            Number of documents updated
-        """
-        collection: AsyncIOMotorCollection[JsonDict] = await self.get_collection(
-            table_name
-        )
-        result: UpdateResult = await collection.update_many(
-            domain_filter, {"$set": values}
-        )
-        return result.modified_count
+    @overload
+    async def update(
+        self,
+        model: Type[ModelT],
+        filter_or_ops: List[Dict[str, Any]],
+    ) -> Dict[str, int]: ...
 
-    async def delete_many_by_filter(
-        self, table_name: str, domain_filter: Dict[str, Any]
-    ) -> int:
-        """Delete multiple documents in table by filter.
-
-        Args:
-            table_name: Table name
-            filter: Filter to match documents
-
-        Returns:
-            Number of documents deleted
-        """
-        collection: AsyncIOMotorCollection[JsonDict] = await self.get_collection(
-            table_name
-        )
-        result: DeleteResult = await collection.delete_many(domain_filter)
-        return result.deleted_count
-
-    async def get_aggregate_query(
-        self, model_type: Type[ModelT]
-    ) -> AggregateQuery[ModelT]:
-        """Create aggregate query for model type.
-
-        Args:
-            model_type: Type of model to query
-
-        Returns:
-            Aggregate query builder instance
-        """
-        collection = await self.get_collection(self._get_collection_name(model_type))
-        return MongoAggregate[ModelT](collection, model_type)
-
-    async def get_join_query(self, model_type: Type[ModelT]) -> JoinQuery[ModelT, Any]:
-        """Create join query for model type.
-
-        Args:
-            model_type: Type of model to query
-
-        Returns:
-            Join query builder instance
-        """
-        collection = await self.get_collection(self._get_collection_name(model_type))
-        return MongoJoin[ModelT, DatabaseModel](collection, model_type)
-
-    async def get_group_query(self, model_type: Type[ModelT]) -> AggregateQuery[ModelT]:
-        """Create group query for model type.
-
-        Args:
-            model_type: Type of model to query
-
-        Returns:
-            Group query builder instance
-        """
-        collection = await self.get_collection(self._get_collection_name(model_type))
-        return MongoAggregate[ModelT](collection, model_type)
-
-    async def bulk_write(
-        self, table_name: str, operations: List[Dict[str, Dict[str, Any]]]
-    ) -> BulkWriteResult:
-        """Execute bulk write operations.
-
-        Args:
-            table_name: Table name
-            operations: List of write operations in format:
-                [{"filter": {...}, "update": {...}}]
-
-        Returns:
-            Result of bulk write operation
-        """
-        collection: AsyncIOMotorCollection[Dict[str, Any]] = await self.get_collection(
-            table_name
-        )
-
-        # Convert dict operations to UpdateOne objects
-        bulk_ops: List[UpdateOne] = [
-            UpdateOne(op["filter"], op["update"]) for op in operations
-        ]
-
-        return await collection.bulk_write(bulk_ops)  # type: ignore
-
-    async def convert_id(self, document: Dict[str, Any]) -> Dict[str, Any]:
-        """MongoDB-specific ID conversion.
-
-        This method standardizes the ID field in MongoDB documents by converting
-        ObjectId to string and ensuring consistent field naming (id vs _id).
-
-        Args:
-            document: Document to convert
-
-        Returns:
-            Document with standardized id field
-
-        Examples:
-            >>> doc = {"_id": ObjectId("507f1f77bcf86cd799439011"), "name": "John"}
-            >>> converted = await adapter.convert_id(doc)
-            >>> print(converted)
-            {"id": "507f1f77bcf86cd799439011", "name": "John"}
-        """
+    async def update(
+        self,
+        model: Union[ModelT, Type[ModelT]],
+        filter_or_ops: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
+        values: Optional[Dict[str, Any]] = None,
+    ) -> Union[ModelT, int, Dict[str, int]]:
+        """Update one or multiple records."""
         try:
-            if "_id" in document:
-                # Convert ObjectId to string and update field name
-                document["id"] = str(document.pop("_id"))
-                self.logger.debug(f"Converted _id to id: {document['id']}")
-            return document
-        except Exception as e:
-            self.logger.error(f"Failed to convert document ID: {e}", exc_info=True)
-            # Keep original document but set id to None to indicate conversion error
-            document["id"] = None
-            return document
+            # Case 1: Update single model instance
+            if isinstance(model, DatabaseModel):
+                if not model.id:
+                    raise ValueError("Model has no ID")
 
-    async def find_by_id(
-        self, collection: str, id: str, projection: Optional[List[str]] = None
-    ) -> Optional[Dict[str, Any]]:
-        """Find document by ID.
+                collection = self._get_collection(type(model))
+                object_id = self._to_object_id(model.id)
+                if not object_id:
+                    raise ValueError(f"Invalid MongoDB ObjectId: {model.id}")
 
-        Args:
-            collection: Collection name
-            id: Document ID
-            projection: Fields to include/exclude
+                values_dict = await model.to_dict()
+                await collection.update_one({"_id": object_id}, {"$set": values_dict})
+                return model
 
-        Returns:
-            Document data or None if not found
+            # Case 2: Update multiple records by filter
+            if isinstance(filter_or_ops, dict) and values:
+                collection = self._get_collection(model)
+                result = await collection.update_many(filter_or_ops, {"$set": values})
+                return result.modified_count
 
-        Raises:
-            DatabaseError: If query fails
-        """
-        try:
-            # Convert string ID to ObjectId
-            object_id = ObjectId(id)
+            # Case 3: Bulk operations
+            if isinstance(filter_or_ops, list):
+                collection = self._get_collection(model)
+                operations: List[
+                    Union[UpdateOne, InsertOne[Dict[str, Any]], DeleteOne]
+                ] = []
+                stats = {"updated": 0, "inserted": 0, "deleted": 0}
 
-            # Get collection
-            coll = await self.get_collection(collection)
+                for op in filter_or_ops:
+                    operation_type = op.get("operation")
+                    if operation_type == "update":
+                        operations.append(
+                            UpdateOne(op["filter"], {"$set": op["values"]})
+                        )
+                        stats["updated"] += 1
+                    elif operation_type == "insert":
+                        operations.append(InsertOne(op["values"]))
+                        stats["inserted"] += 1
+                    elif operation_type == "delete":
+                        operations.append(DeleteOne(op["filter"]))
+                        stats["deleted"] += 1
 
-            # Build projection
-            proj = {field: 1 for field in projection} if projection else None
+                if operations:
+                    await collection.bulk_write(operations)  # type: ignore
+                return stats
 
-            # Find document
-            doc = await coll.find_one({"_id": object_id}, projection=proj)
-
-            if doc:
-                # Convert ObjectId to string
-                doc["id"] = str(doc.pop("_id"))
-                return doc
-
-            return None
+            raise ValueError("Invalid update parameters")
 
         except Exception as e:
-            self.logger.error(f"Failed to find document by ID: {e}")
+            self.logger.error(f"Failed to update records: {e}")
             raise DatabaseError(
-                message=f"Failed to find document by ID: {e}", backend="mongodb"
+                message=f"Failed to update records: {e}", backend="mongodb"
             ) from e
 
-    async def convert_value(self, value: Any, field_type: str) -> Any:
-        """Convert between MongoDB and Python types.
+    @overload
+    async def delete(self, model: ModelT) -> None: ...
 
-        Args:
-            value: Value to convert
-            field_type: Target field type
+    @overload
+    async def delete(self, model: Type[ModelT], filter: Dict[str, Any]) -> int: ...
 
-        Returns:
-            Converted value
-
-        Raises:
-            ValueError: If conversion fails
-        """
+    async def delete(
+        self,
+        model: Union[ModelT, Type[ModelT]],
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> Optional[int]:
+        """Delete one or multiple records."""
         try:
-            if value is None:
+            # Case 1: Delete single model instance
+            if isinstance(model, DatabaseModel):
+                if not model.id:
+                    raise ValueError("Model has no ID")
+
+                collection = self._get_collection(type(model))
+                object_id = self._to_object_id(model.id)
+                if not object_id:
+                    raise ValueError(f"Invalid MongoDB ObjectId: {model.id}")
+
+                await collection.delete_one({"_id": object_id})
                 return None
 
+            # Case 2: Delete multiple records by filter
+            if filter:
+                collection = self._get_collection(model)
+                result = await collection.delete_many(filter)
+                return result.deleted_count
+
+            raise ValueError("Invalid delete parameters")
+
+        except Exception as e:
+            self.logger.error(f"Failed to delete records: {e}")
+            raise DatabaseError(
+                message=f"Failed to delete records: {e}", backend="mongodb"
+            ) from e
+
+    @overload
+    async def convert_value(
+        self,
+        value: Any,
+        field_type: Literal["string"],
+        target_type: Type[str] = str,
+    ) -> str: ...
+
+    @overload
+    async def convert_value(
+        self,
+        value: Any,
+        field_type: Literal["integer"],
+        target_type: Type[int] = int,
+    ) -> int: ...
+
+    @overload
+    async def convert_value(
+        self,
+        value: Any,
+        field_type: Literal["float"],
+        target_type: Type[float] = float,
+    ) -> float: ...
+
+    @overload
+    async def convert_value(
+        self,
+        value: Any,
+        field_type: Literal["decimal"],
+        target_type: Type[Decimal] = Decimal,
+    ) -> Decimal: ...
+
+    @overload
+    async def convert_value(
+        self,
+        value: Any,
+        field_type: Literal["boolean"],
+        target_type: Type[bool] = bool,
+    ) -> bool: ...
+
+    @overload
+    async def convert_value(
+        self,
+        value: Any,
+        field_type: Literal["datetime"],
+        target_type: Type[datetime] = datetime,
+    ) -> datetime: ...
+
+    @overload
+    async def convert_value(
+        self,
+        value: Any,
+        field_type: Literal["date"],
+        target_type: Type[date] = date,
+    ) -> date: ...
+
+    @overload
+    async def convert_value(
+        self,
+        value: Any,
+        field_type: Literal["enum"],
+        target_type: Type[Enum],
+    ) -> Enum: ...
+
+    @overload
+    async def convert_value(
+        self,
+        value: Any,
+        field_type: Literal["json"],
+        target_type: Type[Dict[str, Any]] = dict,
+    ) -> Dict[str, Any]: ...
+
+    @overload
+    async def convert_value(
+        self,
+        value: Any,
+        field_type: Literal["array"],
+        target_type: Type[List[T]] = list,
+    ) -> List[T]: ...
+
+    async def convert_value(
+        self,
+        value: Any,
+        field_type: FieldType,
+        target_type: Optional[Type[T]] = None,
+    ) -> T:
+        """Convert between MongoDB and Python types."""
+        try:
+            if value is None:
+                return None  # type: ignore
+
+            # Handle MongoDB specific types first
             if isinstance(value, ObjectId):
-                return str(value)
+                return str(value)  # type: ignore
+            if isinstance(value, Decimal128):
+                value = float(value.to_decimal())
 
-            if field_type == "datetime":
+            # Get target type if not provided
+            if target_type is None:
+                target_type = TYPE_MAPPING.get(field_type, Any)  # type: ignore
+
+            # Validate type compatibility
+            expected_type = TYPE_MAPPING.get(field_type)
+            if expected_type and not issubclass(get_origin(target_type) or target_type, expected_type):  # type: ignore
+                raise TypeError(
+                    f"Target type {target_type} is not compatible with field type {field_type}"
+                )
+
+            # Convert based on field type
+            if field_type == "string":
+                return str(value)  # type: ignore
+            elif field_type == "integer":
+                return int(value)  # type: ignore
+            elif field_type == "float":
+                return float(value)  # type: ignore
+            elif field_type == "decimal":
+                return Decimal(str(value))  # type: ignore
+            elif field_type == "boolean":
                 if isinstance(value, str):
-                    return datetime.fromisoformat(value)
-                if isinstance(value, datetime):
-                    return value
+                    return value.lower() in ("true", "1", "yes", "on")  # type: ignore
+                return bool(value)  # type: ignore
+            elif field_type == "datetime":
+                if isinstance(value, str):
+                    return datetime.fromisoformat(value)  # type: ignore
+                return value  # type: ignore
+            elif field_type == "date":
+                if isinstance(value, str):
+                    return date.fromisoformat(value)  # type: ignore
+                elif isinstance(value, datetime):
+                    return value.date()  # type: ignore
+                return value  # type: ignore
+            elif field_type == "enum" and target_type:
+                if isinstance(value, target_type):
+                    return value  # type: ignore
+                return target_type(value)  # type: ignore
+            elif field_type == "array":
+                if isinstance(value, str):
+                    value = json.loads(value)
+                if not isinstance(value, (list, tuple)):
+                    raise ValueError(f"Cannot convert {value} to array")
 
-            if field_type == "decimal":
-                if isinstance(value, Decimal128):
-                    # Convert to Python Decimal first then to float
-                    decimal_value = value.to_decimal()
-                    return float(decimal_value)
+                # Get item type from List[T]
+                item_type = get_args(target_type)[0] if get_args(target_type) else Any
+                if item_type is None or item_type == Any:
+                    return list(value)  # type: ignore
 
-            # Add more type conversions as needed
-
-            return value
+                # Convert each item using the specified type
+                converted: List[T] = [
+                    item_type(item) if item is not None else None  # type: ignore
+                    for item in value  # type: ignore
+                ]
+                return converted  # type: ignore
+            elif field_type == "json":
+                if isinstance(value, str):
+                    return json.loads(value)  # type: ignore
+                return value  # type: ignore
+            else:
+                raise ValueError(f"Unsupported field type: {field_type}")
 
         except Exception as e:
             self.logger.error(f"Failed to convert value: {e}")
             raise ValueError(f"Failed to convert value: {e}") from e
 
-    async def fetch_all(
+    @overload
+    async def read(
+        self, source: Type[ModelT], id_or_ids: str, fields: Optional[List[str]] = None
+    ) -> Optional[Dict[str, Any]]: ...
+
+    @overload
+    async def read(
+        self, source: str, id_or_ids: str, fields: List[str]
+    ) -> Optional[Dict[str, Any]]: ...
+
+    @overload
+    async def read(
         self,
-        collection: str,
-        ids: List[str],
-        fields: List[str],
-    ) -> List[Dict[str, Any]]:
-        """Fetch multiple records by IDs.
+        source: Type[ModelT],
+        id_or_ids: List[str],
+        fields: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]: ...
 
-        Args:
-            collection: Collection name
-            ids: List of record IDs to fetch
-            fields: List of fields to fetch
+    @overload
+    async def read(
+        self, source: str, id_or_ids: List[str], fields: List[str]
+    ) -> List[Dict[str, Any]]: ...
 
-        Returns:
-            List of records
-
-        Raises:
-            DatabaseError: If fetch fails
-        """
+    async def read(
+        self,
+        source: Union[Type[ModelT], str],
+        id_or_ids: Union[str, List[str]],
+        fields: Optional[List[str]] = None,
+    ) -> Union[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Read one or multiple records."""
         try:
-            # Convert string IDs to ObjectIds
-            object_ids = [ObjectId(id) for id in ids]
-
-            # Get collection
-            coll = await self.get_collection(collection)
-
-            # Build projection
-            proj = {field: 1 for field in fields} if fields else None
-
-            # Find documents
-            cursor = coll.find({"_id": {"$in": object_ids}}, projection=proj)
-            docs = await cursor.to_list(length=None)
-
-            # Convert ObjectIds to strings
-            for doc in docs:
-                doc["id"] = str(doc.pop("_id"))
-
-            return docs
-
-        except Exception as e:
-            self.logger.error(f"Failed to fetch documents by IDs: {e}")
-            raise DatabaseError(
-                message=f"Failed to fetch documents by IDs: {e}", backend="mongodb"
-            ) from e
-
-    async def create(self, model_type: Type[ModelT], values: Dict[str, Any]) -> str:
-        """Create a new record.
-
-        Args:
-            model_type: Type of model to create
-            values: Field values
-
-        Returns:
-            Created record ID
-
-        Raises:
-            DatabaseError: If creation fails
-        """
-        try:
-            # Get table name
-            table_name = self._get_collection_name(model_type)
-            if not table_name:
-                raise ValueError(
-                    f"Model {model_type.__name__} has no table or name defined"
-                )
-
-            # Insert document
-            return await self.insert_one(table_name, values)
-
-        except Exception as e:
-            self.logger.error(f"Failed to create record: {e}")
-            raise DatabaseError(
-                message=f"Failed to create record: {str(e)}",
-                backend=self.backend_type,
-            ) from e
-
-    async def read_one(
-        self, model_type: Type[ModelT], id: str, fields: Optional[List[str]] = None
-    ) -> Optional[ModelT]:
-        """Read a single record from the database.
-
-        This method retrieves a single record from the database by its ID.
-        It supports field selection to optimize data retrieval.
-
-        Args:
-            model_type: Type of model to read
-            id: Record ID to read
-            fields: Optional list of fields to read. If None, all fields are read.
-
-        Returns:
-            Optional[ModelT]: Model instance if found, None otherwise
-
-        Raises:
-            DatabaseError: If read operation fails
-            ValueError: If ID is invalid
-        """
-        try:
-            # Get collection name from model type
-            collection_name = self._get_collection_name(model_type)
-            self.logger.debug(
-                f"Reading record from collection {collection_name} with ID {id}"
+            # Get collection name
+            collection_name = (
+                self._get_collection_name(source)
+                if isinstance(source, type)
+                else source
             )
 
-            # Find document by ID
-            doc = await self.find_by_id(collection_name, id, fields)
-            if not doc:
-                self.logger.debug(
-                    f"Record with ID {id} not found in collection {collection_name}"
-                )
+            # Handle single ID
+            if isinstance(id_or_ids, str):
+                object_id = self._to_object_id(id_or_ids)
+                if not object_id:
+                    return None
+
+                collection = self._get_collection(collection_name)
+                proj = {field: 1 for field in fields} if fields else None
+                doc = await collection.find_one({"_id": object_id}, projection=proj)
+
+                if doc:
+                    return await self._convert_document(doc)
                 return None
 
-            # Create model instance
-            instance = model_type()
+            # Handle multiple IDs
+            object_ids = [self._to_object_id(id) for id in id_or_ids if id]
+            if not object_ids:
+                return []
 
-            # Ensure id is a string
-            doc_id = doc.get("id")
-            if doc_id is not None:
-                instance.id = str(doc_id)
+            collection = self._get_collection(collection_name)
+            proj = {field: 1 for field in fields} if fields else None
+            cursor = collection.find({"_id": {"$in": object_ids}}, projection=proj)
+            docs = await cursor.to_list(length=None)
 
-            # Set field values
-            for field_name, value in doc.items():
-                if field_name != "id":
-                    setattr(instance, field_name, value)
+            return [await self._convert_document(doc) for doc in docs]
 
-            self.logger.debug(
-                f"Successfully read record with ID {id} from collection {collection_name}"
-            )
-            return instance
-
-        except ValueError as e:
-            self.logger.error(f"Invalid ID format: {e}")
-            raise ValueError(f"Invalid ID format: {e}") from e
         except Exception as e:
-            self.logger.error(f"Failed to read record: {e}")
+            self.logger.error(f"Failed to read records: {e}")
             raise DatabaseError(
-                message=f"Failed to read record: {e}", backend="mongodb"
+                message=f"Failed to read records: {e}", backend="mongodb"
             ) from e
+
+    async def get_aggregate_query(
+        self, model_type: Type[ModelT]
+    ) -> AggregateQuery[ModelT]:
+        """Create aggregate query.
+
+        Args:
+            model_type: Type of model
+
+        Returns:
+            AggregateQuery: Aggregate query builder
+        """
+        collection = self._get_collection(model_type)
+        return MongoAggregate[ModelT](collection, model_type)
+
+    async def get_join_query(self, model_type: Type[ModelT]) -> JoinQuery[ModelT, Any]:
+        """Create join query.
+
+        Args:
+            model_type: Type of model
+
+        Returns:
+            JoinQuery: Join query builder
+        """
+        collection = self._get_collection(model_type)
+        return MongoJoin[ModelT, DatabaseModel](collection, model_type)

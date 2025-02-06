@@ -12,9 +12,7 @@ It handles:
 """
 
 import logging
-from abc import ABCMeta
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -23,21 +21,23 @@ from typing import (
     Dict,
     List,
     Optional,
+    Self,
     Set,
     Type,
     TypeVar,
     Union,
     cast,
+    overload,
 )
 
 from earnorm.base.database.transaction.base import Transaction
 from earnorm.fields import BaseField
-from earnorm.fields.primitive import DateTimeField, StringField
+from earnorm.types.models import ModelProtocol
 
 if TYPE_CHECKING:
     from earnorm.base.env import Environment
 
-__all__ = ["BaseModel", "ModelInfo", "MetaModel"]
+__all__ = ["BaseModel", "ModelInfo"]
 
 logger = logging.getLogger(__name__)
 
@@ -65,11 +65,11 @@ class ModelInfo:
 
 
 # Forward reference for BaseModel
-class BaseModel:
+class BaseModel(ModelProtocol):
     """Base class for all database models.
 
-    This class defines the basic structure and behavior that all models must have.
-    It includes:
+    This class implements ModelProtocol and defines the basic structure and behavior
+    that all models must have. It includes:
     - Model name and fields
     - Environment access
     - Recordset attributes
@@ -118,7 +118,6 @@ class BaseModel:
         "_env",  # Environment instance
         "_name",  # Model name
         "_ids",  # Record IDs
-        "_prefetch_ids",  # IDs for prefetching
     )
 
     id: str
@@ -157,16 +156,63 @@ class BaseModel:
         ...
 
     @classmethod
-    async def create(cls, values: Dict[str, Any]) -> "BaseModel":
-        """Create a new record.
+    @overload
+    async def create(cls) -> Self: ...
+
+    @classmethod
+    @overload
+    async def create(cls, values: Dict[str, Any]) -> Self: ...
+
+    @classmethod
+    @overload
+    async def create(cls, values: List[Dict[str, Any]]) -> List[Self]: ...
+
+    @classmethod
+    async def create(
+        cls, values: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None
+    ) -> Union[Self, List[Self]]:
+        """Create one or multiple records.
 
         Args:
-            values: Field values
+            values: Field values to create record(s) with. Can be:
+                - None: Creates record with default values
+                - Dict: Creates single record with provided values
+                - List[Dict]: Creates multiple records with provided values
 
         Returns:
-            Created record
+            - Single record if values is None or Dict
+            - List of records if values is List[Dict]
+
+        Examples:
+            >>> # Create single record with values
+            >>> user = await User.create({
+            ...     "name": "John Doe",
+            ...     "email": "john@example.com",
+            ...     "age": 25,
+            ...     "status": "active",
+            ... })
+            >>> print(user.name)  # John Doe
+
+            >>> # Create multiple records
+            >>> users = await User.create([
+            ...     {"name": "John", "email": "john@example.com"},
+            ...     {"name": "Jane", "email": "jane@example.com"}
+            ... ])
+            >>> print(len(users))  # 2
+
+            >>> # Create with defaults
+            >>> user = await User.create()
+            >>> print(user.name)  # None
         """
-        ...
+        if values is None:
+            values = {}
+
+        if isinstance(values, list):
+            # Create multiple records
+            return await super().create_multi(values)  # type: ignore
+        else:
+            # Create single record
+            return await super().create(values)  # type: ignore
 
     async def write(self, values: Dict[str, Any]) -> "BaseModel":
         """Update record with values.
@@ -197,359 +243,15 @@ class BaseModel:
         """
         ...
 
-    async def _prefetch_records(self, fields: List[str]) -> None:
-        """Prefetch records efficiently using cache.
-
-        This method loads the specified fields for all records in the current recordset
-        in a single batch operation. It uses cache when available and loads from
-        database only for uncached values.
-
-        Args:
-            fields: List of field names to prefetch
-        """
-        ...
-
-    async def optimize_memory(self, max_records: int = 1000) -> None:
-        """Optimize memory usage by clearing cache if needed.
-
-        This method helps manage memory usage by clearing cache for recordsets
-        that exceed a certain size threshold. It is useful for large recordsets
-        where keeping all records in cache may consume too much memory.
-
-        Args:
-            max_records: Maximum number of records to keep in cache
-        """
-        ...
-
-    def get_cache_stats(self) -> Dict[str, Any]:
-        """Get cache statistics for current recordset.
-
-        This method returns statistics about the cache usage for the current recordset,
-        including:
-        - Total number of records
-        - Number of cached fields per record
-        - Total memory usage estimate
-
-        Returns:
-            Dict containing cache stats:
-            - total_records: Total number of records in recordset
-            - cached_fields: Dict mapping record ID to number of cached fields
-            - memory_usage: Rough estimate of memory usage in bytes
-        """
-        ...
-
-    def mark_for_prefetch(self, fields: List[str]) -> None:
-        """Mark fields for prefetching.
-
-        This method marks fields to be prefetched later when execute_prefetch is called.
-        It is useful when you want to batch multiple prefetch operations together
-        for better performance.
-
-        Args:
-            fields: List of field names to prefetch
-        """
-        ...
-
-    async def execute_prefetch(self) -> None:
-        """Execute all pending prefetch operations.
-
-        This method executes all prefetch operations that were previously marked
-        using mark_for_prefetch. It batches multiple prefetch operations together
-        for better performance.
-        """
-        ...
-
-
-class MetaModel(ABCMeta):
-    """Metaclass for all database models.
-
-    This metaclass handles:
-    - Field registration and validation
-    - Model registration with environment
-    - Slot creation
-    - Name generation
-    - Default fields injection
-    - Model registry management
-    - Inheritance tracking
-
-    Examples:
-        >>> class User(BaseModel):
-        ...     _name = 'res.users'
-        ...     name = StringField(required=True)
-        ...     email = EmailField(unique=True)
-        ...
-        >>> user = User(name="John")
-        >>> user.id         # Default field
-        >>> user.created_at # Default field
-        >>> user.updated_at # Default field
-        >>> User.__fields__ # Access all fields through class
-        >>> user.__fields__ # Access all fields through instance
-    """
-
-    # Global registry for all models
-    _registry: Dict[str, Type["BaseModel"]] = {}
-
-    # Inheritance graph (parent -> children)
-    _inherit_graph: Dict[str, Set[str]] = {}
-
-    # Define default fields that every model should have
-    DEFAULT_FIELDS: Dict[str, BaseField[Any]] = {
-        "id": StringField(
-            required=True,
-            readonly=True,
-            backend_options={"mongodb": {"field_name": "_id"}},  # Map to MongoDB's _id
-        ),
-        "created_at": DateTimeField(
-            required=True, readonly=True, default=lambda: datetime.now(UTC)
-        ),
-        "updated_at": DateTimeField(
-            required=True, readonly=True, default=lambda: datetime.now(UTC)
-        ),
-    }
-
-    # Class variables that should not be in slots
-    CLASS_VARIABLES = {
-        "_name",
-        "_store",
-        "_description",
-        "_table",
-        "_sequence",
-        "_skip_default_fields",
-        "_abstract",
-        "_fields",
-        "fields",
-    }
-
-    def __new__(
-        mcs, name: str, bases: tuple[Type[Any], ...], attrs: Dict[str, Any]
-    ) -> Type[BaseModel]:
-        """Create new model class.
-
-        Args:
-            name: Class name
-            bases: Base classes
-            attrs: Class attributes
-
-        Returns:
-            New model class
-
-        Raises:
-            ValueError: If trying to override default field or invalid model name
-        """
-        # Create slots
-        slots: Set[str] = set()
-        for base in bases:
-            slots.update(getattr(base, "__slots__", ()))
-
-        # Collect fields from parent classes
-        inherited_fields: Dict[str, BaseField[Any]] = {}
-        for base in bases:
-            if hasattr(base, "fields"):
-                inherited_fields.update(getattr(base, "fields", {}))
-
-        # Add default fields first (unless _skip_default_fields is True)
-        fields: Dict[str, BaseField[Any]] = {}
-        if not attrs.get("_skip_default_fields", False):
-            for field_name, field in mcs.DEFAULT_FIELDS.items():
-                # Create a new instance of the field for each model
-                field_dict = field.__dict__.copy()
-                field_dict.pop(
-                    "validators", None
-                )  # Remove validators to avoid duplication
-                new_field = field.__class__(**field_dict)
-                fields[field_name] = new_field
-                new_field.name = field_name
-                # Don't add class variables to slots
-                if field_name not in mcs.CLASS_VARIABLES:
-                    slots.add(f"_{field_name}")
-
-        # Add user-defined fields
-        for key, value in attrs.items():
-            if isinstance(value, BaseField):
-                if key in fields and not attrs.get("_skip_default_fields", False):
-                    raise ValueError(f"Cannot override default field '{key}'")
-                # Don't add class variables to slots
-                if key not in mcs.CLASS_VARIABLES:
-                    slots.add(f"_{key}")
-                fields[key] = value
-                value.name = key
-
-        # Use slots from BaseModel
-        if "__slots__" in attrs:
-            slots.update(attrs["__slots__"])
-        attrs["__slots__"] = tuple(slots)
-
-        # Combine inherited and current fields
-        all_fields = {**inherited_fields, **fields}
-        attrs["fields"] = all_fields
-        attrs["_fields"] = all_fields
-
-        # Handle model name before creating class
-        model_name = attrs.get("_name")
-        if model_name is None:
-            model_name = name.lower()
-            attrs["_name"] = model_name
-
-        # Remove class variables from attrs to avoid them being added to slots
-        class_vars: Dict[str, Any] = {}
-        for var in mcs.CLASS_VARIABLES:
-            if var in attrs:
-                class_vars[var] = attrs.pop(var)
-
-        # Create new class
-        cls = super().__new__(mcs, name, bases, attrs)
-
-        # Restore class variables after class creation
-        for var_name, var_value in class_vars.items():
-            setattr(cls, var_name, var_value)
-
-        # Validate model name
-        mcs.validate_model_name(model_name)
-
-        # Register model
-        mcs._registry[model_name] = cls
-
-        # Update inheritance graph
-        for base in bases:
-            if hasattr(base, "_name"):
-                parent_name = base._name
-                if parent_name not in mcs._inherit_graph:
-                    mcs._inherit_graph[parent_name] = set()
-                mcs._inherit_graph[parent_name].add(model_name)
-
-        return cast(Type[BaseModel], cls)
-
-    @classmethod
-    def validate_model_name(cls, name: str) -> None:
-        """Validate model name format.
-
-        The model name can be in two formats:
-        1. Simple format: just the model name (e.g. "users")
-        2. Full format: module.model (e.g. "res.users")
-
-        Args:
-            name: Model name to validate
-
-        Raises:
-            ValueError: If model name is invalid
-        """
-        if not name:
-            raise ValueError("Model name cannot be empty")
-
-        # Allow both simple format (users) and full format (res.users)
-        if "." in name:
-            module, model = name.split(".")
-            if not module or not model:
-                raise ValueError(
-                    "Invalid model name format. Must be 'module.model' or 'model'"
-                )
-        else:
-            # Simple format validation
-            if not name.replace("_", "").isalnum():
-                raise ValueError(
-                    "Model name can only contain letters, numbers and underscores"
-                )
-
-    @classmethod
-    def get_model(cls, name: str) -> Type["BaseModel"]:
-        """Get model by name.
-
-        Args:
-            name: Model name
-
-        Returns:
-            Model class
-
-        Raises:
-            ValueError: If model not found
-        """
-        try:
-            return cls._registry[name]
-        except KeyError as exc:
-            raise ValueError(f"Model {name} not found in registry") from exc
-
-    @classmethod
-    def get_inherited_models(cls, model_name: str) -> Set[str]:
-        """Get all models that inherit from given model.
-
-        Args:
-            model_name: Parent model name
-
-        Returns:
-            Set of child model names
-        """
-        return cls._inherit_graph.get(model_name, set())
-
-    @classmethod
-    def get_parent_models(cls, model_name: str) -> Set[str]:
-        """Get all parent models of given model.
-
-        Args:
-            model_name: Child model name
-
-        Returns:
-            Set of parent model names
-        """
-        model = cls._registry[model_name]
-        parents: Set[str] = set()
-        for base in model.__bases__:
-            if hasattr(base, "_name"):
-                parent_name = getattr(base, "_name")
-                parents.add(parent_name)
-        return parents
-
-    @classmethod
-    def list_models(cls) -> List[str]:
-        """List all registered models.
-
-        Returns:
-            List of model names
-        """
-        return list(cls._registry.keys())
-
-    @classmethod
-    def list_concrete_models(cls) -> List[str]:
-        """List only concrete models.
-
-        Returns:
-            List of concrete model names
-        """
-        return [
-            name
-            for name, model in cls._registry.items()
-            if not getattr(model, "_abstract", False)
-        ]
-
-    @classmethod
-    def get_model_info(cls, name: str) -> ModelInfo:
-        """Get detailed info about a model.
-
-        Args:
-            name: Model name
-
-        Returns:
-            ModelInfo instance
-
-        Raises:
-            ValueError: If model not found
-        """
-        model = cls.get_model(name)
-        return ModelInfo(
-            name=name,
-            model_class=model,
-            is_abstract=getattr(model, "_abstract", False),
-            parent_models=cls.get_parent_models(name),
-            fields=getattr(model, "fields", {}),
-        )
-
 
 class ModelMeta(type):
     """Metaclass for model classes.
 
     This metaclass:
-    1. Sets up _fields dictionary from class attributes
-    2. Injects environment from container
-    3. Validates model configuration
+    1. Sets up __fields__ dictionary from class attributes
+    2. Injects default fields (id, created_at, updated_at)
+    3. Injects environment from container
+    4. Validates model configuration
 
     Examples:
         >>> class User(metaclass=ModelMeta):
@@ -579,9 +281,45 @@ class ModelMeta(type):
         for key, value in list(attrs.items()):
             if isinstance(value, BaseField):
                 fields_dict[key] = value
+                value.name = key  # Set field name
 
-        # Set _fields class variable
-        attrs["_fields"] = fields_dict
+        # Add default fields if not skipped
+        skip_defaults = attrs.get("_skip_default_fields", False)
+        if not skip_defaults:
+            from earnorm.fields import DatetimeField, StringField
+
+            # Always add id field first
+            fields_dict["id"] = StringField(
+                required=True, readonly=True, help="Unique identifier for the record"
+            )
+
+            # Add other default fields
+            fields_dict.update(
+                {
+                    "created_at": DatetimeField(
+                        required=True,
+                        readonly=True,
+                        help="Record creation timestamp",
+                        auto_now_add=True,
+                    ),
+                    "updated_at": DatetimeField(
+                        required=True, help="Last update timestamp", auto_now=True
+                    ),
+                }
+            )
+        else:
+            # Even if defaults are skipped, ensure id field exists
+            from earnorm.fields import StringField
+
+            if "id" not in fields_dict:
+                fields_dict["id"] = StringField(
+                    required=True,
+                    readonly=True,
+                    help="Unique identifier for the record",
+                )
+
+        # Set __fields__ class variable
+        attrs["__fields__"] = fields_dict
 
         # Create class
         cls = cast(Type[object], super().__new__(mcs, name, bases, attrs))
@@ -594,9 +332,7 @@ class ModelMeta(type):
             if env:
                 setattr(cls, "_env", env)
         except Exception as e:
-            import logging
-
-            logging.error(f"Failed to inject environment: {e}")
+            logger.error(f"Failed to inject environment: {e}")
 
         return cls
 
@@ -619,8 +355,6 @@ class ModelMeta(type):
                 if env:
                     kwargs["env"] = env
             except Exception as e:
-                import logging
-
-                logging.error(f"Failed to inject environment: {e}")
+                logger.error(f"Failed to inject environment: {e}")
 
         return super().__call__(*args, **kwargs)

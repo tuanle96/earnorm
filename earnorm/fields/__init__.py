@@ -72,9 +72,9 @@ from earnorm.fields.composite import (
 )
 
 # Primitive fields
+from earnorm.fields.primitive import BooleanField
+from earnorm.fields.primitive import DateTimeField as DatetimeField
 from earnorm.fields.primitive import (
-    BooleanField,
-    DateTimeField,
     DecimalField,
     EnumField,
     FileField,
@@ -88,9 +88,6 @@ from earnorm.fields.primitive import (
 
 # Relation fields
 from earnorm.fields.relation import ManyToManyField, ManyToOneField, OneToManyField
-
-# Types
-from earnorm.types.fields import FieldProtocol, RelationProtocol
 
 # Validators
 from earnorm.fields.validators.base import (
@@ -109,6 +106,9 @@ from earnorm.fields.validators.common import (
     URLValidator,
 )
 
+# Types
+from earnorm.types.fields import FieldProtocol, RelationProtocol
+
 __all__ = [
     # Base classes
     "BaseField",
@@ -119,7 +119,7 @@ __all__ = [
     "IntegerField",
     "FloatField",
     "BooleanField",
-    "DateTimeField",
+    "DatetimeField",
     "DecimalField",
     "UUIDField",
     "JSONField",

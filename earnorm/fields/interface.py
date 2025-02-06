@@ -28,7 +28,6 @@ from typing import (
     runtime_checkable,
 )
 
-from earnorm.fields.adapters.base import DatabaseAdapter
 from earnorm.types.fields import DatabaseValue
 
 # Type for field values (None or actual value)
@@ -39,6 +38,15 @@ BackendOptions = Dict[str, Any]
 
 # Type variable for field types
 T = TypeVar("T")
+
+
+class EnvironmentProtocol(Protocol):
+    """Protocol for environment interface."""
+
+    @property
+    def adapter(self) -> Any:
+        """Get database adapter."""
+        ...
 
 
 @runtime_checkable
@@ -63,7 +71,7 @@ class FieldProtocol(Protocol[T]):
     compute: Optional[str]
     depends: list[str]
     backend_options: Dict[str, Dict[str, Any]]
-    adapters: Dict[str, DatabaseAdapter[T]]
+    env: EnvironmentProtocol
 
     def setup(self, name: str, model_name: str) -> None:
         """Setup field.
@@ -108,7 +116,7 @@ class FieldProtocol(Protocol[T]):
     async def to_db(self, value: Optional[T], backend: str) -> DatabaseValue:
         """Convert Python value to database format.
 
-        This method uses the appropriate database adapter to convert the value.
+        This method uses the environment's database adapter to convert the value.
         Each backend may have different format requirements.
 
         Args:
@@ -119,16 +127,15 @@ class FieldProtocol(Protocol[T]):
             Database value
 
         Raises:
-            ValueError: If backend is not supported
+            DatabaseError: If conversion fails
+            ValueError: If field has no environment
         """
-        if backend not in self.adapters:
-            raise ValueError(f"Unsupported backend: {backend}")
-        return await self.adapters[backend].to_db_value(value)
+        ...
 
     async def from_db(self, value: DatabaseValue, backend: str) -> Optional[T]:
         """Convert database value to Python format.
 
-        This method uses the appropriate database adapter to convert the value.
+        This method uses the environment's database adapter to convert the value.
         Each backend may store values in different format.
 
         Args:
@@ -139,11 +146,10 @@ class FieldProtocol(Protocol[T]):
             Python value
 
         Raises:
-            ValueError: If backend is not supported
+            DatabaseError: If conversion fails
+            ValueError: If field has no environment
         """
-        if backend not in self.adapters:
-            raise ValueError(f"Unsupported backend: {backend}")
-        return await self.adapters[backend].from_db_value(value)
+        ...
 
     def get_backend_options(self, backend: str) -> BackendOptions:
         """Get database-specific options.
@@ -160,27 +166,8 @@ class FieldProtocol(Protocol[T]):
 
         Returns:
             Backend-specific options
-
-        Raises:
-            ValueError: If backend is not supported
         """
-        if backend not in self.adapters:
-            raise ValueError(f"Unsupported backend: {backend}")
-        return {
-            "type": self.adapters[backend].get_field_type(),
-            **self.adapters[backend].get_field_options(),
-        }
-
-    def register_adapter(self, adapter: DatabaseAdapter[T]) -> None:
-        """Register database adapter.
-
-        This method registers a new database adapter for a specific backend.
-        It allows adding support for new database types.
-
-        Args:
-            adapter: Database adapter instance
-        """
-        self.adapters[adapter.backend_name] = adapter
+        ...
 
     def setup_triggers(self) -> None:
         """Setup compute triggers.

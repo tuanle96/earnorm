@@ -8,7 +8,18 @@ This module provides decorators to define method behaviors:
 
 import functools
 import logging
-from typing import TYPE_CHECKING, Any, Callable, Type, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    ParamSpec,
+    Type,
+    TypeVar,
+    cast,
+    overload,
+)
 
 if TYPE_CHECKING:
     from earnorm.base.model.base import BaseModel
@@ -16,7 +27,25 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+ModelT = TypeVar("ModelT", bound="BaseModel")
 F = TypeVar("F", bound=Callable[..., Any])
+P = ParamSpec("P")
+
+
+@overload
+def model(
+    method: Callable[[Type[ModelT]], Awaitable[ModelT]]
+) -> Callable[[Type[ModelT]], Awaitable[ModelT]]: ...
+
+
+@overload
+def model(
+    method: Callable[[Type[ModelT], Dict[str, Any]], Awaitable[ModelT]]
+) -> Callable[[Type[ModelT], Dict[str, Any]], Awaitable[ModelT]]: ...
+
+
+@overload
+def model(method: F) -> F: ...
 
 
 def model(method: F) -> F:
@@ -36,10 +65,11 @@ def model(method: F) -> F:
     Examples:
         >>> class User(BaseModel):
         ...     @api.model
-        ...     async def create(cls, vals):
-        ...         return await super().create(vals)
+        ...     async def find_by_email(cls, email: str) -> Optional[Self]:
+        ...         return await cls.search([("email", "=", email)]).first()
     """
 
+    @functools.wraps(method)
     async def wrapper(cls: Type["BaseModel"], *args: Any, **kwargs: Any) -> Any:
         try:
             # Log method call
@@ -47,19 +77,8 @@ def model(method: F) -> F:
                 f"Calling {cls.__name__}.{method.__name__} with args={args}, kwargs={kwargs}"
             )
 
-            # Execute method with cls and args
-            if method.__name__ == "create":
-                # Special handling for create method
-                if len(args) == 1 and isinstance(args[0], dict):
-                    result = await method(cls, vals=args[0])
-                elif "vals" in kwargs:
-                    result = await method(cls, vals=kwargs["vals"])
-                else:
-                    raise TypeError(
-                        f"{cls.__name__}.create() missing required argument 'vals'"
-                    )
-            else:
-                result = await method(cls, *args, **kwargs)
+            # Execute method with all args and kwargs
+            result = await method(cls, *args, **kwargs)
 
             # Log result
             logger.debug(f"Method {cls.__name__}.{method.__name__} returned: {result}")
@@ -67,24 +86,20 @@ def model(method: F) -> F:
             return result
 
         except Exception as e:
-            # Log error
+            # Log error with more details
             logger.error(
                 f"Error in {cls.__name__}.{method.__name__}: {str(e)}",
                 exc_info=True,
+                extra={
+                    "args": args,
+                    "kwargs": kwargs,
+                    "method": method.__name__,
+                    "class": cls.__name__,
+                },
             )
             raise
 
-    # Create a new classmethod with the wrapper
-    wrapped = classmethod(wrapper)
-
-    # Copy metadata from original method
-    for attr in functools.WRAPPER_ASSIGNMENTS:
-        try:
-            setattr(wrapped, attr, getattr(method, attr))
-        except AttributeError:
-            pass
-
-    return cast(F, wrapped)
+    return cast(F, classmethod(wrapper))
 
 
 def multi(method: F) -> F:

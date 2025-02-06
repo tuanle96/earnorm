@@ -7,10 +7,10 @@ from earnorm.base.database.adapters.mongo import MongoAdapter
 from earnorm.base.env import Environment
 from earnorm.config import SystemConfig
 from earnorm.di import container
-from earnorm.pool import PoolRegistry, create_mongo_pool, create_redis_pool
+from earnorm.pool import PoolRegistry, create_mongo_pool
 from earnorm.pool.protocols import AsyncPoolProtocol
-from earnorm.pool.types import MongoCollectionType, MongoDBType, RedisType
-from earnorm.types import DatabaseModel
+from earnorm.pool.types import MongoCollectionType, MongoDBType
+from earnorm.types.models import ModelProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -101,53 +101,14 @@ async def register_database_services(config: SystemConfig) -> None:
 
     # Register MongoDB adapter if not exists
     if not container.has("mongodb_adapter"):
-        adapter = MongoAdapter[DatabaseModel]()
+        adapter = MongoAdapter[
+            ModelProtocol
+        ]()  # Use ModelProtocol instead of DatabaseModel
         await adapter.init()
         container.register("mongodb_adapter", adapter)
         # Also register as default database adapter
         container.register("database_adapter", adapter)
         logger.info("MongoDB adapter registered successfully")
-
-
-async def register_pool_services(config: SystemConfig) -> None:
-    """Register connection pool services.
-
-    This includes:
-    - Redis pool for event system
-
-    Args:
-        config: System configuration instance
-    """
-    # Skip if Redis host is not configured
-    if not config.redis_host:
-        logger.warning("Redis host not configured, skipping Redis pool registration")
-        return
-
-    # Create and register Redis pool if not exists
-    if not container.has("redis_pool"):
-        logger.info(
-            "Creating Redis pool - host: %s, port: %d, db: %d",
-            config.redis_host,
-            config.redis_port,
-            config.redis_db,
-        )
-        redis_pool = cast(
-            AsyncPoolProtocol[RedisType, None],
-            await create_redis_pool(
-                host=config.redis_host,
-                port=config.redis_port,
-                db=config.redis_db,
-                min_size=config.redis_min_pool_size,
-                max_size=config.redis_max_pool_size,
-                socket_timeout=config.redis_pool_timeout,
-                socket_connect_timeout=config.redis_pool_timeout,
-                socket_keepalive=True,
-            ),
-        )
-        await redis_pool.init()
-        PoolRegistry.register("redis", redis_pool)
-        container.register("redis_pool", redis_pool)
-        logger.info("Redis pool registered successfully")
 
 
 async def register_all(config: SystemConfig) -> None:
@@ -166,10 +127,6 @@ async def register_all(config: SystemConfig) -> None:
     # 1. Core DI services
     logger.info("Registering core services")
     await register_core_services()
-
-    # 2. Pool services - Redis pool must be registered first
-    logger.info("Registering pool services")
-    await register_pool_services(config)
 
     # 4. Database services - Must be registered before environment
     logger.info("Registering database services")

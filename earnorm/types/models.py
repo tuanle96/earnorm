@@ -90,6 +90,15 @@ class ModelProtocol(Protocol):
 
         Returns:
             Created record
+
+        Examples:
+            >>> user = await User.create({
+            ...     "name": "John Doe",
+            ...     "email": "john@example.com",
+            ...     "age": 25,
+            ...     "status": "active",
+            ... })
+            >>> print(user.name)  # John Doe
         """
         ...
 
@@ -119,68 +128,6 @@ class ModelProtocol(Protocol):
 
         Returns:
             Transaction context manager
-        """
-        ...
-
-    async def _prefetch_records(self, fields: List[str]) -> None:
-        """Prefetch records efficiently using cache.
-
-        This method loads the specified fields for all records in the current recordset
-        in a single batch operation. It uses cache when available and loads from
-        database only for uncached values.
-
-        Args:
-            fields: List of field names to prefetch
-        """
-        ...
-
-    async def optimize_memory(self, max_records: int = 1000) -> None:
-        """Optimize memory usage by clearing cache if needed.
-
-        This method helps manage memory usage by clearing cache for recordsets
-        that exceed a certain size threshold. It is useful for large recordsets
-        where keeping all records in cache may consume too much memory.
-
-        Args:
-            max_records: Maximum number of records to keep in cache
-        """
-        ...
-
-    def get_cache_stats(self) -> Dict[str, Any]:
-        """Get cache statistics for current recordset.
-
-        This method returns statistics about the cache usage for the current recordset,
-        including:
-        - Total number of records
-        - Number of cached fields per record
-        - Total memory usage estimate
-
-        Returns:
-            Dict containing cache stats:
-            - total_records: Total number of records in recordset
-            - cached_fields: Dict mapping record ID to number of cached fields
-            - memory_usage: Rough estimate of memory usage in bytes
-        """
-        ...
-
-    def mark_for_prefetch(self, fields: List[str]) -> None:
-        """Mark fields for prefetching.
-
-        This method marks fields to be prefetched later when execute_prefetch is called.
-        It is useful when you want to batch multiple prefetch operations together
-        for better performance.
-
-        Args:
-            fields: List of field names to prefetch
-        """
-        ...
-
-    async def execute_prefetch(self) -> None:
-        """Execute all pending prefetch operations.
-
-        This method executes all prefetch operations that were previously marked
-        using mark_for_prefetch. It batches multiple prefetch operations together
-        for better performance.
         """
         ...
 

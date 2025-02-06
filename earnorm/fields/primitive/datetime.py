@@ -29,8 +29,8 @@ from typing import Any, Dict, Final, List, Optional, Union
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
-from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 from earnorm.fields.validators.base import RangeValidator, TypeValidator, Validator
+from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 
 # Constants
 DEFAULT_AUTO_NOW: Final[bool] = False
@@ -459,12 +459,20 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
         Returns:
             Converted datetime value or None
         """
+        # Handle auto_now and auto_now_add
+        now = datetime.now(timezone.utc if self.use_tz else None)
+
+        if value is None:
+            # For new records (create)
+            if self.auto_now_add or self.auto_now:
+                value = now
+        else:
+            # For existing records (update)
+            if self.auto_now:
+                value = now
+
         if value is None:
             return None
-
-        # Handle auto-now
-        if self.auto_now:
-            value = datetime.now(timezone.utc if self.use_tz else None)
 
         # Handle timezone
         if self.use_tz:

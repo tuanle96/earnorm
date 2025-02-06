@@ -147,14 +147,19 @@ class RelationComparisonMixin(Protocol):
         return ComparisonOperator(self.name, "all", (field, operator, value))
 
 
-class ModelProtocol(Protocol[M_co]):
-    """Protocol for model interface."""
+class RelatedModelProtocol(Protocol[M_co]):
+    """Protocol for related model interface.
+
+    This protocol defines the minimal interface required for related models in relationships.
+    It is a simplified version of ModelProtocol that only includes the essential
+    methods and attributes needed for relationship handling.
+    """
 
     env: Any  # Type will be Environment
     id: str
 
     @classmethod
-    async def get(cls, env: Any, _id: str) -> "ModelProtocol[M_co]":
+    async def get(cls, env: Any, _id: str) -> "RelatedModelProtocol[M_co]":
         """Get model by ID."""
         ...
 
