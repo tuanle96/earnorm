@@ -46,3 +46,4 @@ ENV/
 *.log
 
 .ruff_cache/
+node_modules/
