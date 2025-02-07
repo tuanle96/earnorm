@@ -1,20 +1,57 @@
 """Aggregate operation implementation.
 
-This module provides base implementation for aggregate operations.
-All database-specific aggregate implementations should inherit from this class.
+This module provides the aggregate operation class for performing aggregation queries.
+It supports common aggregation operations like:
+
+- Group by fields
+- Aggregation functions (count, sum, avg, min, max)
+- Having clauses
+- Pipeline stages
+- Custom aggregations
 
 Examples:
-    >>> class MongoAggregate(BaseAggregate[User]):
-    ...     def to_pipeline(self) -> list[JsonDict]:
-    ...         pipeline = []
-    ...         if self._group_fields:
-    ...             pipeline.append({
-    ...                 "$group": {
-    ...                     "_id": {field: f"${field}" for field in self._group_fields},
-    ...                     **self._aggregates
-    ...                 }
-    ...             })
-    ...         return pipeline
+    >>> from earnorm.base.database.query.core.operations import AggregateOperation
+    >>> from earnorm.types import DatabaseModel
+
+    >>> class Order(DatabaseModel):
+    ...     status: str
+    ...     amount: float
+    ...     category: str
+    ...     created_at: datetime
+
+    >>> # Create aggregate operation
+    >>> agg = AggregateOperation(Order)
+
+    >>> # Group by status and category
+    >>> stats = await agg.group_by(
+    ...     "status", "category"
+    ... ).count(
+    ...     "total_orders"
+    ... ).sum(
+    ...     "amount", "total_amount"
+    ... ).avg(
+    ...     "amount", "avg_amount"
+    ... ).having(
+    ...     total_orders__gt=10
+    ... ).execute()
+
+    >>> # Time-based aggregation
+    >>> monthly = await agg.group_by(
+    ...     year="$year(created_at)",
+    ...     month="$month(created_at)"
+    ... ).sum(
+    ...     "amount", "monthly_total"
+    ... ).execute()
+
+    >>> # Custom pipeline stages
+    >>> result = await agg.add_stage({
+    ...     "$match": {"status": "completed"}
+    ... }).add_stage({
+    ...     "$group": {
+    ...         "_id": "$category",
+    ...         "total": {"$sum": "$amount"}
+    ...     }
+    ... }).execute()
 """
 
 from typing import Any, Dict, List, Optional, TypeVar, Union

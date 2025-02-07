@@ -1,13 +1,70 @@
 """System configuration model.
 
 This module provides the SystemConfig model for storing system-wide configuration.
+It implements validation rules and loading from different sources.
+
+Key Features:
+    1. Configuration Sources
+       - Environment variables (.env)
+       - YAML files
+       - Default values
+       - Required fields
+
+    2. Validation Rules
+       - Type checking
+       - Value constraints
+       - Cross-field validation
+       - Custom validators
+
+    3. Configuration Options
+       - Database settings
+       - Redis settings
+       - Cache settings
+       - Event system settings
 
 Examples:
+    >>> from earnorm.config.model import SystemConfig
     >>> from earnorm.di import container
-    >>> config = container.get("config")
-    >>> print(config.mongodb_uri)
-    >>> config.redis_host = "localhost"
-    >>> config.save_yaml("config.yaml")
+
+    >>> # Load from environment
+    >>> config = SystemConfig.load_env(".env")
+    >>> print(config.database_uri)
+    mongodb://localhost:27017
+
+    >>> # Load from YAML
+    >>> config = SystemConfig.load_yaml("config.yaml")
+    >>> print(config.redis_host)
+    localhost
+
+    >>> # Save to YAML
+    >>> config.save_yaml("new_config.yaml")
+
+    >>> # Register in container
+    >>> container.register("config", config)
+
+Implementation Notes:
+    1. Loading Process
+       - Environment variables take precedence
+       - Fallback to defaults
+       - Validation on load
+       - Error handling
+
+    2. Validation Rules
+       - Database URI format
+       - Pool size constraints
+       - Port ranges
+       - Required fields
+
+    3. Security
+       - Sensitive data handling
+       - Credential validation
+       - SSL configuration
+       - Access control
+
+See Also:
+    - earnorm.config.data: Configuration data structures
+    - earnorm.di: Dependency injection system
+    - earnorm.database: Database adapters
 """
 
 import logging
@@ -32,16 +89,87 @@ class SystemConfig(BaseModel):
     """System configuration model.
 
     This model represents system-wide configuration with validation rules.
-    Config can be loaded from environment variables or YAML files.
+    It provides methods for loading from environment variables and YAML files.
+
+    Key Features:
+        1. Configuration Management
+           - Load from environment
+           - Load from YAML
+           - Save to YAML
+           - Validation rules
+
+        2. Database Configuration
+           - Connection settings
+           - Pool management
+           - SSL/TLS options
+           - Authentication
+
+        3. Redis Configuration
+           - Server settings
+           - Pool management
+           - Database selection
+           - Authentication
+
+        4. Cache Configuration
+           - Backend selection
+           - TTL settings
+           - Prefix management
+           - Pool settings
+
+        5. Event Configuration
+           - Backend selection
+           - Queue settings
+           - Prefix management
+           - Handler configuration
 
     Examples:
-        >>> # Load from .env file
+        >>> # Load from environment
         >>> config = SystemConfig.load_env(".env")
         >>> print(config.database_uri)
+        mongodb://localhost:27017
 
-        >>> # Load from YAML file
+        >>> # Load from YAML
         >>> config = SystemConfig.load_yaml("config.yaml")
         >>> print(config.redis_host)
+        localhost
+
+        >>> # Save configuration
+        >>> config.save_yaml("config.yaml")
+
+    Attributes:
+        version (str): Configuration version
+        created_at (str): Creation timestamp
+        updated_at (str): Last update timestamp
+
+        # Database
+        database_backend (str): Database type (mongodb, mysql, postgres)
+        database_uri (str): Database connection URI
+        database_name (str): Database name
+        database_username (str): Database username
+        database_password (str): Database password
+        database_options (dict): Additional database options
+
+        # Pool Settings
+        min_pool_size (int): Minimum connections
+        max_pool_size (int): Maximum connections
+
+        # Redis
+        redis_host (str): Redis server host
+        redis_port (int): Redis server port
+        redis_db (int): Redis database number
+        redis_password (str): Redis password
+        redis_min_pool_size (int): Minimum Redis connections
+        redis_max_pool_size (int): Maximum Redis connections
+        redis_pool_timeout (int): Redis connection timeout
+
+        # Cache
+        cache_backend (str): Cache backend type
+        cache_prefix (str): Cache key prefix
+        cache_ttl (int): Default TTL in seconds
+
+        # Events
+        event_backend (str): Event backend type
+        event_prefix (str): Event key prefix
     """
 
     # Version and timestamps

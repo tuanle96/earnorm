@@ -1,20 +1,30 @@
 """Base operation implementation.
 
-This module provides base implementation for all query operations.
-All operation-specific implementations should inherit from this class.
+This module provides the base operation class that all other operation types inherit from.
+It implements common functionality for building and executing database operations.
+
+The operation system supports:
+- Operation chaining
+- Result processing
+- Type safety
+- Custom operation handlers
 
 Examples:
-    >>> class CustomOperation(BaseOperation[User]):
-    ...     def to_pipeline(self) -> list[JsonDict]:
-    ...         return [{"$match": {"age": {"$gt": 18}}}]
-    ...
-    ...     def validate(self) -> None:
-    ...         if not self._is_valid:
-    ...             raise ValueError("Invalid operation")
+    >>> from earnorm.base.database.query.core.operations import Operation
+    >>> from earnorm.types import DatabaseModel
+
+    >>> class User(DatabaseModel):
+    ...     name: str
+    ...     age: int
+
+    >>> # Create operation
+    >>> op = Operation(User)
+    >>> op.add_processor(lambda x: x.upper())
+    >>> result = await op.execute()
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Generic, List, Optional, TypeVar
+from typing import Any, Callable, Dict, Generic, List, Optional, Self, Type, TypeVar
 
 from earnorm.types import DatabaseModel, JsonDict
 
@@ -129,3 +139,76 @@ class BaseOperation(Generic[ModelT], ABC):
             ValueError: If operation configuration is invalid
         """
         pass
+
+
+class Operation(Generic[ModelT]):
+    """Base class for database operations.
+
+    This class provides common functionality for all database operations.
+    It implements operation chaining and result processing.
+
+    Args:
+        model_type: The model class to operate on
+
+    Attributes:
+        _model_type: The model class being operated on
+        _processors: List of result processor functions
+
+    Examples:
+        >>> # Create operation
+        >>> op = Operation(User)
+
+        >>> # Add result processor
+        >>> op.add_processor(lambda x: x.upper())
+
+        >>> # Execute operation
+        >>> result = await op.execute()
+    """
+
+    def __init__(self, model_type: Type[ModelT]) -> None:
+        """Initialize operation.
+
+        Args:
+            model_type: The model class to operate on
+        """
+        self._model_type = model_type
+        self._processors: List[Callable[[Any], Any]] = []
+
+    def add_processor(self, processor: Callable[[Any], Any]) -> Self:
+        """Add result processor function.
+
+        Processors are called in order for each result.
+
+        Args:
+            processor: Function that takes and returns a result
+
+        Returns:
+            Self for method chaining
+
+        Examples:
+            >>> def process_user(user):
+            ...     user["full_name"] = f"{user['first_name']} {user['last_name']}"
+            ...     return user
+            ...
+            >>> op.add_processor(process_user)
+        """
+        self._processors.append(processor)
+        return self
+
+    async def execute(self) -> Any:
+        """Execute operation and return results.
+
+        Returns:
+            Operation results after processing
+
+        Examples:
+            >>> # Execute operation
+            >>> result = await op.execute()
+
+            >>> # Execute with processors
+            >>> result = await op.add_processor(process).execute()
+        """
+        results = await self.to_pipeline()  # type: ignore
+        for processor in self._processors:
+            results = [processor(result) for result in results]  # type: ignore
+        return results  # type: ignore

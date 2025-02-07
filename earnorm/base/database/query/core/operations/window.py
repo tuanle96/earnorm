@@ -1,22 +1,58 @@
 """Window operation implementation.
 
-This module provides base implementation for window operations.
-All database-specific window implementations should inherit from this class.
+This module provides the window operation class for performing window function queries.
+It supports various window functions and specifications:
+
+- Ranking functions (row_number, rank, dense_rank)
+- Aggregate functions (sum, avg, min, max)
+- Frame specifications (rows, range)
+- Partition by fields
+- Order by fields
+- Custom window functions
 
 Examples:
-    >>> class MongoWindow(BaseWindow[User]):
-    ...     def to_pipeline(self) -> list[JsonDict]:
-    ...         return [{
-    ...             "$setWindowFields": {
-    ...                 "partitionBy": {
-    ...                     field: f"${field}" for field in self._partition_by
-    ...                 } if self._partition_by else None,
-    ...                 "sortBy": {
-    ...                     field: 1 for field in self._order_by
-    ...                 } if self._order_by else None,
-    ...                 "output": self._window_expr
-    ...             }
-    ...         }]
+    >>> from earnorm.base.database.query.core.operations import WindowOperation
+    >>> from earnorm.types import DatabaseModel
+
+    >>> class Employee(DatabaseModel):
+    ...     name: str
+    ...     department: str
+    ...     salary: float
+    ...     hire_date: datetime
+
+    >>> # Create window operation
+    >>> window = WindowOperation(Employee)
+
+    >>> # Row number by department
+    >>> results = await window.over(
+    ...     partition_by=["department"]
+    ... ).order_by(
+    ...     "-salary"
+    ... ).row_number(
+    ...     "rank_in_dept"
+    ... ).execute()
+
+    >>> # Running total by department
+    >>> results = await window.over(
+    ...     partition_by=["department"]
+    ... ).order_by(
+    ...     "hire_date"
+    ... ).sum(
+    ...     "salary",
+    ...     "running_total"
+    ... ).execute()
+
+    >>> # Moving average
+    >>> results = await window.over(
+    ...     order_by=["hire_date"]
+    ... ).frame(
+    ...     "rows",
+    ...     start=-2,
+    ...     end=0
+    ... ).avg(
+    ...     "salary",
+    ...     "moving_avg"
+    ... ).execute()
 """
 
 from typing import Any, List, Optional, TypeVar

@@ -1,37 +1,44 @@
-"""Lifecycle management module for dependency injection.
+"""Lifecycle management module for EarnORM.
 
-This module provides lifecycle management functionality for the DI system.
-It includes:
+This module provides a comprehensive system for managing object lifecycles
+in the EarnORM framework. It includes:
 
 1. Lifecycle Protocol:
-   - Initialization interface
-   - Destruction interface
-   - State management
-   - Resource tracking
+   - Interface for lifecycle-aware objects
+   - Initialization and destruction methods
+   - State tracking and identification
+   - Resource management
 
 2. Event System:
-   - Lifecycle event emission
-   - Event handling
-   - Event propagation
-   - Event filtering
+   - Lifecycle event handling
+   - Event subscription and emission
+   - Error handling and propagation
+   - Event-driven architecture
 
-3. Lifecycle Management:
-   - Object initialization
-   - Resource cleanup
-   - State tracking
-   - Error handling
+3. Lifecycle Manager:
+   - Object lifecycle management
+   - Resource allocation and cleanup
+   - Object tracking and retrieval
+   - Error handling and recovery
+
+Key Features:
+    - Async initialization and destruction
+    - Resource tracking and cleanup
+    - Event-driven lifecycle management
+    - Type-safe object management
+    - Error handling and recovery
 
 Example:
     >>> from earnorm.di.lifecycle import LifecycleAware, LifecycleManager
     >>>
     >>> class MyService(LifecycleAware):
     ...     async def init(self) -> None:
-    ...         # Initialize resources
-    ...         pass
+    ...         self._connection = await create_connection()
+    ...         self._state = "initialized"
     ...
     ...     async def destroy(self) -> None:
-    ...         # Cleanup resources
-    ...         pass
+    ...         await self._connection.close()
+    ...         self._state = "destroyed"
     ...
     ...     @property
     ...     def id(self) -> str:
@@ -39,15 +46,34 @@ Example:
     ...
     ...     @property
     ...     def data(self) -> Dict[str, str]:
-    ...         return {"status": "running"}
+    ...         return {
+    ...             "state": self._state,
+    ...             "connection": str(self._connection)
+    ...         }
     >>>
-    >>> # Create and initialize service
+    >>> # Create manager and initialize service
     >>> manager = LifecycleManager()
     >>> service = MyService()
     >>> await manager.init(service)
+    >>>
+    >>> # Use service
+    >>> assert manager.get("my_service") == service
+    >>>
+    >>> # Cleanup
+    >>> await manager.destroy("my_service")
+
+See Also:
+    - earnorm.di.container: Container module for dependency injection
+    - earnorm.di.factory: Factory module for object creation
+    - earnorm.di.service: Service module for dependency management
 """
 
-from earnorm.di.lifecycle.events import EventError, LifecycleEvents
-from earnorm.di.lifecycle.manager import LifecycleAware, LifecycleManager
+from earnorm.di.lifecycle.events import LifecycleEvents
+from earnorm.di.lifecycle.manager import LifecycleManager
+from earnorm.di.lifecycle.protocol import LifecycleAware
 
-__all__ = ["EventError", "LifecycleAware", "LifecycleEvents", "LifecycleManager"]
+__all__ = [
+    "LifecycleAware",  # Protocol for lifecycle-aware objects
+    "LifecycleManager",  # Manager for lifecycle operations
+    "LifecycleEvents",  # Event system for lifecycle management
+]

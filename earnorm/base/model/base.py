@@ -1,75 +1,127 @@
-"""Base model class for database records.
+"""Base model implementation for EarnORM.
 
-This module provides the base model class for all database models in EarnORM.
-It includes features such as:
+This module provides the base model class that all database models inherit from.
+It implements core functionality for model definition, validation, and persistence.
 
-1. Field validation
-2. CRUD operations
-3. Multiple database support
-4. Event system
-5. Field caching with async descriptors
+Key Features:
+    1. Model Definition
+       - Field declarations
+       - Model metadata
+       - Inheritance support
+       - Abstract models
+
+    2. Field Management
+       - Field validation
+       - Type conversion
+       - Default values
+       - Computed fields
+
+    3. CRUD Operations
+       - Create records
+       - Read/search records
+       - Update records
+       - Delete records
+
+    4. Query Building
+       - Domain expressions
+       - Field selection
+       - Sorting/ordering
+       - Pagination
+
+    5. Transaction Support
+       - ACID compliance
+       - Nested transactions
+       - Savepoints
+       - Error handling
+
+    6. Event System
+       - Pre/post hooks
+       - Validation events
+       - Change tracking
+       - Custom events
 
 Examples:
-    >>> # Define a model
+    >>> from earnorm.base.model import BaseModel
+    >>> from earnorm.fields import StringField, IntegerField, DateTimeField
+
+    >>> # Define model
     >>> class User(BaseModel):
-    ...     _name = "users"
+    ...     _name = 'data.user'
+    ...
     ...     name = StringField(required=True)
     ...     age = IntegerField()
-    ...     email = EmailField(unique=True)
-    ...     status = SelectField(choices=["active", "inactive"])
+    ...     email = StringField(unique=True)
     ...     created_at = DateTimeField(readonly=True)
-    ...     updated_at = DateTimeField(readonly=True)
+    ...
+    ...     async def validate(self):
+    ...         '''Custom validation logic'''
+    ...         if self.age < 0:
+    ...             raise ValueError("Age cannot be negative")
+    ...
+    ...     @property
+    ...     def is_adult(self):
+    ...         '''Computed property'''
+    ...         return self.age >= 18
 
-    >>> # Create a record
+    >>> # Create record
     >>> user = await User.create({
     ...     "name": "John Doe",
     ...     "age": 30,
-    ...     "email": "john@example.com",
-    ...     "status": "active"
+    ...     "email": "john@example.com"
     ... })
 
     >>> # Search records
-    >>> users = await User.search([
+    >>> adults = await User.search([
     ...     ("age", ">=", 18),
-    ...     ("status", "=", "active")
-    ... ]).limit(10).execute()
+    ...     ("email", "like", "%@example.com")
+    ... ]).order_by("-created_at").limit(10)
 
     >>> # Update records
-    >>> await users.write({
-    ...     "status": "inactive"
+    >>> await adults.write({
+    ...     "status": "active"
     ... })
 
     >>> # Delete records
-    >>> await users.unlink()
+    >>> await adults.unlink()
 
-    >>> # Aggregate queries
-    >>> stats = await User.aggregate()\\
-    ...     .group_by("status")\\
-    ...     .count("total")\\
-    ...     .avg("age", "avg_age")\\
-    ...     .having(total__gt=100)\\
-    ...     .execute()
+    >>> # Transaction
+    >>> async with User.env.transaction() as txn:
+    ...     user = await User.with_env(txn).create({
+    ...         "name": "Jane Doe",
+    ...         "age": 25
+    ...     })
+    ...     # Transaction commits if no errors
 
-    >>> # Join queries
-    >>> posts = await User.join(
-    ...     "posts",
-    ...     on={"id": "user_id"},
-    ...     join_type="left"
-    ... ).select(
-    ...     "name",
-    ...     "posts.title",
-    ...     "posts.content"
-    ... ).where(
-    ...     posts__likes__gt=10
-    ... ).execute()
+Classes:
+    BaseModel:
+        Base class for all database models.
 
-    >>> # Group queries
-    >>> order_stats = await Order.group()\\
-    ...     .by("status", "category")\\
-    ...     .count("total_orders")\\
-    ...     .sum("amount", "total_amount")\\
-    ...     .having(total_orders__gt=10)\\
-    ...     .execute()
+        Class Attributes:
+            _name: Model name/collection
+            _env: Environment instance
+            _fields: Field definitions
+
+        Instance Attributes:
+            id: Record ID
+            _values: Field values
+            _cache: Field cache
+
+        Methods:
+            create: Create records
+            search: Search records
+            write: Update records
+            unlink: Delete records
+
+Implementation Notes:
+    1. Models use metaclass for initialization
+    2. Fields are converted to descriptors
+    3. Values are cached per-instance
+    4. Transactions use context managers
+
+See Also:
+    - earnorm.fields: Field definitions
+    - earnorm.database: Database adapters
+    - earnorm.env: Environment management
 """
 
 from __future__ import annotations
@@ -171,21 +223,46 @@ class FieldsDescriptor:
 
 
 class BaseModel(metaclass=ModelMeta):
-    """Base model class with auto env injection.
+    """Base class for all database models.
 
-    This class provides:
-    - Automatic env injection from container
-    - Basic CRUD operations
-    - Field validation and type checking
-    - Implementation of ModelProtocol methods
-    - Field caching mechanism
+    This class provides core functionality for model definition and persistence.
+    All database models should inherit from this class.
+
+    Class Attributes:
+        _name: Model name/collection (required)
+        _env: Environment instance
+        _fields: Field definitions
+        _model_info: Model metadata
+
+    Instance Attributes:
+        id: Record ID
+        _values: Field values
+        _cache: Field cache
+        _modified: Modified fields
 
     Examples:
         >>> class User(BaseModel):
-        ...     _name = "user"
-        ...     name = fields.StringField()
-        >>> user = User()  # env auto-injected
-        >>> new_user = await user.create({"name": "John"})
+        ...     _name = 'data.user'
+        ...     name = StringField()
+        ...     age = IntegerField()
+
+        >>> # Create record
+        >>> user = await User.create({
+        ...     "name": "John",
+        ...     "age": 30
+        ... })
+
+        >>> # Access fields
+        >>> print(user.name)  # "John"
+        >>> print(user.age)  # 30
+
+        >>> # Update fields
+        >>> await user.write({
+        ...     "age": 31
+        ... })
+
+        >>> # Delete record
+        >>> await user.unlink()
     """
 
     # Define slots for memory efficiency and type safety
@@ -211,7 +288,13 @@ class BaseModel(metaclass=ModelMeta):
     __fields__ = FieldsDescriptor()
 
     def __init__(self, env: Optional[Environment] = None) -> None:
-        """Initialize base model."""
+        """Initialize model instance.
+
+        This method:
+        1. Initializes instance attributes
+        2. Sets up field cache
+        3. Marks instance as new
+        """
         env_instance = env if env is not None else self._get_default_env()
         if not env_instance:
             raise RuntimeError(

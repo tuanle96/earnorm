@@ -1,36 +1,35 @@
-"""Database adapters module.
+"""Database adapter implementations.
 
-This module provides database adapters for EarnORM.
-It includes:
-- Database adapter interface
-- Connection pooling
-- CRUD operations
-- Error handling
-- Operation logging
+This module provides concrete implementations of the DatabaseAdapter interface
+for different database backends.
+
+Currently supported databases:
+- MongoDB (MongoAdapter)
 
 Examples:
-    >>> from earnorm.types import DatabaseModel
-    >>> class User(DatabaseModel):
-    ...     name: str
-    ...     age: int
-    >>> # Basic operations
-    >>> adapter = MongoAdapter(uri="mongodb://localhost:27017", database="test")
+    >>> from earnorm.base.database.adapters import MongoAdapter
+
+    >>> # Create and initialize adapter
+    >>> adapter = MongoAdapter(
+    ...     uri="mongodb://localhost:27017",
+    ...     database="mydb"
+    ... )
     >>> await adapter.init()
-    >>> # Insert
-    >>> user = User(name="John", age=25)
-    >>> await adapter.insert(user)
-    >>> # Update
-    >>> user.age = 26
-    >>> await adapter.update(user)
-    >>> # Delete
-    >>> await adapter.delete(user)
-    >>> # Query
-    >>> users = await adapter.query(User).filter({"age": {"$gt": 18}}).all()
-    >>> # Transaction
-    >>> async with adapter.transaction(User) as tx:
-    ...     user = User(name="John", age=25)
-    ...     await tx.insert(user)
-    ...     await tx.commit()
+
+    >>> # Basic query
+    >>> users = await adapter.query(User).filter(
+    ...     age__gt=18,
+    ...     status="active"
+    ... ).all()
+
+    >>> # Aggregate query
+    >>> stats = await adapter.query(User, "aggregate")\\
+    ...     .group_by("status")\\
+    ...     .count("total")\\
+    ...     .execute()
+
+    >>> # Close when done
+    >>> await adapter.close()
 """
 
 import logging

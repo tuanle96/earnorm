@@ -1,21 +1,72 @@
 """Join operation implementation.
 
-This module provides base implementation for join operations.
-All database-specific join implementations should inherit from this class.
+This module provides the join operation class for performing join queries.
+It supports various types of joins and join conditions:
+
+- Inner joins
+- Left/right outer joins
+- Cross joins
+- Multiple join conditions
+- Field selection
+- Join-specific filtering
+- Cross-database joins
 
 Examples:
-    >>> class MongoJoin(BaseJoin[User, Post]):
-    ...     def to_pipeline(self) -> list[JsonDict]:
-    ...         return [
-    ...             {
-    ...                 "$lookup": {
-    ...                     "from": "posts",
-    ...                     "localField": "id",
-    ...                     "foreignField": "user_id",
-    ...                     "as": "posts"
-    ...                 }
-    ...             }
-    ...         ]
+    >>> from earnorm.base.database.query.core.operations import JoinOperation
+    >>> from earnorm.types import DatabaseModel
+
+    >>> class User(DatabaseModel):
+    ...     name: str
+    ...     email: str
+
+    >>> class Post(DatabaseModel):
+    ...     title: str
+    ...     content: str
+    ...     user_id: str
+    ...     status: str
+
+    >>> class Comment(DatabaseModel):
+    ...     post_id: str
+    ...     user_id: str
+    ...     content: str
+
+    >>> # Create join operation
+    >>> join = JoinOperation(User)
+
+    >>> # Simple join
+    >>> results = await join.join(
+    ...     Post
+    ... ).on(
+    ...     User.id == Post.user_id
+    ... ).select(
+    ...     "name", "posts.title"
+    ... ).execute()
+
+    >>> # Multiple joins
+    >>> results = await join.join(
+    ...     Post
+    ... ).on(
+    ...     User.id == Post.user_id
+    ... ).join(
+    ...     Comment
+    ... ).on(
+    ...     Post.id == Comment.post_id
+    ... ).select(
+    ...     "name",
+    ...     "posts.title",
+    ...     "comments.content"
+    ... ).execute()
+
+    >>> # Join with conditions
+    >>> results = await join.join(
+    ...     Post
+    ... ).on(
+    ...     User.id == Post.user_id,
+    ...     Post.status == "published"
+    ... ).select(
+    ...     "name",
+    ...     "posts.title"
+    ... ).execute()
 """
 
 from typing import Dict, Literal, Optional, Protocol, Type, TypeVar, Union

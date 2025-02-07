@@ -1,18 +1,65 @@
 """Core query implementation.
 
-This module provides base implementation for database queries.
-All database-specific query implementations should inherit from this class.
+This module provides the core query building functionality for EarnORM.
+It implements the base query class that all other query types inherit from.
+
+The query builder uses a fluent interface pattern to construct database queries
+in a type-safe and intuitive way. It supports:
+
+- Filtering with comparison operators
+- Field selection and projection
+- Sorting and ordering
+- Pagination with limit/offset
+- Result caching
+- Type hints and validation
+- Custom result processors
 
 Examples:
+    >>> from earnorm.base.database.query import Query
+    >>> from earnorm.types import DatabaseModel
+
     >>> class User(DatabaseModel):
     ...     name: str
     ...     age: int
+    ...     status: str
+
+    >>> # Basic filtering
+    >>> users = await Query(User).filter(
+    ...     age__gt=18,
+    ...     status="active"
+    ... ).all()
+
+    >>> # Field selection
+    >>> users = await Query(User).select(
+    ...     "name", "age"
+    ... ).all()
+
+    >>> # Sorting
+    >>> users = await Query(User).order_by(
+    ...     "-age", "name"
+    ... ).all()
+
+    >>> # Pagination
+    >>> users = await Query(User).limit(10).offset(20).all()
+
+    >>> # Complex filtering with domain builder
+    >>> from earnorm.base.database.query import DomainBuilder
+    >>> users = await Query(User).filter(
+    ...     DomainBuilder()
+    ...     .field("age").greater_than(18)
+    ...     .and_()
+    ...     .field("status").equals("active")
+    ...     .or_()
+    ...     .field("role").in_(["admin", "moderator"])
+    ...     .build()
+    ... ).all()
+
+    >>> # Custom result processor
+    >>> def process_user(user):
+    ...     user["full_name"] = f"{user['first_name']} {user['last_name']}"
+    ...     return user
     ...
-    >>> query = BaseQuery[User]()
-    >>> query.where(User.age > 18).order_by(User.name)
-    >>> query.join(Post).on(User.id == Post.user_id)
-    >>> query.group_by(User.age).having(User.age > 20)
-    >>> query.window().over(partition_by=[User.age]).row_number()
+    >>> users = await Query(User).add_processor(process_user).all()
 """
 
 from abc import ABC, abstractmethod
@@ -32,22 +79,53 @@ JoinT = TypeVar("JoinT", bound=DatabaseModel)
 
 
 class BaseQuery(Generic[ModelT], QueryProtocol[ModelT], ABC):
-    """Base class for database queries.
+    """Base query builder implementation.
 
-    This class provides common functionality for all database queries.
-    Database-specific query implementations should inherit from this class.
+    This class provides the core functionality for building and executing database queries.
+    It implements common query operations like filtering, sorting, and pagination.
+
+    The query builder uses method chaining to construct queries in a fluent interface style.
+    Each method returns self to allow for method chaining.
 
     Args:
-        ModelT: Type of model being queried
+        model_type: The model class to query
+
+    Attributes:
+        _model_type: The model class being queried
+        _filters: List of filter conditions
+        _order_by: List of sort fields
+        _limit: Maximum number of results
+        _offset: Number of results to skip
+        _selected_fields: List of fields to return
+        _processors: List of result processor functions
+
+    Examples:
+        >>> # Create query builder
+        >>> query = BaseQuery(User)
+
+        >>> # Add filters
+        >>> query.filter(age__gt=18, status="active")
+
+        >>> # Add sorting
+        >>> query.order_by("-created_at", "name")
+
+        >>> # Set pagination
+        >>> query.limit(10).offset(20)
+
+        >>> # Select fields
+        >>> query.select("id", "name", "email")
+
+        >>> # Execute query
+        >>> results = await query.all()
     """
 
-    def __init__(self, model: Type[ModelT]) -> None:
-        """Initialize query.
+    def __init__(self, model_type: Type[ModelT]) -> None:
+        """Initialize query builder.
 
         Args:
-            model: Model class being queried
+            model_type: The model class to query
         """
-        self._model = model
+        self._model = model_type
         self._domain: Optional[Union[List[DomainItem], DomainExpression]] = None
         self._fields: Optional[List[str]] = None
         self._offset: Optional[int] = None

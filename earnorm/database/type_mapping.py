@@ -2,6 +2,28 @@
 
 This module provides type mapping constants and rules for different database backends.
 It is used by both field implementations and database mappers.
+
+The module defines mappings between Python types and database types for:
+- MongoDB
+- PostgreSQL
+- MySQL
+
+It also provides default field options for each backend.
+
+Examples:
+    >>> from earnorm.database.type_mapping import get_field_type, get_field_options
+
+    >>> # Get MongoDB type for string field
+    >>> mongo_type = get_field_type("string", "mongodb")
+    >>> print(mongo_type)  # "string"
+
+    >>> # Get PostgreSQL type for list field
+    >>> pg_type = get_field_type("list", "postgres")
+    >>> print(pg_type)  # "JSONB"
+
+    >>> # Get default MySQL field options
+    >>> mysql_opts = get_field_options("mysql")
+    >>> print(mysql_opts)  # {"index": False, "unique": False, ...}
 """
 
 from typing import Any, Dict
@@ -97,12 +119,23 @@ DEFAULT_FIELD_OPTIONS = {
 def get_field_type(field_type: str, backend: str) -> str:
     """Get database field type for backend.
 
+    This function maps Python field types to their corresponding database types
+    based on the specified backend.
+
     Args:
-        field_type: Field type name
-        backend: Database backend name
+        field_type: Field type name (e.g. "string", "integer", "list")
+        backend: Database backend name ("mongodb", "postgres", "mysql")
 
     Returns:
-        Database type name
+        Database type name for the specified backend
+
+    Examples:
+        >>> get_field_type("string", "mongodb")
+        'string'
+        >>> get_field_type("list", "postgres")
+        'JSONB'
+        >>> get_field_type("integer", "mysql")
+        'INTEGER'
     """
     mapping = {
         "mongodb": MONGODB_TYPE_MAPPING,
@@ -115,10 +148,25 @@ def get_field_type(field_type: str, backend: str) -> str:
 def get_field_options(backend: str) -> Dict[str, Any]:
     """Get default field options for backend.
 
+    This function returns the default field options for the specified database backend.
+    These options include settings like:
+    - Index flags
+    - Unique constraints
+    - Nullability
+    - Character sets (MySQL)
+
     Args:
-        backend: Database backend name
+        backend: Database backend name ("mongodb", "postgres", "mysql")
 
     Returns:
-        Default field options
+        Dictionary of default field options for the specified backend
+
+    Examples:
+        >>> get_field_options("mongodb")
+        {'index': False, 'unique': False, 'sparse': True}
+        >>> get_field_options("postgres")
+        {'index': False, 'unique': False, 'nullable': True}
+        >>> get_field_options("mysql")
+        {'index': False, 'unique': False, 'nullable': True, 'charset': 'utf8mb4', 'collate': 'utf8mb4_unicode_ci'}
     """
     return DEFAULT_FIELD_OPTIONS[backend].copy()

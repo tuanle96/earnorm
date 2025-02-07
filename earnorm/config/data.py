@@ -1,16 +1,69 @@
 """Config data module.
 
 This module defines the SystemConfigData class that represents system-wide configuration data.
-It is used to load and validate configuration before initializing the Environment.
+It provides field definitions, validation rules and loading from different sources.
+
+Key Features:
+    1. Field Definitions
+       - String fields
+       - Integer fields
+       - Boolean fields
+       - DateTime fields
+       - Custom field types
+
+    2. Validation Rules
+       - Type checking
+       - Value constraints
+       - Required fields
+       - Cross-field validation
+       - Custom validators
+
+    3. Configuration Sources
+       - Environment variables
+       - YAML files
+       - Default values
+       - Computed values
 
 Examples:
-    >>> # Load from .env file
+    >>> from earnorm.config.data import SystemConfigData
+
+    >>> # Load from environment
     >>> config = await SystemConfigData.load_env(".env")
     >>> print(config.database_uri)
+    mongodb://localhost:27017
 
-    >>> # Load from YAML file
+    >>> # Load from YAML
     >>> config = await SystemConfigData.load_yaml("config.yaml")
     >>> print(config.redis_host)
+    localhost
+
+    >>> # Access computed values
+    >>> print(config.database_options)
+    {"w": 1, "j": true, "retryWrites": true}
+
+Implementation Notes:
+    1. Field System
+       - Field descriptors
+       - Type conversion
+       - Default values
+       - Validation rules
+
+    2. Loading Process
+       - Environment parsing
+       - YAML parsing
+       - Default injection
+       - Validation
+
+    3. Security
+       - Sensitive data
+       - Credential handling
+       - SSL configuration
+       - Access control
+
+See Also:
+    - earnorm.fields: Field definitions
+    - earnorm.config.model: Configuration model
+    - earnorm.exceptions: Error handling
 """
 
 import logging
@@ -43,6 +96,11 @@ T = TypeVar("T", bound="SystemConfigData")
 
 def validate_pool_sizes(min_size: Optional[int], max_size: Optional[int]) -> None:
     """Validate pool size configuration.
+
+    This function validates that:
+    1. Both sizes are positive integers
+    2. Min size is less than max size
+    3. Max size is within reasonable limits
 
     Args:
         min_size: Minimum pool size

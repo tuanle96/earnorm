@@ -1,14 +1,80 @@
 """Model metaclass implementation.
 
-This module provides the metaclass for all database models.
-It handles:
-- Field registration and validation
-- Model registration with environment
-- Slot creation
-- Name generation
-- Default fields injection
-- Model registry management
-- Inheritance tracking
+This module provides the metaclass for all database models in EarnORM.
+It handles model class creation and configuration through Python's metaclass system.
+
+Key Features:
+    1. Field Registration
+       - Automatic field discovery
+       - Field name assignment
+       - Field validation setup
+       - Default field injection
+
+    2. Model Registration
+       - Model registry management
+       - Environment integration
+       - Dependency tracking
+       - Name generation
+
+    3. Slot Creation
+       - Memory optimization
+       - Attribute access control
+       - Performance improvement
+       - Type safety
+
+    4. Inheritance Tracking
+       - Base class tracking
+       - Mixin support
+       - Abstract class handling
+       - Interface implementation
+
+Examples:
+    >>> from earnorm.base.model.meta import ModelMeta
+    >>> from earnorm.fields import StringField, IntegerField
+
+    >>> # Define model with metaclass
+    >>> class User(metaclass=ModelMeta):
+    ...     _name = 'data.user'
+    ...     name = StringField()
+    ...     age = IntegerField()
+
+    >>> # Access model registry
+    >>> User._model_info.name  # 'data.user'
+    >>> User._model_info.fields  # {'name': StringField(), 'age': IntegerField()}
+
+    >>> # Check field descriptors
+    >>> isinstance(User.name, AsyncFieldDescriptor)  # True
+    >>> isinstance(User.age, AsyncFieldDescriptor)  # True
+
+Classes:
+    ModelInfo:
+        Data class holding model metadata.
+
+        Attributes:
+            name: Model name
+            fields: Field definitions
+            env: Environment instance
+            bases: Base classes
+
+    ModelMeta:
+        Metaclass for database models.
+
+        Methods:
+            __new__: Create model class
+            __init__: Initialize model class
+            _build_slots: Create class slots
+            _register_fields: Register model fields
+
+Implementation Notes:
+    1. The metaclass creates descriptors for all field instances
+    2. Model names must be unique within an environment
+    3. Abstract models are not registered with environment
+    4. Field names cannot conflict with method names
+
+See Also:
+    - earnorm.base.model.base: BaseModel implementation
+    - earnorm.base.model.descriptors: Field descriptors
+    - earnorm.base.env: Environment management
 """
 
 import logging
@@ -48,14 +114,32 @@ ValueT = TypeVar("ValueT")
 
 @dataclass
 class ModelInfo:
-    """Model information container.
+    """Model metadata container.
 
-    Attributes:
-        name: Technical name (e.g. res.users)
-        model_class: Model class
+    This class holds metadata about a model class including:
+    - Model name and registry key
+    - Field definitions and types
+    - Environment instance
+    - Base classes and mixins
+    - Abstract status
+
+    Args:
+        name: Model name/registry key
+        fields: Dictionary of field definitions
+        env: Environment instance
+        bases: List of base classes
         is_abstract: Whether model is abstract
-        parent_models: Parent model names
-        fields: All fields including inherited
+
+    Examples:
+        >>> info = ModelInfo(
+        ...     name='data.user',
+        ...     fields={'name': StringField()},
+        ...     env=env,
+        ...     bases=[BaseModel],
+        ...     is_abstract=False
+        ... )
+        >>> info.name  # 'data.user'
+        >>> info.fields  # {'name': StringField()}
     """
 
     name: str

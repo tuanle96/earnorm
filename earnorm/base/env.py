@@ -1,7 +1,95 @@
-"""Environment module.
+"""Environment module for EarnORM.
 
-This module provides the environment class that manages the application state.
-It integrates with the DI container and provides access to all services.
+This module provides the environment system that manages application state and dependencies.
+It implements the singleton pattern and integrates with a dependency injection container.
+
+Key Features:
+    1. Application State
+       - Configuration management
+       - Service registry
+       - Resource lifecycle
+       - Error handling
+       - Logging support
+
+    2. Database Integration
+       - Adapter management
+       - Connection pooling
+       - Transaction support
+       - Model registry
+       - Query building
+
+    3. Dependency Injection
+       - Service container
+       - Lazy loading
+       - Scoped services
+       - Auto-wiring
+       - Service lifecycle
+
+Examples:
+    >>> from earnorm.base.env import Environment
+    >>> from earnorm.base.database import MongoAdapter
+
+    >>> # Get singleton instance
+    >>> env = Environment.get_instance()
+
+    >>> # Initialize with config
+    >>> await env.init(config)
+
+    >>> # Get database adapter
+    >>> adapter = env.adapter
+    >>> users = await adapter.query(User).all()
+
+    >>> # Get model by name
+    >>> User = await env.get_model('data.user')
+    >>> user = await User.create({"name": "John"})
+
+    >>> # Get service from DI container
+    >>> events = await env.get_service('event_bus')
+    >>> await events.publish('user.created', user)
+
+    >>> # Cleanup on shutdown
+    >>> await env.destroy()
+
+Classes:
+    Environment:
+        Main environment class implementing singleton pattern.
+
+        Class Methods:
+            get_instance: Get singleton instance
+
+        Instance Methods:
+            init: Initialize environment
+            destroy: Cleanup resources
+            get_service: Get service from DI container
+            get_model: Get model by name
+
+        Properties:
+            adapter: Get database adapter
+            initialized: Check if initialized
+
+Implementation Notes:
+    1. Singleton Pattern
+       - Single instance per application
+       - Thread-safe initialization
+       - Lazy loading of services
+       - Resource cleanup
+
+    2. DI Container
+       - Service registration
+       - Dependency resolution
+       - Scoped instances
+       - Circular dependency detection
+
+    3. Resource Management
+       - Connection pooling
+       - Transaction handling
+       - Event bus
+       - Cache invalidation
+
+See Also:
+    - earnorm.di: Dependency injection system
+    - earnorm.config: Configuration management
+    - earnorm.database: Database adapters
 """
 
 import logging
@@ -20,28 +108,51 @@ T = TypeVar("T")
 
 
 class Environment:
-    """Application environment.
+    """Application environment singleton.
 
-    This class manages:
-    - Configuration
+    This class manages the application state and dependencies through:
+    - Configuration management
     - Database connections
+    - Service registry
     - Model registry
+    - Resource lifecycle
 
-    It integrates with the DI container and follows the singleton pattern.
-    All services are accessed through the DI container.
+    It implements the singleton pattern and integrates with a DI container.
+    All services are accessed through the container for dependency management.
+
+    Attributes:
+        _instance: Singleton instance
+        _initialized: Whether environment is initialized
+        _adapter: Database adapter instance
 
     Examples:
+        >>> # Get singleton instance
         >>> env = Environment.get_instance()
+
+        >>> # Initialize with config
         >>> await env.init(config)
-        >>> adapter = await env.get_adapter()
-        >>> User = env.get_model('res.users')
+
+        >>> # Get database adapter
+        >>> adapter = env.adapter
+        >>> users = await adapter.query(User).all()
+
+        >>> # Get model by name
+        >>> User = await env.get_model('data.user')
+        >>> user = await User.create({"name": "John"})
+
+        >>> # Cleanup
+        >>> await env.destroy()
     """
 
     # Singleton instance
     _instance: Optional["Environment"] = None
 
     def __init__(self) -> None:
-        """Initialize environment."""
+        """Initialize environment singleton.
+
+        Raises:
+            RuntimeError: If instance already exists
+        """
         if Environment._instance is not None:
             raise RuntimeError("Environment already initialized")
 
@@ -54,23 +165,30 @@ class Environment:
     def get_instance(cls) -> "Environment":
         """Get singleton instance.
 
+        This method implements lazy initialization of the singleton.
+        It creates the instance on first access if it doesn't exist.
+
         Returns:
-            Environment instance
+            Environment singleton instance
         """
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
 
     async def init(self, config: "SystemConfigData") -> None:
-        """Initialize environment.
+        """Initialize environment with configuration.
+
+        This method:
+        1. Registers config in DI container
+        2. Initializes services through container
+        3. Sets up service dependencies
+        4. Configures logging
 
         Args:
             config: System configuration data
 
-        This method:
-        1. Registers config in DI container
-        2. Initializes services through DI container
-        3. Sets up service dependencies
+        Raises:
+            RuntimeError: If initialization fails
         """
         if self._initialized:
             logger.warning("Environment already initialized")
@@ -82,7 +200,7 @@ class Environment:
             # Register config
             container.register("config", config)
 
-            # Get services from DI container
+            # Get services from container
             self._adapter = await container.get("database_adapter")
 
             # Register self in container
@@ -96,11 +214,16 @@ class Environment:
             raise RuntimeError(f"Environment initialization failed: {e}") from e
 
     async def destroy(self) -> None:
-        """Cleanup environment.
+        """Cleanup environment resources.
 
         This method:
         1. Closes database connections
         2. Stops event bus
+        3. Cleans up resources
+        4. Resets state
+
+        Raises:
+            RuntimeError: If cleanup fails
         """
         if not self._initialized:
             return
@@ -108,12 +231,12 @@ class Environment:
         try:
             from earnorm.di import container
 
-            # Get services from DI container
+            # Cleanup database
             if container.has("database_adapter"):
                 adapter = await container.get("database_adapter")
                 await adapter.close()
 
-            # check if event bus is registered
+            # Cleanup event bus
             if container.has("event_bus"):
                 events = await container.get("event_bus")
                 await events.destroy()
@@ -130,15 +253,18 @@ class Environment:
     async def get_service(self, name: str, required: bool = True) -> Any:
         """Get service from DI container.
 
+        This method provides access to services registered in the DI container.
+        It supports optional services and validates required ones.
+
         Args:
-            name: Service name
+            name: Service name/key in container
             required: Whether service is required
 
         Returns:
             Service instance
 
         Raises:
-            RuntimeError: If service not found and required=True
+            RuntimeError: If required service not found
         """
         from earnorm.di import container
 
@@ -149,13 +275,16 @@ class Environment:
 
     @property
     def adapter(self) -> DatabaseAdapter[DatabaseModel]:
-        """Get database adapter synchronously.
+        """Get database adapter instance.
+
+        This property provides synchronous access to the database adapter.
+        It validates the environment and adapter state.
 
         Returns:
             Database adapter instance
 
         Raises:
-            RuntimeError: If adapter not initialized
+            RuntimeError: If environment or adapter not initialized
         """
         if not self._initialized:
             raise RuntimeError("Environment not initialized")
@@ -164,16 +293,19 @@ class Environment:
         return self._adapter
 
     async def get_model(self, name: str) -> Type[ModelProtocol]:
-        """Get model by name.
+        """Get model class by name.
+
+        This method retrieves model classes from the registry.
+        Models must be registered with the 'model.' prefix.
 
         Args:
-            name: Model name
+            name: Model name/key in registry
 
         Returns:
             Model class implementing ModelProtocol
 
         Raises:
-            ValueError: If model not found
+            ValueError: If model not found in registry
         """
         model = await self.get_service(f"model.{name}", required=False)
         if model is None:

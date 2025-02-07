@@ -1,330 +1,199 @@
-# EarnORM
+# EarnORM 🚀
 
-[![Project Status: Prototype](https://img.shields.io/badge/Project%20Status-Prototype-yellow.svg)]()
-[![License: CC BY-NC](https://img.shields.io/badge/License-CC%20BY--NC-lightgrey.svg)]()
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)]()
-[![PyPI version](https://badge.fury.io/py/earnorm.svg)](https://badge.fury.io/py/earnorm)
+[![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Status](https://img.shields.io/badge/status-alpha-orange.svg)](https://github.com/earnbase/earnorm)
 
-EarnORM is a high-performance, async-first MongoDB ORM for Python, designed to maximize throughput in I/O-bound applications. Built on top of Motor and Pydantic, it leverages the full power of async/await to handle thousands of database operations concurrently while maintaining type safety and data validation.
+> A powerful, async-first ORM framework for modern Python applications
 
-## 🌟 Key Highlights
+## 📖 Description
 
-- **Async-First Architecture**: Built from ground up with async/await for maximum I/O performance
-- **Type Safety & Validation**: Full type hints and runtime validation powered by Pydantic
-- **Powerful Query System**: Flexible domain expressions and advanced filtering capabilities
-- **Relationship Management**: Comprehensive support for one-to-one, one-to-many, and many-to-many relationships
-- **Developer Experience**: Rich set of tools, clear documentation, and extensive examples
+EarnORM is a modern, async-first Object-Relational Mapping (ORM) framework designed to provide a flexible and type-safe interface for database operations in Python applications. Built with performance and developer experience in mind, it offers seamless integration with multiple databases and modern Python features.
 
-## 🚀 Features
+## 🏗️ Project Status
+
+Currently in **Alpha** stage. Core features are implemented and working, but the API may change as we gather feedback and improve the framework.
+
+- [x] Core ORM functionality
+- [x] MongoDB support
+- [x] Connection pooling
+- [x] Type safety
+- [ ] PostgreSQL support (in progress)
+- [ ] MySQL support (planned)
+- [ ] Migration system (planned)
+- [ ] Admin interface (planned)
+
+## ✨ Key Highlights
+
+- 🔄 **Async/Await First**: Built from the ground up for asynchronous operations
+- 🔒 **Type Safety**: Full type hints support with runtime validation
+- 🎯 **Multiple Database Support**: MongoDB, PostgreSQL (coming soon), MySQL (planned)
+- 🌟 **Modern Python**: Leverages latest Python features and best practices
+- 🛠️ **Developer Friendly**: Intuitive API with excellent IDE support
+
+## 🎯 Features
 
 ### Core Features
-- **Model System**
-  - Type-safe model definitions with Pydantic integration
-  - Automatic schema validation and type conversion
-  - Flexible field types with custom validation
-  - Built-in support for indexes and constraints
 
-- **Query System**
-  - Powerful domain expressions for complex queries
-  - Fluent interface for query building
-  - Advanced filtering and sorting capabilities
-  - Efficient batch operations support
+- **Async Operations**
+  - Non-blocking database operations
+  - Async connection pooling
+  - Event-driven architecture
 
-- **Relationship Management**
-  - One-to-one, one-to-many, many-to-many relationships
-  - Lazy and eager loading strategies
-  - Cascade operations support
-  - Bidirectional relationship handling
+- **Type System**
+  - Runtime type checking
+  - Custom type converters
+  - Validation framework
 
-### Performance Features
 - **Connection Management**
-  - Smart connection pooling with Motor
-  - Automatic connection health monitoring
-  - Pool metrics and diagnostics
-  - Connection lifecycle management
+  - Smart connection pooling
+  - Automatic recovery
+  - Health monitoring
 
-- **Query Optimization**
-  - Automatic index management
-  - Query plan optimization
-  - Efficient batch operations
-  - Memory usage optimization
+- **Model System**
+  - Declarative models
+  - Field validation
+  - Relationship management
+  - Event hooks
 
-### Developer Tools
-- **Documentation**
-  - Comprehensive API documentation
-  - Best practices guides
-  - Code examples and tutorials
-  - Integration examples with popular frameworks
+### Advanced Features
 
-- **Development Support**
-  - Full IDE support with type hints
-  - Clear error messages and validation
-  - Debugging and logging utilities
-  - Testing utilities and fixtures
+- **Query Building**
+  - Type-safe queries
+  - Complex filters
+  - Aggregations
+  - Joins
 
-**Notes:**
-1. **Async Support**: EarnORM is built with async-first approach, while MongoEngine is sync-only
-2. **Type Safety**: EarnORM and Beanie provide full type hints and runtime type checking
-3. **GridFS**: EarnORM offers comprehensive GridFS support with streaming and metadata management
-4. **Relationships**: EarnORM provides full relationship support with lazy loading and cascade operations
-5. **Enterprise Features**: EarnORM includes advanced features like caching, events, and schema evolution
-6. **Developer Experience**: All ODMs provide good documentation, but IDE support varies
+- **Transaction Support**
+  - ACID compliance
+  - Nested transactions
+  - Savepoints
+  - Automatic rollback
 
-Choose EarnORM if you need:
-- Async-first development
-- Strong type safety
-- Advanced relationship features
-- Enterprise-grade features
-- Comprehensive GridFS support
-- Modern Python development experience
+## 📚 Documentation
 
-## 🏗 Project Status
-
-### ✅ Implemented
-- **Core Features**
-  - Async model system with Motor integration
-  - Field types and validation
-  - Basic relationship support
-  - Domain expressions for querying
-  - Collection and index management
-
-- **Performance Features**
-  - Connection pooling
-  - Basic query optimization
-  - Batch operations
-  - Memory management
-
-### 🚧 In Development
-- **Core Features**
-  - Advanced relationship features
-  - Complex query optimization
-  - Schema migration tools
-  - Event system enhancements
-
-- **Developer Tools**
-  - CLI tools for common tasks
-  - Additional testing utilities
-  - Documentation improvements
-  - More framework integration examples
-
-## 📝 Documentation
-
-### Getting Started
-- [Installation Guide](https://earnorm.readthedocs.io/installation)
-- [Quick Start Tutorial](https://earnorm.readthedocs.io/quickstart)
-- [Basic Concepts](https://earnorm.readthedocs.io/concepts)
-
-### Core Documentation
-- [Model System](https://earnorm.readthedocs.io/models)
-- [Query System](https://earnorm.readthedocs.io/queries)
-- [Relationships](https://earnorm.readthedocs.io/relationships)
-- [Field Types](https://earnorm.readthedocs.io/fields)
-
-### Advanced Topics
-- [Performance Optimization](https://earnorm.readthedocs.io/performance)
-- [Connection Management](https://earnorm.readthedocs.io/connections)
-- [Best Practices](https://earnorm.readthedocs.io/best-practices)
+- [Getting Started](docs/getting-started.md)
+- [User Guide](docs/user-guide.md)
+- [API Reference](docs/api-reference.md)
+- [Contributing Guide](CONTRIBUTING.md)
 
 ## 💡 Examples
 
 ### Basic Usage
+
 ```python
-import asyncio
-from earnorm import init, Model, fields
+from earnorm.base import BaseModel
+from earnorm.fields import StringField, IntegerField
 
-async def main():
-    # Initialize EarnORM
-    await init(
-        mongo_uri="mongodb://localhost:27017",
-        database="example"
-    )
+class User(BaseModel):
+    _name = 'data.user'
+    name = StringField(required=True)
+    age = IntegerField()
 
-    class User(Model):
-        _collection = "users"
-        
-        name = fields.String(required=True)
-        email = fields.Email(required=True, unique=True)
-        age = fields.Integer(required=True)
+    async def validate(self):
+        if self.age < 0:
+            raise ValueError("Age cannot be negative")
 
-    # Create user
-    user = await User.create({
-        "name": "John",
-        "email": "john@example.com",
-        "age": 25
-    })
+# Create record
+user = await User.create({
+    "name": "John Doe",
+    "age": 30
+})
 
-    # Query users
-    adult_users = await User.search([
-        ("age", ">=", 18),
-        ("status", "=", "active")
-    ])
-
-if __name__ == "__main__":
-    asyncio.run(main())
+# Query records
+users = await User.search([
+    ("age", ">=", 18),
+    ("name", "like", "John%")
+])
 ```
 
-### Relationship Example
+### FastAPI Integration with Lifecycle
+
 ```python
-class User(Model):
-    _collection = "users"
+from fastapi import FastAPI
+from earnorm.config import SystemConfig
+from earnorm.di import container
+
+app = FastAPI()
+
+@app.on_event("startup")
+async def startup():
+    # Load config
+    config = SystemConfig.load_env(".env")
     
-    name = fields.String(required=True)
-    posts = relationships.OneToMany("Post", "author_id")
-
-class Post(Model):
-    _collection = "posts"
+    # Initialize container
+    await container.init(config)
     
-    title = fields.String(required=True)
-    author = relationships.ManyToOne("User", "author_id")
+    # Register services
+    container.register("config", config)
 
-# Query related records
-user = await User.get(user_id)
-user_posts = await user.posts.filter(status="published").all()
+@app.on_event("shutdown")
+async def shutdown():
+    await container.destroy()
+
+@app.get("/users/{user_id}")
+async def get_user(user_id: str):
+    User = await container.get_model("data.user")
+    return await User.read(user_id)
 ```
 
-### Advanced Query Example
+### Django Integration
+
 ```python
-from earnorm.domain import DomainBuilder
+from django.apps import AppConfig
+from earnorm.config import SystemConfig
+from earnorm.di import container
 
-# Build complex query
-domain = (
-    DomainBuilder()
-    .field("age").greater_than(18)
-    .and_()
-    .open_group()
-        .field("role").in_(["admin", "manager"])
-        .or_()
-        .field("status").equals("active")
-    .close_group()
-    .build()
-)
-
-# Execute query
-users = await User.search(domain)
+class MyAppConfig(AppConfig):
+    name = 'myapp'
+    
+    async def ready(self):
+        # Initialize EarnORM
+        config = SystemConfig.load_env(".env")
+        await container.init(config)
 ```
 
-[See more examples in our documentation](https://earnorm.readthedocs.io/examples)
+### Flask Integration
+
+```python
+from flask import Flask
+from earnorm.config import SystemConfig
+from earnorm.di import container
+
+app = Flask(__name__)
+
+@app.before_first_request
+async def init_earnorm():
+    config = SystemConfig.load_env(".env")
+    await container.init(config)
+
+@app.teardown_appcontext
+async def shutdown_earnorm(exception=None):
+    await container.destroy()
+```
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+
+1. Fork the repository
+2. Create your feature branch
+3. Add tests for new features
+4. Submit a pull request
 
 ## 📄 License
 
-EarnORM is released under the Creative Commons Attribution-NonCommercial (CC BY-NC) license.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 📧 Contact
+## 📞 Contact
 
-- Email: [contact@earnorm.dev](mailto:contact@earnorm.dev)
-- GitHub Issues: [earnorm/issues](https://github.com/earnorm/earnorm/issues)
+- GitHub: [@earnbase](https://github.com/earnbaseio)
+- Email: contact@earnbase.io
+- Twitter: [@earnbase](https://twitter.com/earnbaseio)
 
-## ⭐️ Credits
+## 🙏 Credits
 
-EarnORM is developed by the EarnBase team and the open source community.
+EarnORM is built with inspiration from:
+- [Motor](https://motor.readthedocs.io/)
 
-## Connection Pool Module
-
-### Progress
-
-#### Completed
-- Protocol layer implementation (database, connection, operations)
-- Error handling and custom exceptions
-- MongoDB pool implementation with retry and circuit breaker
-- Redis pool implementation with retry and circuit breaker
-- Retry mechanism with exponential backoff
-- Circuit breaker implementation
-- Integration of retry and circuit breaker into pools
-- Basic MySQL & PostgreSQL implementations with NotImplementedError
-- Factory and Registry integration
-- Cleanup of unused files (context.py)
-
-#### In Progress
-- Type hints fixes and improvements
-- Documentation updates
-- Testing setup
-
-#### Pending (Future)
-- Monitoring and metrics
-- Redis pub/sub support
-- Performance optimization
-- Full MySQL & PostgreSQL implementations
-- CI/CD pipeline setup
-
-### Known Issues
-1. Type hints:
-   - Type variables `DB` and `COLL` need better definition
-   - Method overrides have incompatible return types
-   - MongoDB and Redis driver types need completion
-   - Dictionary key type mismatch in pool implementations
-
-2. Code Quality:
-   - Unused imports in protocol files
-   - Decorator type hints need improvement
-   - Some methods lack proper error handling
-
-### Next Steps
-1. **Immediate Tasks**:
-   - Fix type hints and linter errors
-   - Complete documentation with new examples
-   - Set up testing framework
-
-2. **Future Tasks**:
-   - Implement monitoring and metrics
-   - Add Redis pub/sub support
-   - Optimize performance
-   - Implement full MySQL & PostgreSQL support
-   - Set up CI/CD pipeline
-
-### Usage Examples
-
-```python
-# Using Factory Pattern
-from earnorm.pool.factory import PoolFactory
-
-# Create MongoDB Pool
-mongo_pool = PoolFactory.create(
-    "mongodb",
-    uri="mongodb://localhost:27017",
-    database="test",
-    min_size=1,
-    max_size=10,
-    retry_policy=RetryPolicy(
-        max_retries=3,
-        base_delay=1.0,
-        max_delay=5.0,
-    ),
-    circuit_breaker=CircuitBreaker(
-        failure_threshold=5,
-        reset_timeout=30.0,
-        half_open_timeout=5.0,
-    ),
-)
-
-# Create Redis Pool
-redis_pool = PoolFactory.create(
-    "redis",
-    uri="redis://localhost:6379",
-    min_size=1,
-    max_size=10,
-    retry_policy=RetryPolicy(
-        max_retries=3,
-        base_delay=1.0,
-        max_delay=5.0,
-    ),
-    circuit_breaker=CircuitBreaker(
-        failure_threshold=5,
-        reset_timeout=30.0,
-        half_open_timeout=5.0,
-    ),
-)
-
-# Using Registry Pattern
-from earnorm.pool.registry import PoolRegistry
-
-# Register custom pool implementation
-PoolRegistry.register("custom", CustomPool)
-
-# Get pool class
-pool_class = PoolRegistry.get("mongodb")
-pool = pool_class(uri="mongodb://localhost:27017")
-```
+Special thanks to all our [contributors](https://github.com/tuanle96/earnorm/graphs/contributors)!
