@@ -1,8 +1,26 @@
 [tool.poetry]
 name = "earnorm"
 version = "0.1.0"
-description = "EarnBase ORM"
+description = "EarnBase ORM - Async-first ORM for MongoDB and more"
 authors = ["EarnBase <dev@earnbase.com>"]
+readme = "README.md"
+homepage = "https://github.com/earnbase/earnorm"
+repository = "https://github.com/earnbase/earnorm"
+documentation = "https://earnorm.readthedocs.io"
+keywords = ["orm", "mongodb", "async", "database", "earnbase"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Framework :: AsyncIO",
+]
+packages = [
+    { include = "earnorm" }
+]
 
 [tool.poetry.dependencies]
 python = "^3.12"

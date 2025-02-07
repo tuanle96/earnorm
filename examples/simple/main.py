@@ -12,8 +12,7 @@ import logging
 from typing import Self
 
 import earnorm
-from earnorm import fields
-from earnorm.base.model import BaseModel
+from earnorm import BaseModel, fields
 
 # Configure logging
 logging.basicConfig(

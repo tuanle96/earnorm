@@ -145,6 +145,7 @@ from typing import Any, Optional
 import yaml
 
 from earnorm.base.env import Environment
+from earnorm.base.model.base import BaseModel
 from earnorm.config.data import SystemConfigData
 from earnorm.config.model import SystemConfig
 from earnorm.di import container
@@ -255,4 +256,4 @@ async def init(
 
 
 __version__ = "0.1.0"
-__all__ = ["init", "__version__"]
+__all__ = ["init", "__version__", "BaseModel"]
