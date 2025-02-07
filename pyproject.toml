@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "earnorm"
-version = "0.1.0"
+version = "0.1.1"
 description = "EarnBase ORM - Async-first ORM for MongoDB and more"
 authors = ["EarnBase <dev@earnbase.com>"]
 readme = "README.md"
