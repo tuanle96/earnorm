@@ -31,6 +31,7 @@ from typing import (
 )
 
 from earnorm.base.database.transaction.base import Transaction
+from earnorm.base.model.descriptors import AsyncFieldDescriptor
 from earnorm.fields import BaseField
 from earnorm.types.models import ModelProtocol
 
@@ -252,6 +253,7 @@ class ModelMeta(type):
     2. Injects default fields (id, created_at, updated_at)
     3. Injects environment from container
     4. Validates model configuration
+    5. Registers field descriptors
 
     Examples:
         >>> class User(metaclass=ModelMeta):
@@ -282,6 +284,8 @@ class ModelMeta(type):
             if isinstance(value, BaseField):
                 fields_dict[key] = value
                 value.name = key  # Set field name
+                # Register descriptor for field
+                attrs[key] = AsyncFieldDescriptor(value)  # type: ignore
 
         # Add default fields if not skipped
         skip_defaults = attrs.get("_skip_default_fields", False)
@@ -289,34 +293,43 @@ class ModelMeta(type):
             from earnorm.fields import DatetimeField, StringField
 
             # Always add id field first
-            fields_dict["id"] = StringField(
+            id_field = StringField(
                 required=True, readonly=True, help="Unique identifier for the record"
             )
+            id_field.name = "id"  # Set field name
+            fields_dict["id"] = id_field
+            attrs["id"] = AsyncFieldDescriptor(id_field)
 
             # Add other default fields
-            fields_dict.update(
-                {
-                    "created_at": DatetimeField(
-                        required=True,
-                        readonly=True,
-                        help="Record creation timestamp",
-                        auto_now_add=True,
-                    ),
-                    "updated_at": DatetimeField(
-                        required=True, help="Last update timestamp", auto_now=True
-                    ),
-                }
+            created_at = DatetimeField(
+                required=True,
+                readonly=True,
+                help="Record creation timestamp",
+                auto_now_add=True,
             )
+            created_at.name = "created_at"  # Set field name
+            updated_at = DatetimeField(
+                required=True, help="Last update timestamp", auto_now=True
+            )
+            updated_at.name = "updated_at"  # Set field name
+
+            fields_dict["created_at"] = created_at
+            fields_dict["updated_at"] = updated_at
+            attrs["created_at"] = AsyncFieldDescriptor(created_at)
+            attrs["updated_at"] = AsyncFieldDescriptor(updated_at)
         else:
             # Even if defaults are skipped, ensure id field exists
             from earnorm.fields import StringField
 
             if "id" not in fields_dict:
-                fields_dict["id"] = StringField(
+                id_field = StringField(
                     required=True,
                     readonly=True,
                     help="Unique identifier for the record",
                 )
+                id_field.name = "id"  # Set field name
+                fields_dict["id"] = id_field
+                attrs["id"] = AsyncFieldDescriptor(id_field)
 
         # Set __fields__ class variable
         attrs["__fields__"] = fields_dict

@@ -23,29 +23,12 @@ from abc import ABC, abstractmethod
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import (
-    Any,
-    Dict,
-    Generic,
-    List,
-    Literal,
-    Optional,
-    Type,
-    TypeVar,
-    Union,
-    get_args,
-    get_origin,
-    overload,
-)
+from typing import Any, Dict, Generic, List, Literal, Optional, Type, TypeVar, Union, get_args, get_origin, overload
 
 from earnorm.base.database.query.core.query import BaseQuery
 from earnorm.base.database.query.interfaces.domain import DomainExpression
-from earnorm.base.database.query.interfaces.operations.aggregate import (
-    AggregateProtocol as AggregateQuery,
-)
-from earnorm.base.database.query.interfaces.operations.join import (
-    JoinProtocol as JoinQuery,
-)
+from earnorm.base.database.query.interfaces.operations.aggregate import AggregateProtocol as AggregateQuery
+from earnorm.base.database.query.interfaces.operations.join import JoinProtocol as JoinQuery
 from earnorm.base.database.transaction.base import TransactionManager
 from earnorm.types import DatabaseModel
 

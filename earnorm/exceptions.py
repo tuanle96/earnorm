@@ -675,3 +675,28 @@ class CacheError(EarnORMError):
     """Raised when a cache operation fails."""
 
     pass
+
+
+class DeletedRecordError(EarnORMError):
+    """Error raised when attempting to access a deleted record.
+
+    This error is raised when trying to access attributes or perform operations
+    on a record that has been deleted from the database.
+
+    Examples:
+        >>> user = await User.browse("123")
+        >>> await user.unlink()  # Delete the record
+        >>> try:
+        ...     name = await user.name  # Raises DeletedRecordError
+        ... except DeletedRecordError as e:
+        ...     print(f"Cannot access deleted record: {e}")
+    """
+
+    def __init__(self, model_name: str) -> None:
+        """Initialize deleted record error.
+
+        Args:
+            model_name: Name of the model that was deleted
+        """
+        super().__init__(f"Cannot access attributes of deleted {model_name} record")
+        self.model_name = model_name

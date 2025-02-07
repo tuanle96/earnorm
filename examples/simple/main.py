@@ -125,18 +125,18 @@ async def main():
         # print(f"Slots new_user_one|prefetch_ids: {new_user_one._prefetch_ids}")
 
         # CREATE - Create a new user
-        test_data = [
-            {"name": "Alice Smith", "email": "alice@example.com", "age": 22},
-            {"name": "Bob Johnson", "email": "bob@example.com", "age": 19},
-            {"name": "Charlie Brown", "email": "charlie@example.com", "age": 25},
-            {"name": "David Wilson", "email": "david@example.com", "age": 17},
-            {"name": "Eve Anderson", "email": "eve@example.com", "age": 28},
-        ]
-        new_users = await User.create(test_data)
-        print(f"new_users: {new_users}")
+        # test_data = [
+        #     {"name": "Alice Smith", "email": "alice@example.com", "age": 22},
+        #     {"name": "Bob Johnson", "email": "bob@example.com", "age": 19},
+        #     {"name": "Charlie Brown", "email": "charlie@example.com", "age": 25},
+        #     {"name": "David Wilson", "email": "david@example.com", "age": 17},
+        #     {"name": "Eve Anderson", "email": "eve@example.com", "age": 28},
+        # ]
+        # new_users = await User.create(test_data)
+        # print(f"new_users: {new_users}")
 
         # test write
-        await new_users.write({"name": "Justin"})
+        # await new_users.write({"name": "Justin"})
 
         # first_new_users = new_users[0]
         # print(f"Slots first_new_users|ids: {first_new_users._ids}")
@@ -145,6 +145,24 @@ async def main():
         # print(f"Slots first_new_users|prefetch_ids: {first_new_users._prefetch_ids}")
 
         # search
+        justin_users = await User.search(domain=[])
+        logger.info(f"justin_users: {len(justin_users)} with ids {justin_users.ids}")
+
+        for justin in justin_users:
+            logger.info(f"justin: {await justin.name}")
+            logger.info(f"justin: {await justin.name}")
+
+            # change name
+            await justin.write({"name": "Justin 1"})
+
+            # print cache
+            logger.info(f"justin cache: {await justin.name}")
+
+            # delete
+            await justin.unlink()
+
+            # try to get name
+            logger.info(f"justin cache: {await justin.name}")
 
         # browse for first user to test prefetch
         # first_new_user = await User.browse("67a464fd7b6393d0963383d7")

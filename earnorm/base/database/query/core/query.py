@@ -284,3 +284,15 @@ class BaseQuery(Generic[ModelT], QueryProtocol[ModelT], ABC):
             List of window operations
         """
         return self._windows
+
+    def reset(self) -> "BaseQuery[ModelT]":
+        """Reset query."""
+        self._domain = None
+        self._fields = None
+        self._offset = None
+        self._limit = None
+        self._order_by = []
+        self._joins = []
+        self._aggregates = []
+        self._windows = []
+        return self

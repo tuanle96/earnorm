@@ -7,6 +7,7 @@ It includes features such as:
 2. CRUD operations
 3. Multiple database support
 4. Event system
+5. Field caching with async descriptors
 
 Examples:
     >>> # Define a model
@@ -106,11 +107,11 @@ from earnorm.base.database.query.interfaces.operations.join import (
 )
 from earnorm.base.database.transaction.base import Transaction
 from earnorm.base.env import Environment
-from earnorm.base.model.descriptors import FieldsDescriptor
 from earnorm.base.model.meta import ModelMeta
 from earnorm.constants import FIELD_MAPPING
 from earnorm.di import Container
-from earnorm.exceptions import DatabaseError, FieldValidationError
+from earnorm.exceptions import DatabaseError, DeletedRecordError, FieldValidationError
+from earnorm.fields.base import BaseField
 from earnorm.types import ValueType
 from earnorm.types.models import ModelProtocol
 
@@ -145,6 +146,30 @@ class LoggerProtocol(Protocol):
     def info(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
 
 
+class FieldsDescriptor:
+    """Descriptor for model fields.
+
+    This descriptor handles:
+    - Field registration
+    - Field inheritance
+    - Field access
+    """
+
+    def __get__(
+        self, instance: Optional["BaseModel"], owner: Type["BaseModel"]
+    ) -> Dict[str, BaseField[Any]]:
+        """Get fields dictionary.
+
+        Args:
+            instance: Model instance
+            owner: Model class
+
+        Returns:
+            Fields dictionary
+        """
+        return owner.__dict__.get("__fields__", {})
+
+
 class BaseModel(metaclass=ModelMeta):
     """Base model class with auto env injection.
 
@@ -153,6 +178,7 @@ class BaseModel(metaclass=ModelMeta):
     - Basic CRUD operations
     - Field validation and type checking
     - Implementation of ModelProtocol methods
+    - Field caching mechanism
 
     Examples:
         >>> class User(BaseModel):
@@ -167,6 +193,7 @@ class BaseModel(metaclass=ModelMeta):
         "_env",  # Environment instance
         "_name",  # Model name
         "_ids",  # Record IDs
+        "_cache",  # Field value cache
     )
 
     # Class variables (metadata)
@@ -190,9 +217,12 @@ class BaseModel(metaclass=ModelMeta):
             raise RuntimeError(
                 "Environment not initialized. Make sure earnorm.init() is called first"
             )
+
+        # Initialize all slots with default values
         object.__setattr__(self, "_env", env_instance)
         object.__setattr__(self, "_name", self._get_instance_name())
         object.__setattr__(self, "_ids", ())
+        object.__setattr__(self, "_cache", {})  # Initialize empty cache dictionary
 
         if not self._name:
             raise ValueError("Model must define _name attribute")
@@ -219,9 +249,35 @@ class BaseModel(metaclass=ModelMeta):
         return bool(self._ids)
 
     async def __getattr__(self, name: str) -> Any:
-        """Get attribute value directly from database."""
+        """Get attribute value directly from database with caching.
+
+        This method first checks the cache for the requested field value.
+        If not found in cache, it fetches from database and caches the result.
+
+        Args:
+            name: Field name to get
+
+        Returns:
+            Field value
+
+        Raises:
+            AttributeError: If field does not exist
+            DatabaseError: If database operation fails
+            DeletedRecordError: If trying to access attributes of a deleted record
+
+        Examples:
+            >>> user = User()
+            >>> name = await user.name  # Fetches from DB and caches
+            >>> name = await user.name  # Returns from cache
+            >>> await user.unlink()
+            >>> name = await user.name  # Raises DeletedRecordError
+        """
         logger.info(f"Getting attribute {name} for {self._name}")
         try:
+            # Check if record exists
+            if not self._ids:
+                raise DeletedRecordError(self._name)
+
             # Check if field exists
             if name not in self.__fields__:
                 logger.info(f"Field '{name}' not found in {self._name}")
@@ -229,10 +285,11 @@ class BaseModel(metaclass=ModelMeta):
                     f"'{self.__class__.__name__}' has no attribute '{name}'"
                 )
 
-            # Get first record ID
-            if not self._ids:
-                logger.info(f"No records in recordset for {self._name}")
-                return None
+            # Check cache first using direct slot access
+            cache = object.__getattribute__(self, "_cache")
+            if isinstance(cache, dict) and name in cache:
+                logger.info(f"Returning cached value for {name}")
+                return cast(Any, cache[name])
 
             record_id = self._ids[0]
             logger.info(f"Getting attribute {name} for {self._name}:{record_id}")
@@ -249,8 +306,16 @@ class BaseModel(metaclass=ModelMeta):
                 result.get(name), self._env.adapter.backend_type
             )
 
+            # Cache the value using direct slot access
+            if isinstance(cache, dict):
+                cache[name] = value
+                logger.info(f"Cached value for {name}")
+
             return value
 
+        except DeletedRecordError:
+            # Re-raise DeletedRecordError for deleted records
+            raise
         except Exception as e:
             logger.error(f"Failed to get attribute {name}: {str(e)}", exc_info=True)
             raise
@@ -268,6 +333,10 @@ class BaseModel(metaclass=ModelMeta):
         object.__setattr__(records, "_env", env)
         object.__setattr__(records, "_name", cls._get_instance_name())
         object.__setattr__(records, "_ids", tuple(ids))
+        object.__setattr__(
+            records, "_cache", {}
+        )  # Initialize empty cache for new instance
+
         return records
 
     @classmethod
@@ -289,6 +358,7 @@ class BaseModel(metaclass=ModelMeta):
     ) -> BaseQuery[ModelProtocol]:
         """Build query from domain."""
         query = await cls._env.adapter.query(cast(Type[ModelProtocol], cls))
+        query.reset()
         if domain:
             expr = DomainExpression(cast(List[Any], list(domain)))
             query = query.filter(expr.to_list())
@@ -379,6 +449,12 @@ class BaseModel(metaclass=ModelMeta):
     async def write(self, vals: Dict[str, Any]) -> Self:
         """Update records with values.
 
+        This method:
+        1. Validates values before update
+        2. Converts values to database format
+        3. Updates records in database
+        4. Invalidates cache for updated fields
+
         Args:
             vals: Values to update
 
@@ -387,6 +463,10 @@ class BaseModel(metaclass=ModelMeta):
 
         Raises:
             DatabaseError: If update fails
+
+        Examples:
+            >>> user = await User.browse("123")
+            >>> await user.write({"name": "John"})  # Updates and invalidates cache
         """
         if not self._ids:
             return self
@@ -401,11 +481,15 @@ class BaseModel(metaclass=ModelMeta):
             # Create domain expression for id filter
             domain_expr = DomainExpression([("id", "in", list(self._ids))])
 
+            # Update records
             await self._env.adapter.update(
                 cast(Type[ModelProtocol], type(self)),
                 domain_expr,
                 db_vals,
             )
+
+            # Clear cache for updated fields
+            self._clear_cache(list(vals.keys()))
 
             return self
 
@@ -494,6 +578,11 @@ class BaseModel(metaclass=ModelMeta):
     def id(self, value: str) -> None:
         """Set record ID."""
         self._ids = (value,)
+
+    @property
+    def ids(self) -> Tuple[str, ...]:
+        """Get record IDs."""
+        return self._ids
 
     def __iter__(self):
         """Iterate through records.
@@ -839,6 +928,9 @@ class BaseModel(metaclass=ModelMeta):
                     f"Deleted {deleted_count} records out of {len(self._ids)}"
                 )
 
+            # Clear cache before clearing recordset data
+            self._clear_cache()  # Clear all cache when record is deleted
+
             # Clear recordset data
             self._ids = ()
 
@@ -956,3 +1048,40 @@ class BaseModel(metaclass=ModelMeta):
             raise DatabaseError(
                 message=str(e), backend=cls._env.adapter.backend_type
             ) from e
+
+    def _clear_cache(self, fields: Optional[List[str]] = None) -> None:
+        """Clear cached values.
+
+        Args:
+            fields: List of fields to clear from cache. If None, clear all cache.
+
+        Examples:
+            >>> user = User()
+            >>> user._clear_cache()  # Clear all cache
+            >>> user._clear_cache(["name", "email"])  # Clear specific fields
+        """
+        try:
+            if fields:
+                # Access _cache trực tiếp và kiểm tra type
+                logger.info(f"Clearing cache for fields: {fields}")
+                try:
+                    cache = object.__getattribute__(self, "_cache")
+                except AttributeError:
+                    # Initialize cache if not exists
+                    object.__setattr__(self, "_cache", {})
+                    return
+
+                if not isinstance(cache, dict):
+                    object.__setattr__(self, "_cache", {})
+                    return
+
+                for field in fields:
+                    if field in cache:
+                        _ = cast(Dict[str, Any], cache).pop(field, None)
+                logger.info(f"Cache after clearing: {cache}")
+            else:
+                object.__setattr__(self, "_cache", {})
+        except Exception as e:
+            logger.warning(f"Failed to clear cache: {str(e)}")
+            # Initialize empty cache in case of error
+            object.__setattr__(self, "_cache", {})

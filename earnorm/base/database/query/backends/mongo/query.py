@@ -22,34 +22,15 @@ Examples:
 
 import asyncio
 import logging
-from typing import (
-    Any,
-    Callable,
-    Coroutine,
-    Dict,
-    List,
-    Optional,
-    Protocol,
-    Type,
-    TypeVar,
-    Union,
-    cast,
-)
+from typing import Any, Callable, Coroutine, Dict, List, Optional, Protocol, Type, TypeVar, Union, cast
 
 from bson import ObjectId
 from bson.errors import InvalidId
 from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorCommandCursor
 
 from earnorm.base.database.query.core.query import BaseQuery
-from earnorm.base.database.query.interfaces.domain import (
-    DomainExpression,
-    DomainItem,
-    DomainLeaf,
-    DomainNode,
-)
-from earnorm.base.database.query.interfaces.operations.aggregate import (
-    AggregateProtocol,
-)
+from earnorm.base.database.query.interfaces.domain import DomainExpression, DomainItem, DomainLeaf, DomainNode
+from earnorm.base.database.query.interfaces.operations.aggregate import AggregateProtocol
 from earnorm.base.database.query.interfaces.operations.join import JoinProtocol
 from earnorm.base.database.query.interfaces.operations.window import WindowProtocol
 from earnorm.base.database.query.interfaces.query import QueryProtocol
@@ -622,3 +603,12 @@ class MongoQuery(BaseQuery[ModelT]):
             pipeline.append({"$limit": self._limit})
 
         return pipeline
+
+    def reset(self) -> "MongoQuery[ModelT]":
+        self._filter = {}
+        self._projection = {}
+        self._sort = []
+        self._skip = 0
+        self._limit = 0
+        self._pipeline = []
+        return self
