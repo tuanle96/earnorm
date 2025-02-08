@@ -9,46 +9,22 @@ import logging
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import (
-    Any,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Protocol,
-    Type,
-    TypeVar,
-    Union,
-    cast,
-    get_args,
-    get_origin,
-    overload,
-)
+from typing import Any, Dict, List, Literal, Optional, Protocol, Type, TypeVar, Union, cast, overload
 
 from bson import ObjectId
 from bson.decimal128 import Decimal128
-from motor.motor_asyncio import (
-    AsyncIOMotorClient,
-    AsyncIOMotorCollection,
-    AsyncIOMotorDatabase,
-)
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection, AsyncIOMotorDatabase
 from pymongo.operations import DeleteOne, InsertOne, UpdateOne
 
 from earnorm.base.database.adapter import DatabaseAdapter, FieldType
 from earnorm.base.database.query.backends.mongo.converter import MongoConverter
-from earnorm.base.database.query.backends.mongo.operations.aggregate import (
-    MongoAggregate,
-)
+from earnorm.base.database.query.backends.mongo.operations.aggregate import MongoAggregate
 from earnorm.base.database.query.backends.mongo.operations.join import MongoJoin
 from earnorm.base.database.query.backends.mongo.query import MongoQuery
 from earnorm.base.database.query.core.query import BaseQuery
 from earnorm.base.database.query.interfaces.domain import DomainExpression
-from earnorm.base.database.query.interfaces.operations.aggregate import (
-    AggregateProtocol as AggregateQuery,
-)
-from earnorm.base.database.query.interfaces.operations.join import (
-    JoinProtocol as JoinQuery,
-)
+from earnorm.base.database.query.interfaces.operations.aggregate import AggregateProtocol as AggregateQuery
+from earnorm.base.database.query.interfaces.operations.join import JoinProtocol as JoinQuery
 from earnorm.base.database.transaction.backends.mongo import MongoTransactionManager
 from earnorm.di import container
 from earnorm.exceptions import DatabaseError
@@ -686,7 +662,28 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         field_type: FieldType,
         target_type: Optional[Type[T]] = None,
     ) -> T:
-        """Convert between MongoDB and Python types."""
+        """Convert value between database and Python types.
+
+        This method handles conversion between Python types and MongoDB types:
+        - ObjectId <-> str for IDs
+        - datetime <-> str for dates
+        - Decimal <-> str for decimals
+        - Enum <-> str for enums
+        - dict <-> str for JSON
+        - list <-> list for arrays
+        - relation IDs for relationships
+
+        Args:
+            value: Value to convert
+            field_type: Field type ("string", "integer", etc)
+            target_type: Target Python type
+
+        Returns:
+            Converted value
+
+        Raises:
+            ValueError: If conversion fails
+        """
         try:
             if value is None:
                 return None  # type: ignore
@@ -697,18 +694,33 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             if isinstance(value, Decimal128):
                 value = float(value.to_decimal())
 
-            # Get target type if not provided
-            if target_type is None:
-                target_type = TYPE_MAPPING.get(field_type, Any)  # type: ignore
+            # Handle relation fields
+            if field_type in ["many2one", "one2one"]:
+                # For many-to-one and one-to-one, store single ObjectId
+                if hasattr(value, "id"):
+                    return ObjectId(str(value.id))  # type: ignore
+                elif isinstance(value, str):
+                    return ObjectId(value)  # type: ignore
+                elif isinstance(value, ObjectId):
+                    return value  # type: ignore
+                raise ValueError("Cannot convert value to ObjectId")
 
-            # Validate type compatibility
-            expected_type = TYPE_MAPPING.get(field_type)
-            if expected_type and not issubclass(get_origin(target_type) or target_type, expected_type):  # type: ignore
-                raise TypeError(
-                    f"Target type {target_type} is not compatible with field type {field_type}"
-                )
+            elif field_type in ["one2many", "many2many"]:
+                # For one-to-many and many-to-many, store list of ObjectIds
+                if isinstance(value, list):
+                    return [
+                        (
+                            ObjectId(str(v.id))  # type: ignore
+                            if hasattr(v, "id")  # type: ignore
+                            else (
+                                ObjectId(v) if isinstance(v, str) else v  # type: ignore
+                            )
+                        )
+                        for v in value  # type: ignore
+                    ]  # type: ignore
+                raise ValueError("Cannot convert value to ObjectId list")
 
-            # Convert based on field type
+            # Handle other field types
             if field_type == "string":
                 return str(value)  # type: ignore
             elif field_type == "integer":
@@ -733,29 +745,18 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                 return value  # type: ignore
             elif field_type == "enum" and target_type:
                 if isinstance(value, target_type):
-                    return value  # type: ignore
+                    return value
                 return target_type(value)  # type: ignore
             elif field_type == "array":
                 if isinstance(value, str):
                     value = json.loads(value)
                 if not isinstance(value, (list, tuple)):
-                    raise ValueError(f"Cannot convert {value} to array")
-
-                # Get item type from List[T]
-                item_type = get_args(target_type)[0] if get_args(target_type) else Any
-                if item_type is None or item_type == Any:
-                    return list(value)  # type: ignore
-
-                # Convert each item using the specified type
-                converted: List[T] = [
-                    item_type(item) if item is not None else None  # type: ignore
-                    for item in value  # type: ignore
-                ]
-                return converted  # type: ignore
+                    raise ValueError(f"Expected list or tuple, got {type(value)}")
+                return list(value)  # type: ignore
             elif field_type == "json":
                 if isinstance(value, str):
-                    return json.loads(value)  # type: ignore
-                return value  # type: ignore
+                    return json.loads(value)
+                return value
             else:
                 raise ValueError(f"Unsupported field type: {field_type}")
 

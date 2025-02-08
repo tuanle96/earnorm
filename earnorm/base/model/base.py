@@ -169,7 +169,6 @@ from earnorm.exceptions import (
     ModelNotFoundError,
 )
 from earnorm.fields.base import BaseField
-from earnorm.fields.relation import RelationField
 from earnorm.types import ValueType
 from earnorm.types.models import ModelProtocol
 

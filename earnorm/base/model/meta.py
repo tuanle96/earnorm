@@ -437,6 +437,9 @@ class ModelMeta(type):
             env = Environment.get_instance()
             if env:
                 setattr(cls, "_env", env)
+                # Set environment for fields
+                for field in fields_dict.values():
+                    setattr(field, "env", env)
         except Exception as e:
             logger.error(f"Failed to inject environment: {e}")
 

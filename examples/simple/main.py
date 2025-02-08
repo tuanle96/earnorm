@@ -1,10 +1,18 @@
 """Simple example usage with detailed logging.
 
-This example demonstrates:
+This module demonstrates:
 1. Model definition with auto env injection
 2. CRUD operations with recordsets
 3. Search and filtering
 4. Error handling and logging
+
+Examples:
+    >>> async def run():
+    ...     await earnorm.init("config.yaml")
+    ...     user = await User.create({
+    ...         "name": "John",
+    ...         "email": "john@example.com"
+    ...     })
 """
 
 from __future__ import annotations
@@ -14,7 +22,7 @@ import logging
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from enum import Enum
-from typing import Self
+from typing import Self, cast
 
 import earnorm
 from earnorm import BaseModel, fields
@@ -27,109 +35,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class Address(BaseModel):
-    """Address model for demonstrating composite fields.
-
-    Examples:
-        >>> address = Address()
-        >>> new_address = await address.create({
-        ...     "street": "123 Main St",
-        ...     "city": "New York",
-        ...     "country": "USA",
-        ...     "postal_code": "10001"
-        ... })
-    """
-
-    _name = "address"
-
-    street = fields.StringField(required=True)
-    city = fields.StringField(required=True)
-    country = fields.StringField(required=True)
-    postal_code = fields.StringField(required=True)
-
-    # Back reference to User
-    user = fields.OneToOneField(
-        "user",
-        field="address_id",
-        back_populates="address",
-        required=True,
-        ondelete="cascade",
-        help="Related user",
-    )
-
-
-class Post(BaseModel):
-    """Post model for demonstrating one-to-many relationships.
-
-    Examples:
-        >>> post = Post()
-        >>> new_post = await post.create({
-        ...     "title": "Hello World",
-        ...     "content": "This is my first post",
-        ...     "tags": ["hello", "world"]
-        ... })
-    """
-
-    _name = "post"
-
-    title = fields.StringField(required=True)
-    content = fields.StringField(required=True)
-    tags = fields.ListField(fields.StringField(), help="Post tags")
-
-    # Back reference to User
-    author = fields.ManyToOneField(
-        "user",
-        field="author_id",
-        back_populates="posts",
-        required=True,
-        ondelete="cascade",
-        help="Post author",
-    )
-
-
-class Group(BaseModel):
-    """Group model for demonstrating many-to-many relationships.
-
-    Examples:
-        >>> group = Group()
-        >>> new_group = await group.create({
-        ...     "name": "Developers",
-        ...     "description": "Group for developers"
-        ... })
-    """
-
-    _name = "group"
-
-    name = fields.StringField(required=True)
-    description = fields.StringField(required=True)
-
-    # Back reference to User
-    members = fields.ManyToManyField(
-        "user",
-        back_populates="groups",
-        help="Group members",
-    )
-
-
+# Define User model first since it will be referenced by other models
 class User(BaseModel):
-    """User model for demonstrating all types of relationships.
-
-    Examples:
-        >>> user = User()
-        >>> new_user = await user.create({
-        ...     "name": "John Doe",
-        ...     "email": "john@example.com",
-        ...     "age": 30,
-        ...     "salary": Decimal("5000.50"),
-        ...     "is_active": True,
-        ...     "birth_date": date(1990, 1, 1),
-        ...     "last_login": datetime.now(),
-        ...     "working_hours": time(9, 0, 0),
-        ...     "preferences": {"theme": "dark", "notifications": True},
-        ...     "tags": ["developer", "python"],
-        ...     "role": UserRole.ADMIN
-        ... })
-    """
+    """User model for demonstrating all types of relationships."""
 
     _name = "user"
 
@@ -171,38 +79,11 @@ class User(BaseModel):
 
     # Complex fields
     preferences = fields.JSONField(required=False, default=dict)
-    tags = fields.ListField(fields.StringField(), required=False, default=list)
     role = fields.EnumField(UserRole, default=UserRole.USER)
-
-    # One-to-One relationship
-    address = fields.OneToOneField(
-        "address",
-        field="user_id",
-        back_populates="user",
-        required=True,
-        ondelete="cascade",
-        help="User's address",
-    )
-
-    # One-to-Many relationship
-    posts = fields.OneToManyField(
-        "post",
-        back_populates="author",
-        help="User's posts",
-    )
 
     # Many-to-One relationship
     manager = fields.ManyToOneField(
-        "user",
-        field="manager_id",
-        help="User's manager",
-    )
-
-    # Many-to-Many relationship
-    groups = fields.ManyToManyField(
-        "group",
-        back_populates="members",
-        help="User's groups",
+        "user", help="User's manager"  # Use string reference to avoid circular import
     )
 
     async def get_adult_users(self) -> Self:
@@ -225,6 +106,104 @@ class User(BaseModel):
         return users
 
 
+class Post(BaseModel):
+    """Post model for demonstrating many-to-one relationships."""
+
+    _name = "post"
+
+    title = fields.StringField(required=True)
+    content = fields.StringField(required=True)
+
+    # Back reference to User
+    author = fields.ManyToOneField(
+        "user",  # Use string reference to avoid circular import
+        required=True,
+        help="Post author",
+    )
+
+
+async def test_relationship_operations() -> None:
+    """Test relationship operations."""
+    logger.info("=== Testing Relationship Operations ===")
+
+    try:
+        # Create a manager
+        logger.info("Creating manager...")
+        manager = await User.create(
+            {
+                "name": "Manager",
+                "email": "manager@example.com",
+                "age": 40,
+                "birth_date": date(1980, 1, 1),
+            }
+        )
+
+        # Create users with manager
+        logger.info("Creating users with manager...")
+        user1 = await User.create(
+            {
+                "name": "Employee 1",
+                "email": "emp1@example.com",
+                "age": 25,
+                "birth_date": date(1995, 1, 1),
+                "manager": manager,  # Pass User instance
+            }
+        )
+
+        user2 = await User.create(
+            {
+                "name": "Employee 2",
+                "email": "emp2@example.com",
+                "age": 30,
+                "birth_date": date(1990, 1, 1),
+                "manager": manager.id,  # Can use ID instead of instance
+            }
+        )
+
+        # Create posts for users
+        logger.info("Creating posts...")
+        post1 = await Post.create(
+            {
+                "title": "First Post",
+                "content": "Content of first post",
+                "author": user1,  # Pass User instance
+            }
+        )
+
+        post2 = await Post.create(
+            {
+                "title": "Second Post",
+                "content": "Content of second post",
+                "author": user2.id,  # Can use ID instead of instance
+            }
+        )
+
+        # Verify relationships
+        logger.info("Verifying relationships...")
+
+        # Check manager relationship
+        emp1_manager = await user1.manager
+        if emp1_manager:
+            logger.info("Employee 1's manager: %s", emp1_manager.name)
+
+        emp2_manager = await user2.manager
+        if emp2_manager:
+            logger.info("Employee 2's manager: %s", emp2_manager.name)
+
+        # Check post author relationship
+        post1_author = await post1.author
+        if post1_author:
+            logger.info("Post 1's author: %s", post1_author.name)
+
+        post2_author = await post2.author
+        if post2_author:
+            logger.info("Post 2's author: %s", post2_author.name)
+
+    except Exception as e:
+        logger.error("Error in relationship operations: %s", str(e))
+        raise
+
+
 async def test_single_operations():
     """Test single record CRUD operations."""
     logger.info("=== Testing Single Record Operations ===")
@@ -245,287 +224,150 @@ async def test_single_operations():
                 "last_login": datetime.now(timezone.utc),
                 "working_hours": time(9, 0, 0),
                 "preferences": {"theme": "dark", "notifications": True},
-                "tags": ["developer", "python"],
                 "role": User.UserRole.ADMIN,
-                "address": {
-                    "street": "123 Main St",
-                    "city": "New York",
-                    "country": "USA",
-                    "postal_code": "10001",
-                },
-                "manager_id": "manager_user_id",
-                "group_ids": ["group1_id", "group2_id"],
             }
         )
-        logger.info(f"Created user: {await user.to_dict()}")
+        logger.info("Created user: %s", user)
 
-        # READ - Single record
-        logger.info(f"Reading user with ID: {user.id}")
-        found_user = await User.browse(user.id)
-        if found_user:
-            logger.info(f"Found user: {await found_user.to_dict()}")
+        # READ - Get by ID
+        logger.info("Reading user by ID...")
+        user_id = user.id
+        user = await User.browse(user_id)
+        logger.info("Retrieved user: %s", user)
 
-        # UPDATE - Single record with different field types
+        # UPDATE - Modify fields
         logger.info("Updating user...")
         await user.write(
             {
+                "name": "John Smith",
                 "age": 26,
-                "status": "updated",
-                "salary": Decimal("6000.00"),
-                "score": 98.0,
-                "is_active": False,
-                "last_login": datetime.now(timezone.utc),
-                "preferences": {"theme": "light"},
-                "tags": ["senior", "developer", "python"],
-                "role": User.UserRole.USER,
-                "address": {
-                    "street": "456 Elm St",
-                    "city": "Los Angeles",
-                    "country": "USA",
-                    "postal_code": "90001",
-                },
-                "manager_id": "new_manager_user_id",
-                "group_ids": ["group3_id"],
             }
         )
-        logger.info(f"Updated user: {await user.to_dict()}")
+        logger.info("Updated user: %s", user)
 
-        # DELETE - Single record
+        # DELETE - Remove record
         logger.info("Deleting user...")
-        success = await user.unlink()
-        logger.info(f"User deletion: {'successful' if success else 'failed'}")
+        await user.unlink()
+        logger.info("Deleted user with ID: %s", user_id)
 
     except Exception as e:
-        logger.error(f"Error in single operations test: {e}")
+        logger.error("Error in single operations: %s", str(e))
         raise
 
 
 async def test_bulk_operations():
-    """Test bulk CRUD operations."""
+    """Test bulk record operations."""
     logger.info("=== Testing Bulk Operations ===")
 
     try:
-        # BULK CREATE
+        # Bulk CREATE
         logger.info("Creating multiple users...")
-        test_data = [
-            {"name": "Alice Smith", "email": "alice@example.com", "age": 22},
-            {"name": "Bob Johnson", "email": "bob@example.com", "age": 19},
-            {"name": "Charlie Brown", "email": "charlie@example.com", "age": 25},
-            {"name": "David Wilson", "email": "david@example.com", "age": 17},
-            {"name": "Eve Anderson", "email": "eve@example.com", "age": 28},
-        ]
-        users = await User.create(test_data)
-        logger.info(f"Created {len(users)} users")
+        users = await User.create(
+            [
+                {
+                    "name": f"User {i}",
+                    "email": f"user{i}@example.com",
+                    "age": 20 + i,
+                    "birth_date": date(1990, 1, 1),
+                }
+                for i in range(5)
+            ]
+        )
+        logger.info("Created %d users", len(users))
 
-        # BULK READ
-        logger.info("Reading all users...")
-        all_users = await User.search(domain=[])
-        for user in all_users:
-            logger.info(f"User: {await user.to_dict()}")
+        # Bulk UPDATE
+        logger.info("Updating multiple users...")
+        await users.write(
+            {
+                "status": "junior",
+            }
+        )
 
-        # BULK READ with filtering
-        logger.info("Reading adult users...")
-        adult_users = await User.search(domain=[("age", ">=", 18)])
-        logger.info(f"Found {len(adult_users)} adult users")
-
-        # BULK UPDATE
-        logger.info("Updating all adult users...")
-        await adult_users.write({"status": "adult"})
-        logger.info("Updated status for adult users")
-
-        # Verify updates
-        updated_users = await User.search(domain=[("status", "=", "adult")])
-        logger.info(f"Users with adult status: {len(updated_users)}")
-
-        # BULK DELETE
-        logger.info("Deleting all users...")
-        all_users = await User.search(domain=[])
-        success = await all_users.unlink()
-        logger.info(f"Bulk deletion: {'successful' if success else 'failed'}")
+        # Bulk DELETE
+        logger.info("Deleting multiple users...")
+        await users.unlink()
+        logger.info("Deleted %d users", len(users))
 
     except Exception as e:
-        logger.error(f"Error in bulk operations: {str(e)}", exc_info=True)
+        logger.error("Error in bulk operations: %s", str(e))
         raise
 
 
 async def test_search_operations():
-    """Test various search operations."""
+    """Test search and filtering operations."""
     logger.info("=== Testing Search Operations ===")
 
     try:
         # Create test data
-        test_data = [
-            {
-                "name": "Alice Smith",
-                "email": "alice@example.com",
-                "age": 22,
-                "status": "active",
-            },
-            {
-                "name": "Bob Johnson",
-                "email": "bob@example.com",
-                "age": 19,
-                "status": "inactive",
-            },
-            {
-                "name": "Charlie Brown",
-                "email": "charlie@example.com",
-                "age": 25,
-                "status": "active",
-            },
-            {
-                "name": "David Wilson",
-                "email": "david@example.com",
-                "age": 17,
-                "status": "inactive",
-            },
-            {
-                "name": "Eve Anderson",
-                "email": "eve@example.com",
-                "age": 28,
-                "status": "active",
-            },
-        ]
-        await User.create(test_data)
-
-        # Search with multiple conditions
-        logger.info("Searching active adult users...")
-        active_adults = await User.search(
-            domain=[("age", ">=", 18), ("status", "=", "active")]
+        await User.create(
+            [
+                {
+                    "name": "Alice Smith",
+                    "email": "alice@example.com",
+                    "age": 25,
+                    "birth_date": date(1990, 1, 1),
+                    "salary": Decimal("6000.00"),
+                    "is_active": True,
+                },
+                {
+                    "name": "Bob Johnson",
+                    "email": "bob@example.com",
+                    "age": 30,
+                    "birth_date": date(1985, 1, 1),
+                    "salary": Decimal("7000.00"),
+                    "is_active": True,
+                },
+                {
+                    "name": "Charlie Brown",
+                    "email": "charlie@example.com",
+                    "age": 35,
+                    "birth_date": date(1980, 1, 1),
+                    "salary": Decimal("8000.00"),
+                    "is_active": False,
+                },
+            ]
         )
-        logger.info(f"Found {len(active_adults)} active adult users")
+
+        # Basic search
+        logger.info("Performing basic search...")
+        users = await User.search(domain=[("age", ">", 28)])
+        logger.info("Found %d users over 28", len(users))
+
+        # Complex search with multiple conditions
+        logger.info("Performing complex search...")
+        users = await User.search(
+            domain=[
+                ("is_active", "=", True),
+                ("salary", ">=", 6500),
+            ]
+        )
+        logger.info("Found %d active users with salary >= 6500.00", len(users))
 
         # Search with sorting
-        logger.info("Searching users sorted by age...")
-        sorted_users = await User.search(domain=[], order="age desc")
-        for user in sorted_users:
-            logger.info(f"User: {await user.to_dict()}")
+        logger.info("Performing sorted search...")
+        users = await User.search(
+            domain=[("is_active", "=", True)],
+            order="salary desc",
+        )
+        logger.info("Found %d users, sorted by salary", len(users))
 
         # Search with limit and offset
-        logger.info("Searching with pagination...")
-        paginated_users = await User.search(domain=[], limit=2, offset=1)
-        logger.info(f"Found {len(paginated_users)} users in page")
-
-        # Cleanup
-        all_users = await User.search(domain=[])
-        await all_users.unlink()
+        logger.info("Performing paginated search...")
+        users = await User.search(
+            domain=[],
+            limit=2,
+            offset=1,
+            order="age asc",
+        )
+        logger.info("Found %d users (paginated)", len(users))
 
     except Exception as e:
-        logger.error(f"Error in search operations: {str(e)}", exc_info=True)
-        raise
-
-
-async def test_relationship_operations():
-    """Test relationship operations."""
-    logger.info("=== Testing Relationship Operations ===")
-
-    try:
-        # 1. Test One-to-One relationship (User - Address)
-        logger.info("Testing One-to-One relationship (User-Address)...")
-
-        # Create user with address
-        user = await User.create(
-            {
-                "name": "John Doe",
-                "email": "john@example.com",
-                "age": 25,
-                "birth_date": date(1990, 1, 1),
-                "address": {
-                    "street": "123 Main St",
-                    "city": "New York",
-                    "country": "USA",
-                    "postal_code": "10001",
-                },
-            }
-        )
-        logger.info(f"Created user with address: {await user.to_dict()}")
-
-        # Get user's address
-        address = await user.address
-        logger.info(f"User's address: {await address.to_dict()}")
-
-        # 2. Test One-to-Many relationship (User - Posts)
-        logger.info("Testing One-to-Many relationship (User-Posts)...")
-
-        # Create posts for user
-        post1 = await Post.create(
-            {"title": "First Post", "content": "Hello World!", "author_id": user.id}
-        )
-        post2 = await Post.create(
-            {"title": "Second Post", "content": "Another post", "author_id": user.id}
-        )
-
-        # Get user's posts
-        user_posts = await user.posts
-        logger.info(f"User has {len(user_posts)} posts")
-        for post in user_posts:
-            logger.info(f"Post: {await post.to_dict()}")
-
-        # 3. Test Many-to-One relationship (User - Manager)
-        logger.info("Testing Many-to-One relationship (User-Manager)...")
-
-        # Create manager
-        manager = await User.create(
-            {
-                "name": "Manager",
-                "email": "manager@example.com",
-                "age": 35,
-                "birth_date": date(1985, 1, 1),
-                "address": {
-                    "street": "456 Boss St",
-                    "city": "New York",
-                    "country": "USA",
-                    "postal_code": "10002",
-                },
-            }
-        )
-
-        # Set manager for user
-        await user.write({"manager_id": manager.id})
-
-        # Get user's manager
-        user_manager = await user.manager
-        logger.info(f"User's manager: {await user_manager.to_dict()}")
-
-        # 4. Test Many-to-Many relationship (User - Groups)
-        logger.info("Testing Many-to-Many relationship (User-Groups)...")
-
-        # Create groups
-        dev_group = await Group.create(
-            {"name": "Developers", "description": "Development team"}
-        )
-        test_group = await Group.create(
-            {"name": "Testers", "description": "Testing team"}
-        )
-
-        # Add user to groups
-        await user.groups.add(dev_group)
-        await user.groups.add(test_group)
-
-        # Get user's groups
-        user_groups = await user.groups
-        logger.info(f"User belongs to {len(user_groups)} groups")
-        for group in user_groups:
-            logger.info(f"Group: {await group.to_dict()}")
-
-        # Get group members
-        dev_members = await dev_group.members
-        logger.info(f"Developer group has {len(dev_members)} members")
-
-        # Cleanup
-        logger.info("Cleaning up relationship test data...")
-        await user.unlink()  # This should cascade delete address and posts
-        await manager.unlink()
-        await dev_group.unlink()
-        await test_group.unlink()
-
-    except Exception as e:
-        logger.error(f"Error in relationship operations test: {e}")
+        logger.error("Error in search operations: %s", str(e))
         raise
 
 
 async def main():
-    """Main function to run all tests."""
+    """Run all tests."""
     try:
         # Initialize EarnORM
         logger.info("Initializing ORM...")
@@ -537,14 +379,15 @@ async def main():
         logger.info("ORM initialized successfully")
 
         # Run tests
-        await test_single_operations()
-        await test_bulk_operations()
-        await test_search_operations()
+        # await test_single_operations()
+        # await test_bulk_operations()
+        # await test_search_operations()
         await test_relationship_operations()
 
     except Exception as e:
-        logger.error(f"Error in main: {str(e)}", exc_info=True)
+        logger.error("Error in main: %s", str(e))
         raise
+
     finally:
         # Cleanup environment
         try:

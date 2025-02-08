@@ -489,6 +489,10 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
         if value is None:
             return None
 
+        # Convert date to datetime if needed
+        if type(value) is date and type(value) is not datetime:
+            value = datetime.combine(value, time())
+
         # Handle timezone
         if self.use_tz:
             if value.tzinfo is None:
