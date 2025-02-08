@@ -162,8 +162,14 @@ from earnorm.base.env import Environment
 from earnorm.base.model.meta import ModelMeta
 from earnorm.constants import FIELD_MAPPING
 from earnorm.di import Container
-from earnorm.exceptions import DatabaseError, DeletedRecordError, FieldValidationError
+from earnorm.exceptions import (
+    DatabaseError,
+    DeletedRecordError,
+    FieldValidationError,
+    ModelNotFoundError,
+)
 from earnorm.fields.base import BaseField
+from earnorm.fields.relation import RelationField
 from earnorm.types import ValueType
 from earnorm.types.models import ModelProtocol
 
@@ -357,6 +363,14 @@ class BaseModel(metaclass=ModelMeta):
         """
         logger.info(f"Getting attribute {name} for {self._name}")
         try:
+            # Skip slot attributes
+            if name in self.__slots__:
+                return object.__getattribute__(self, name)
+
+            # Skip id/ids properties
+            if name in ("id", "ids"):
+                return object.__getattribute__(self, name)
+
             # Check if record exists
             if not self._ids:
                 raise DeletedRecordError(self._name)
@@ -951,12 +965,23 @@ class BaseModel(metaclass=ModelMeta):
         db_vals: Dict[str, Any] = {}
         backend = cls._env.adapter.backend_type
 
-        # Only convert fields that are in vals
+        # Convert fields that are in vals
         for name, value in vals.items():
             if name in cls.__fields__:
                 field = cls.__fields__[name]
                 if not field.readonly:
                     db_vals[name] = await field.to_db(value, backend)
+
+        # Handle auto fields for creation
+        from earnorm.fields.primitive.datetime import DateTimeField
+
+        for name, field in cls.__fields__.items():
+            if (
+                name not in db_vals
+                and isinstance(field, DateTimeField)
+                and field.auto_now_add
+            ):
+                db_vals[name] = await field.to_db(None, backend)
 
         # Always update updated_at field if it exists
         if "updated_at" in cls.__fields__ and "updated_at" not in vals:
@@ -1168,3 +1193,51 @@ class BaseModel(metaclass=ModelMeta):
             logger.warning(f"Failed to clear cache: {str(e)}")
             # Initialize empty cache in case of error
             object.__setattr__(self, "_cache", {})
+
+    def __init_subclass__(cls, **kwargs):  # type: ignore
+        """Initialize model subclass.
+
+        This method is called when a model class is defined.
+        It handles:
+        - Model registration via ModelMeta
+        - Field setup
+        - Relationship resolution
+        """
+        super().__init_subclass__(**kwargs)
+
+        # Setup fields and track dependencies
+        for name, field in cls.__dict__.items():
+            if isinstance(field, RelationField):
+                # Setup field
+                field.setup(name, cls._name)  # type: ignore
+
+    @classmethod
+    async def get_model(cls, name: str) -> Optional[Type["BaseModel"]]:
+        """Get model class by name.
+
+        Args:
+            name: Model name
+
+        Returns:
+            Optional[Type[BaseModel]]: Model class if found, None otherwise
+        """
+        env = cls._env
+        return await env.get_model(name)  # type: ignore
+
+    @classmethod
+    async def get_model_or_raise(cls, name: str) -> Type["BaseModel"]:
+        """Get model class by name or raise error.
+
+        Args:
+            name: Model name
+
+        Returns:
+            Type[BaseModel]: Model class
+
+        Raises:
+            ModelNotFoundError: If model is not found
+        """
+        model = await cls.get_model(name)
+        if model is None:
+            raise ModelNotFoundError(f"Model '{name}' not found", field_name=name)
+        return model

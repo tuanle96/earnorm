@@ -364,25 +364,30 @@ class ModelMeta(type):
 
         # Get fields from class attributes
         fields_dict: Dict[str, BaseField[Any]] = {}
+
+        # Don't wrap slot attributes and properties
+        skip_wrap = set(attrs.get("__slots__", ())) | {"id", "ids"}
+
+        # Wrap fields with AsyncFieldDescriptor
         for key, value in list(attrs.items()):
-            if isinstance(value, BaseField):
-                fields_dict[key] = value
-                value.name = key  # Set field name
-                # Register descriptor for field
+            if isinstance(value, BaseField) and key not in skip_wrap:
                 attrs[key] = AsyncFieldDescriptor(value)  # type: ignore
+                value.name = key  # Set field name
+                fields_dict[key] = value
 
         # Add default fields if not skipped
         skip_defaults = attrs.get("_skip_default_fields", False)
         if not skip_defaults:
             from earnorm.fields import DatetimeField, StringField
 
-            # Always add id field first
+            # Add id field to fields_dict but don't wrap with AsyncFieldDescriptor
             id_field = StringField(
                 required=True, readonly=True, help="Unique identifier for the record"
             )
             id_field.name = "id"  # Set field name
             fields_dict["id"] = id_field
-            attrs["id"] = AsyncFieldDescriptor(id_field)
+            # Don't wrap id with AsyncFieldDescriptor
+            # attrs["id"] remains as property from BaseModel
 
             # Add other default fields
             created_at = DatetimeField(
@@ -391,16 +396,20 @@ class ModelMeta(type):
                 help="Record creation timestamp",
                 auto_now_add=True,
             )
-            created_at.name = "created_at"  # Set field name
+            created_at.name = "created_at"
             updated_at = DatetimeField(
                 required=True, help="Last update timestamp", auto_now=True
             )
-            updated_at.name = "updated_at"  # Set field name
+            updated_at.name = "updated_at"
 
             fields_dict["created_at"] = created_at
             fields_dict["updated_at"] = updated_at
-            attrs["created_at"] = AsyncFieldDescriptor(created_at)
-            attrs["updated_at"] = AsyncFieldDescriptor(updated_at)
+
+            # Only wrap non-id fields with AsyncFieldDescriptor
+            if "created_at" not in skip_wrap:
+                attrs["created_at"] = AsyncFieldDescriptor(created_at)
+            if "updated_at" not in skip_wrap:
+                attrs["updated_at"] = AsyncFieldDescriptor(updated_at)
         else:
             # Even if defaults are skipped, ensure id field exists
             from earnorm.fields import StringField

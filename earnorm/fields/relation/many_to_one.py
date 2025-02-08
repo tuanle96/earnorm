@@ -13,7 +13,8 @@ It supports:
 Examples:
     >>> class User(Model):
     ...     department = ManyToOneField(
-    ...         "Department",
+    ...         "department",  # Use _name of model, not class name
+    ...         field="department_id",
     ...         ondelete="cascade",
     ...         domain=[("active", "=", True)],
     ...         context={"show_archived": False}
@@ -25,10 +26,15 @@ Examples:
     ...     )
 """
 
-from typing import Any, Final, Literal, Optional, Type, Union, cast
+from typing import Any, Dict, Final, Literal, Optional, TypeVar
 
 from earnorm.exceptions import FieldValidationError
-from earnorm.fields.relation.base import Context, Domain, RelationField
+from earnorm.fields.relation.base import (
+    Context,
+    Domain,
+    RelatedModelProtocol,
+    RelationField,
+)
 from earnorm.fields.relation.one_to_many import OneToManyField
 from earnorm.types.fields import ComparisonOperator
 
@@ -37,11 +43,14 @@ OnDeleteAction = Literal["cascade", "set null", "restrict"]
 DEFAULT_ONDELETE: Final[OnDeleteAction] = "set null"
 DEFAULT_CONTEXT: Final[Context] = {}
 
+# Type variable for model type
+M = TypeVar("M", bound=RelatedModelProtocol[Any])
 
-class ManyToOneField(RelationField[Any]):
+
+class ManyToOneField(RelationField[M]):
     """Field for many-to-one relationships.
 
-    This field type handles many-to-one relationships, with support for:
+    This class handles many-to-one relationships, with support for:
     - Back references
     - Cascade operations
     - Lazy loading
@@ -51,21 +60,20 @@ class ManyToOneField(RelationField[Any]):
     - Context
     - Comparison operations
 
-    Attributes:
-        model_ref: Referenced model class or name
-        ondelete: Action to take when referenced record is deleted
-        back_populates: Name of back reference field
-        cascade: Whether to cascade operations
-        lazy_load: Whether to load related models lazily
-        domain: Domain for filtering related records
-        context: Context for related records
+    Examples:
+        >>> class User(Model):
+        ...     department = ManyToOneField(
+        ...         "department",  # Use _name of model, not class name
+        ...         field="department_id",
+        ...         ondelete="cascade",
+        ...         domain=[("active", "=", True)],
+        ...         context={"show_archived": False}
+        ...     )
     """
-
-    model: Any  # Parent model instance
 
     def __init__(
         self,
-        model_ref: Union[str, Type[Any]],
+        model_ref: str,
         *,
         ondelete: OnDeleteAction = DEFAULT_ONDELETE,
         back_populates: Optional[str] = None,
@@ -78,7 +86,7 @@ class ManyToOneField(RelationField[Any]):
         """Initialize many-to-one field.
 
         Args:
-            model_ref: Referenced model class or name
+            model_ref: Referenced model name (_name attribute, not class name)
             ondelete: Action to take when referenced record is deleted
             back_populates: Name of back reference field
             cascade: Whether to cascade operations
@@ -89,6 +97,8 @@ class ManyToOneField(RelationField[Any]):
         """
         super().__init__(
             model_ref,
+            field=back_populates or "",
+            ondelete=ondelete,
             back_populates=back_populates,
             cascade=cascade,
             lazy_load=lazy_load,
@@ -96,7 +106,6 @@ class ManyToOneField(RelationField[Any]):
             context=context or DEFAULT_CONTEXT.copy(),
             **kwargs,
         )
-        self.ondelete = ondelete
 
     def is_empty(self) -> ComparisonOperator:
         """Check if relation is empty (no related record).
@@ -157,103 +166,63 @@ class ManyToOneField(RelationField[Any]):
             "All comparison not supported for many-to-one relations"
         )
 
-    def _create_back_reference(self) -> RelationField[Any]:
+    def _create_back_reference(self) -> OneToManyField[M]:
         """Create back reference field.
 
         Returns:
-            RelationField: Back reference field instance
+            OneToManyField: Back reference field instance
         """
-        return cast(
-            RelationField[Any],
-            OneToManyField(
-                self.model_name,  # type: ignore
-                back_populates=self.name,
-                cascade=self.cascade,
-                lazy_load=self.lazy_load,
-                domain=self.domain,
-                context=self.context,
-            ),
+        return OneToManyField[M](
+            self.model_name,
+            back_populates=self.name,
+            cascade=self.cascade,
+            lazy_load=self.lazy_load,
+            domain=self.domain,
+            context=self.context,
         )
 
-    async def convert(self, value: Any) -> Optional[Any]:
-        """Convert value to model instance.
-
-        Args:
-            value: Value to convert
-
-        Returns:
-            Model instance or None
-
-        Raises:
-            FieldValidationError: If conversion fails
-        """
-        if value is None:
-            return None
-
-        model_class = self.get_model_class()
-
-        try:
-            if isinstance(value, model_class):
-                return value
-            elif isinstance(value, str):
-                # Try to load by ID
-                if not hasattr(self, "model"):
-                    raise FieldValidationError(
-                        message=(
-                            f"Cannot load related model for field {self.name} "
-                            "without parent model"
-                        ),
-                        field_name=self.name,
-                    )
-
-                try:
-                    from earnorm.base.env import Environment
-
-                    env = Environment.get_instance()
-                    instance = await model_class.get(env, value)  # type: ignore
-                    return instance
-                except Exception as e:
-                    raise FieldValidationError(
-                        message=f"Failed to load {model_class.__name__} with id {value}: {e}",
-                        field_name=self.name,
-                    ) from e
-            else:
-                raise FieldValidationError(
-                    message=(
-                        f"Cannot convert {type(value).__name__} to {model_class.__name__} "
-                        f"for field {self.name}"
-                    ),
-                    field_name=self.name,
-                )
-        except Exception as e:
-            raise FieldValidationError(
-                message=str(e),
-                field_name=self.name,
-            ) from e
-
-    async def validate(self, value: Optional[Any]) -> Optional[Any]:
+    async def validate(
+        self, value: Optional[M], context: Optional[Dict[str, Any]] = None
+    ) -> Optional[M]:
         """Validate field value.
 
         Args:
             value: Value to validate
+            context: Optional validation context
 
         Returns:
-            Optional[Any]: Validated value
+            Optional[M]: Validated value
 
         Raises:
             FieldValidationError: If validation fails
         """
         if value is None:
+            if self.required:
+                raise FieldValidationError(
+                    message=f"Field {self.name} is required",
+                    field_name=self.name,
+                    code="required_field",
+                )
             return None
 
-        model_class = self.get_model_class()
-        if not isinstance(value, model_class):
+        if not self._resolved_model:
+            await self.resolve_model_reference()
+
+        if self._model_class is None:
+            raise FieldValidationError(
+                message=f"Model class not resolved for field {self.name}",
+                field_name=self.name,
+                code="model_not_resolved",
+            )
+
+        if not isinstance(value, self._model_class):
             raise FieldValidationError(
                 message=(
-                    f"Expected {model_class.__name__} instance for field {self.name}, "
+                    f"Expected {self._model_class.__name__} instance for field {self.name}, "
                     f"got {type(value).__name__}"
                 ),
                 field_name=self.name,
+                code="invalid_type",
             )
 
         # Check domain if specified
@@ -267,11 +236,80 @@ class ManyToOneField(RelationField[Any]):
                     f"{', '.join(constraints)}"
                 ),
                 field_name=self.name,
+                code="domain_mismatch",
             )
 
-        return value
+        return value  # type: ignore
 
-    async def to_db(self, value: Optional[Any], backend: str) -> Optional[str]:
+    async def convert(self, value: Any) -> Optional[M]:
+        """Convert value to model instance.
+
+        Args:
+            value: Value to convert
+
+        Returns:
+            Optional[M]: Model instance or None
+
+        Raises:
+            FieldValidationError: If conversion fails
+        """
+        if value is None:
+            return None
+
+        try:
+            if not self._resolved_model:
+                await self.resolve_model_reference()
+
+            if self._model_class is None:
+                raise FieldValidationError(
+                    message=f"Model class not resolved for field {self.name}",
+                    field_name=self.name,
+                    code="model_not_resolved",
+                )
+
+            if isinstance(value, self._model_class):
+                return value  # type: ignore
+            elif isinstance(value, str):
+                # Try to load by ID
+                if not hasattr(self, "model"):
+                    raise FieldValidationError(
+                        message=(
+                            f"Cannot load related model for field {self.name} "
+                            "without parent model"
+                        ),
+                        field_name=self.name,
+                        code="missing_parent_model",
+                    )
+
+                try:
+                    from earnorm.base.env import Environment
+
+                    env = Environment.get_instance()
+                    instance = await self._model_class.get(env, value)
+                    return instance  # type: ignore
+                except Exception as e:
+                    raise FieldValidationError(
+                        message=f"Failed to load model with id {value}: {e}",
+                        field_name=self.name,
+                        code="load_failed",
+                    ) from e
+            else:
+                raise FieldValidationError(
+                    message=(
+                        f"Cannot convert {type(value).__name__} to model instance "
+                        f"for field {self.name}"
+                    ),
+                    field_name=self.name,
+                    code="invalid_type",
+                )
+        except Exception as e:
+            raise FieldValidationError(
+                message=str(e),
+                field_name=self.name,
+                code="conversion_failed",
+            ) from e
+
+    async def to_db(self, value: Any, backend: str) -> Optional[str]:
         """Convert value to database format.
 
         Args:
@@ -279,7 +317,7 @@ class ManyToOneField(RelationField[Any]):
             backend: Database backend type
 
         Returns:
-            Database value or None
+            Optional[str]: Database value or None
         """
         if value is None:
             return None
@@ -288,11 +326,12 @@ class ManyToOneField(RelationField[Any]):
             raise FieldValidationError(
                 message=f"Model instance {value} has no id attribute",
                 field_name=self.name,
+                code="missing_id",
             )
 
         return str(value.id)  # type: ignore
 
-    async def from_db(self, value: Any, backend: str) -> Optional[Any]:
+    async def from_db(self, value: Any, backend: str) -> Optional[M]:
         """Convert database value to model instance.
 
         Args:
@@ -300,35 +339,30 @@ class ManyToOneField(RelationField[Any]):
             backend: Database backend type
 
         Returns:
-            Model instance or None
-
-        Raises:
-            FieldValidationError: If conversion fails
+            Optional[M]: Model instance or None
         """
         if value is None:
             return None
 
-        model_class = self.get_model_class()
+        if not self._resolved_model:
+            await self.resolve_model_reference()
+
+        if self._model_class is None:
+            raise FieldValidationError(
+                message=f"Model class not resolved for field {self.name}",
+                field_name=self.name,
+                code="model_not_resolved",
+            )
 
         try:
-            if self.lazy_load:
-                # Create model instance without loading
-                from earnorm.base.env import Environment
+            from earnorm.base.env import Environment
 
-                env = Environment.get_instance()
-                instance = model_class(env)  # type: ignore
-                instance.id = value  # type: ignore
-                return instance
-            else:
-                # Load and validate model instance
-                from earnorm.base.env import Environment
-
-                env = Environment.get_instance()
-                instance = await model_class.get(env, value)  # type: ignore
-                await instance.validate()  # type: ignore
-                return instance
+            env = Environment.get_instance()
+            instance = await self._model_class.get(env, str(value))
+            return instance  # type: ignore
         except Exception as e:
             raise FieldValidationError(
-                message=f"Failed to load {model_class.__name__} with id {value}: {e}",
+                message=f"Failed to load model with id {value}: {e}",
                 field_name=self.name,
+                code="load_failed",
             ) from e

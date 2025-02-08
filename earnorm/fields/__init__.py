@@ -16,6 +16,7 @@ Primitive Fields:
     - FloatField: Floating point numbers
     - BooleanField: Boolean values
     - DateTimeField: Date and time values
+    - DateField: Date values
     - DecimalField: Decimal numbers
     - UUIDField: UUID values
     - JSONField: JSON data
@@ -72,7 +73,8 @@ from earnorm.fields.composite import (
 )
 
 # Primitive fields
-from earnorm.fields.primitive import BooleanField
+from earnorm.fields.primitive import BooleanField, DateField
+from earnorm.fields.primitive import DateTimeField
 from earnorm.fields.primitive import DateTimeField as DatetimeField
 from earnorm.fields.primitive import (
     DecimalField,
@@ -83,11 +85,17 @@ from earnorm.fields.primitive import (
     JSONField,
     ObjectIdField,
     StringField,
+    TimeField,
     UUIDField,
 )
 
 # Relation fields
-from earnorm.fields.relation import ManyToManyField, ManyToOneField, OneToManyField
+from earnorm.fields.relation import (
+    ManyToManyField,
+    ManyToOneField,
+    OneToManyField,
+    OneToOneField,
+)
 
 # Validators
 from earnorm.fields.validators.base import (
@@ -119,6 +127,9 @@ __all__ = [
     "IntegerField",
     "FloatField",
     "BooleanField",
+    "DateField",
+    "TimeField",
+    "DateTimeField",
     "DatetimeField",
     "DecimalField",
     "UUIDField",
@@ -136,6 +147,7 @@ __all__ = [
     "OneToManyField",
     "ManyToOneField",
     "ManyToManyField",
+    "OneToOneField",
     # Validators
     "Validator",
     "ValidatorChain",

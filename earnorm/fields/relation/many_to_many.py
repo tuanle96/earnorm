@@ -14,27 +14,42 @@ It supports:
 Examples:
     >>> class Student(Model):
     ...     name = StringField(required=True)
-    ...     courses = ManyToManyField("Course", reverse_name="students")
+    ...     courses = ManyToManyField("course", back_populates="students")
     ...
     >>> class Course(Model):
     ...     name = StringField(required=True)
-    ...     # students field will be added automatically with reverse_name="students"
+    ...     # students field will be added automatically with back_populates="students"
     ...
     >>> # With through model
     >>> class Enrollment(Model):
-    ...     student = OneToOneField("Student")
-    ...     course = OneToOneField("Course")
+    ...     student = OneToOneField("student")
+    ...     course = OneToOneField("course")
     ...     date = DateField(required=True)
     ...     grade = FloatField()
     ...
     >>> class Student(Model):
     ...     name = StringField(required=True)
-    ...     courses = ManyToManyField("Course", through="Enrollment", reverse_name="students")
+    ...     courses = ManyToManyField(
+    ...         "course",  # Use _name of model, not class name
+    ...         through="enrollment",
+    ...         back_populates="students"
+    ...     )
 """
 
-from typing import TYPE_CHECKING, Any, Final, List, Optional, Type, TypeVar, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Final,
+    List,
+    Optional,
+    Type,
+    TypeVar,
+    Union,
+    cast,
+)
 
-from earnorm.exceptions import FieldValidationError
+from earnorm.exceptions import FieldValidationError, ModelNotFoundError
 from earnorm.fields.relation.base import Context, Domain, ModelList, RelationField
 from earnorm.types.fields import ComparisonOperator
 
@@ -63,23 +78,36 @@ class ManyToManyField(RelationField[ModelList[M]]):
     - Context
     - Comparison operations
 
-    Attributes:
-        model_ref: Referenced model class or name
-        through: Through model class or name
-        back_populates: Name of back reference field
-        cascade: Whether to cascade operations
-        lazy_load: Whether to load related models lazily
-        domain: Domain for filtering related records
-        context: Context for related records
+    Examples:
+        >>> class Student(Model):
+        ...     name = StringField(required=True)
+        ...     courses = ManyToManyField("course", back_populates="students")
+        ...
+        >>> class Course(Model):
+        ...     name = StringField(required=True)
+        ...     # students field will be added automatically with back_populates="students"
+        ...
+        >>> # With through model
+        >>> class Enrollment(Model):
+        ...     student = OneToOneField("student")
+        ...     course = OneToOneField("course")
+        ...     date = DateField(required=True)
+        ...     grade = FloatField()
+        ...
+        >>> class Student(Model):
+        ...     name = StringField(required=True)
+        ...     courses = ManyToManyField(
+        ...         "course",  # Use _name of model, not class name
+        ...         through="enrollment",
+        ...         back_populates="students"
+        ...     )
     """
-
-    model: Any  # Parent model instance
 
     def __init__(
         self,
-        model_ref: Union[str, Type[M]],
+        model_ref: str,
         *,
-        through: Optional[Union[str, "Type[BaseModel]"]] = None,
+        through: Optional[str] = None,
         back_populates: Optional[str] = None,
         cascade: bool = DEFAULT_CASCADE,
         lazy_load: bool = True,
@@ -90,8 +118,8 @@ class ManyToManyField(RelationField[ModelList[M]]):
         """Initialize many-to-many field.
 
         Args:
-            model_ref: Referenced model class or name
-            through: Through model class or name
+            model_ref: Referenced model name (_name attribute, not class name)
+            through: Through model name (_name attribute, not class name)
             back_populates: Name of back reference field
             cascade: Whether to cascade operations
             lazy_load: Whether to load related models lazily
@@ -100,7 +128,7 @@ class ManyToManyField(RelationField[ModelList[M]]):
             **kwargs: Additional field options
         """
         super().__init__(
-            cast(Union[str, Type[ModelList[M]]], model_ref),
+            model_ref,
             back_populates=back_populates,
             cascade=cascade,
             lazy_load=lazy_load,
@@ -109,7 +137,7 @@ class ManyToManyField(RelationField[ModelList[M]]):
             **kwargs,
         )
         self.through = through
-        self._through_class: Optional["Type[BaseModel]"] = None
+        self._through_class: Optional[Type["BaseModel"]] = None
 
     def is_empty(self) -> ComparisonOperator:
         """Check if relation is empty (no related records).
@@ -138,7 +166,7 @@ class ManyToManyField(RelationField[ModelList[M]]):
         """
         if isinstance(value, str):
             return ComparisonOperator(self.name, "contains", value)
-        return ComparisonOperator(self.name, "contains", str(value.id))  # type: ignore
+        return ComparisonOperator(self.name, "contains", str(value.id))
 
     def size(self, operator: str, value: int) -> ComparisonOperator:
         """Compare the size of the relation.
@@ -197,7 +225,14 @@ class ManyToManyField(RelationField[ModelList[M]]):
             from earnorm.base.env import Environment
 
             env = Environment.get_instance()
-            self._through_class = await env.get_model(self.through)  # type: ignore
+            try:
+                self._through_class = await env.get_model(self.through)  # type: ignore
+            except ModelNotFoundError as e:
+                raise FieldValidationError(
+                    message=f"Through model {self.through} not found: {str(e)}",
+                    field_name=self.name,
+                    code="through_model_not_found",
+                ) from e
 
     def _create_back_reference(self) -> "ManyToManyField[M]":
         """Create back reference field.
@@ -206,11 +241,13 @@ class ManyToManyField(RelationField[ModelList[M]]):
             ManyToManyField: Back reference field instance
         """
         return ManyToManyField(
-            self.model_name,
+            self.name,
             through=self.through,
             back_populates=self.name,
             cascade=self.cascade,
             lazy_load=self.lazy_load,
+            domain=self.domain,
+            context=self.context,
         )
 
     async def convert(self, value: Any) -> Optional[ModelList[M]]:
@@ -220,7 +257,7 @@ class ManyToManyField(RelationField[ModelList[M]]):
             value: Value to convert
 
         Returns:
-            ModelList container or None
+            Optional[ModelList[M]]: ModelList container or None
 
         Raises:
             FieldValidationError: If conversion fails
@@ -232,9 +269,19 @@ class ManyToManyField(RelationField[ModelList[M]]):
             raise FieldValidationError(
                 message=f"Expected list or tuple for field {self.name}, got {type(value).__name__}",
                 field_name=self.name,
+                code="invalid_type",
             )
 
-        model_class = self.get_model_class()
+        if not self._resolved_model:
+            await self.resolve_model_reference()
+
+        if not self._model_class:
+            raise FieldValidationError(
+                message=f"Model class not resolved for field {self.name}",
+                field_name=self.name,
+                code="model_not_resolved",
+            )
+
         result: List[M] = []
 
         try:
@@ -242,30 +289,98 @@ class ManyToManyField(RelationField[ModelList[M]]):
 
             env = Environment.get_instance()
             for item in cast(List[Union[M, str]], value):
-                if isinstance(item, model_class):
+                if isinstance(item, self._model_class):
                     result.append(cast(M, item))
                 elif isinstance(item, str):
                     # Try to load by ID
                     try:
-                        instance = await model_class.get(env, item)  # type: ignore
+                        instance = await self._model_class.get(env, item)
                         result.append(cast(M, instance))
                     except Exception as e:
                         raise FieldValidationError(
-                            message=f"Failed to load {model_class.__name__} with id {item}: {e}",
+                            message=f"Failed to load {self._model_class.__name__} with id {item}: {e}",
                             field_name=self.name,
+                            code="load_failed",
                         ) from e
                 else:
                     raise FieldValidationError(
-                        message=f"Expected {model_class.__name__} instance or string ID, got {type(item).__name__}",
+                        message=(
+                            f"Cannot convert {type(item).__name__} to {self._model_class.__name__} "
+                            f"for field {self.name}"
+                        ),
                         field_name=self.name,
+                        code="invalid_type",
                     )
-
-            return ModelList(result)
         except Exception as e:
             raise FieldValidationError(
-                message=f"Failed to convert value: {e}",
+                message=str(e),
                 field_name=self.name,
+                code="conversion_failed",
             ) from e
+
+        return ModelList(items=result)
+
+    async def validate(
+        self, value: Optional[ModelList[M]], context: Optional[Dict[str, Any]] = None
+    ) -> Optional[ModelList[M]]:
+        """Validate field value.
+
+        Args:
+            value: Value to validate
+            context: Optional validation context
+
+        Returns:
+            Optional[ModelList[M]]: Validated value
+
+        Raises:
+            FieldValidationError: If validation fails
+        """
+        if value is None:
+            if self.required:
+                raise FieldValidationError(
+                    message=f"Field {self.name} is required",
+                    field_name=self.name,
+                    code="required_field",
+                )
+            return None
+
+        if not self._resolved_model:
+            await self.resolve_model_reference()
+
+        if not self._model_class:
+            raise FieldValidationError(
+                message=f"Model class not resolved for field {self.name}",
+                field_name=self.name,
+                code="model_not_resolved",
+            )
+
+        # Check each item in list
+        for item in value.items:
+            if not isinstance(item, self._model_class):
+                raise FieldValidationError(
+                    message=(
+                        f"Expected {self._model_class.__name__} instance in list for field {self.name}, "
+                        f"got {type(item).__name__}"
+                    ),
+                    field_name=self.name,
+                    code="invalid_type",
+                )
+
+            # Check domain if specified
+            if self.domain and not await self._check_domain(item):
+                constraints = [
+                    f"{field} {op} {expected}" for field, op, expected in self.domain
+                ]
+                raise FieldValidationError(
+                    message=(
+                        f"Item does not match domain constraints for field {self.name}: "
+                        f"{', '.join(constraints)}"
+                    ),
+                    field_name=self.name,
+                    code="domain_mismatch",
+                )
+
+        return value
 
     async def to_db(
         self, value: Optional[ModelList[M]], backend: str
@@ -277,10 +392,7 @@ class ManyToManyField(RelationField[ModelList[M]]):
             backend: Database backend type
 
         Returns:
-            List of database values or None
-
-        Raises:
-            FieldValidationError: If conversion fails
+            Optional[List[str]]: List of database values or None
         """
         if value is None:
             return None
@@ -291,6 +403,7 @@ class ManyToManyField(RelationField[ModelList[M]]):
                 raise FieldValidationError(
                     message=f"Model instance {item} has no id attribute",
                     field_name=self.name,
+                    code="missing_id",
                 )
             result.append(str(item.id))  # type: ignore
 
@@ -304,42 +417,41 @@ class ManyToManyField(RelationField[ModelList[M]]):
             backend: Database backend type
 
         Returns:
-            ModelList container or None
-
-        Raises:
-            FieldValidationError: If conversion fails
+            Optional[ModelList[M]]: List of model instances or None
         """
         if value is None:
             return None
 
-        if not isinstance(value, list):
+        if not self._resolved_model:
+            await self.resolve_model_reference()
+
+        if not self._model_class:
             raise FieldValidationError(
-                message=f"Expected list from database for field {self.name}, got {type(value).__name__}",
+                message=f"Model class not resolved for field {self.name}",
                 field_name=self.name,
+                code="model_not_resolved",
             )
 
-        model_class = self.get_model_class()
-        result: List[M] = []
+        if not isinstance(value, (list, tuple)):
+            raise FieldValidationError(
+                message=f"Expected list or tuple from database for field {self.name}, got {type(value).__name__}",
+                field_name=self.name,
+                code="invalid_type",
+            )
 
+        result: List[M] = []
         try:
             from earnorm.base.env import Environment
 
             env = Environment.get_instance()
-            for item_id in cast(List[str], value):
-                if self.lazy_load:
-                    # Create model instance without loading
-                    instance = model_class(env)  # type: ignore
-                    instance.id = item_id  # type: ignore
-                    result.append(cast(M, instance))
-                else:
-                    # Load and validate model instance
-                    instance = await model_class.get(env, item_id)  # type: ignore
-                    await instance.validate()  # type: ignore
-                    result.append(cast(M, instance))
+            for item in cast(List[str], value):
+                instance = await self._model_class.get(env, str(item))  # type: ignore
+                result.append(cast(M, instance))
         except Exception as e:
             raise FieldValidationError(
-                message=f"Failed to load {model_class.__name__} instances: {e}",
+                message=f"Failed to load related records: {str(e)}",
                 field_name=self.name,
+                code="load_failed",
             ) from e
 
         return ModelList(items=result)

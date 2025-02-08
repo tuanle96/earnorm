@@ -46,14 +46,14 @@ class User(BaseModel):
 
 ### JSON Fields
 ```python
-from earnorm.fields.composite import JsonField
+from earnorm.fields.composite import JSONField
 
 class Config(BaseModel):
     # JSON data
-    data = JsonField(default={})
+    data = JSONField(default={})
     
     # Schema validation
-    schema = JsonField(schema={
+    schema = JSONField(schema={
         "type": "object",
         "properties": {
             "name": {"type": "string"},
@@ -163,16 +163,16 @@ scores = DictField(
 1. Basic usage:
 ```python
 # Simple JSON
-data = JsonField()
+data = JSONField()
 
 # With default
-config = JsonField(default={})
+config = JSONField(default={})
 ```
 
 2. Schema validation:
 ```python
 # JSON Schema
-user_data = JsonField(
+user_data = JSONField(
     schema={
         "type": "object",
         "properties": {
@@ -188,10 +188,10 @@ user_data = JsonField(
 3. Advanced options:
 ```python
 # Compression
-large_data = JsonField(compress=True)
+large_data = JSONField(compress=True)
 
 # Custom encoder/decoder
-custom_json = JsonField(
+custom_json = JSONField(
     encoder=CustomEncoder,
     decoder=CustomDecoder
 )

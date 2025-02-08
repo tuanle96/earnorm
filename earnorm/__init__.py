@@ -221,7 +221,8 @@ async def init(
 
             # 4. Initialize Environment with registered services
             env = Environment.get_instance()
-            await env.init(config=config_data)
+            if not env.is_initialized:
+                await env.init(config=config_data)
 
             # 5. Update config with initialized environment
             config = await SystemConfig.from_data(env, config_data)

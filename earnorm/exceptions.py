@@ -297,6 +297,81 @@ class ModelNotFoundError(FieldError):
         super().__init__(message, field_name=field_name, code="model_not_found_error")
 
 
+class RelationModelResolutionError(FieldError):
+    """Error raised when relation model resolution fails.
+
+    This error is raised when a relation field cannot resolve its referenced model,
+    typically when the model name is invalid or the model is not registered.
+    """
+
+    def __init__(self, message: str, *, field_name: str) -> None:
+        """Initialize relation model resolution error.
+
+        Args:
+            message: Error message
+            field_name: Field name
+        """
+        super().__init__(
+            message, field_name=field_name, code="relation_model_resolution_error"
+        )
+
+
+class RelationBackReferenceError(FieldError):
+    """Error raised when relation back reference setup fails.
+
+    This error is raised when a relation field cannot set up its back reference,
+    typically when the back reference field does not exist on the related model.
+    """
+
+    def __init__(self, message: str, *, field_name: str) -> None:
+        """Initialize relation back reference error.
+
+        Args:
+            message: Error message
+            field_name: Field name
+        """
+        super().__init__(
+            message, field_name=field_name, code="relation_back_reference_error"
+        )
+
+
+class RelationLoadError(FieldError):
+    """Error raised when loading related records fails.
+
+    This error is raised when a relation field cannot load its related records,
+    typically due to database errors or invalid record IDs.
+    """
+
+    def __init__(self, message: str, *, field_name: str) -> None:
+        """Initialize relation load error.
+
+        Args:
+            message: Error message
+            field_name: Field name
+        """
+        super().__init__(message, field_name=field_name, code="relation_load_error")
+
+
+class RelationConstraintError(FieldError):
+    """Error raised when relation constraints are violated.
+
+    This error is raised when relation constraints are violated,
+    typically when trying to delete records that are still referenced
+    by other records through relation fields.
+    """
+
+    def __init__(self, message: str, *, field_name: str) -> None:
+        """Initialize relation constraint error.
+
+        Args:
+            message: Error message
+            field_name: Field name
+        """
+        super().__init__(
+            message, field_name=field_name, code="relation_constraint_error"
+        )
+
+
 # Database-related exceptions
 class DatabaseError(EarnORMError):
     """Base class for database-related errors."""

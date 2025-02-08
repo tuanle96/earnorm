@@ -59,12 +59,12 @@ class User(BaseModel):
 
 ### 2. Composite Fields
 ```python
-from earnorm.fields import ArrayField, DictField, JsonField
+from earnorm.fields import ArrayField, DictField, JSONField
 
 class Product(BaseModel):
     tags = ArrayField(StringField(), default=[])
     metadata = DictField(required=False)
-    config = JsonField(default={})
+    config = JSONField(default={})
 ```
 
 ### 3. Relation Fields
