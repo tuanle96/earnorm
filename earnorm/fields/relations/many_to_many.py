@@ -38,7 +38,7 @@ Examples:
     >>> users = await admin.users
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional, Type, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Dict, Generic, Optional, Type, TypeVar, cast
 
 from earnorm.fields.relations.base import ModelType, RelationField
 from earnorm.types.models import ModelProtocol
@@ -52,7 +52,7 @@ else:
     T = TypeVar("T", bound=ModelProtocol)
 
 
-class ManyToManyField(RelationField[T]):
+class ManyToManyField(RelationField[T], Generic[T]):
     """Field for many-to-many relations.
 
     This field allows multiple records in the source model to reference multiple records
@@ -66,6 +66,7 @@ class ManyToManyField(RelationField[T]):
         through_fields: Field names in through model (local_field, foreign_field)
         on_delete: Delete behavior ('CASCADE', 'SET_NULL', 'PROTECT')
         required: Whether relation is required
+        help: Help text for the field
         **options: Additional field options
 
     Examples:
@@ -91,6 +92,8 @@ class ManyToManyField(RelationField[T]):
         >>> users = await admin.users
     """
 
+    field_type = "many2many"
+
     def __init__(
         self,
         model: ModelType[T],
@@ -100,6 +103,7 @@ class ManyToManyField(RelationField[T]):
         through_fields: Optional[tuple[str, str]] = None,
         on_delete: str = "CASCADE",
         required: bool = False,
+        help: Optional[str] = None,
         **options: Dict[str, Any],
     ) -> None:
         """Initialize many-to-many field.
@@ -111,6 +115,7 @@ class ManyToManyField(RelationField[T]):
             through_fields: Field names in through model (local_field, foreign_field)
             on_delete: Delete behavior ('CASCADE', 'SET_NULL', 'PROTECT')
             required: Whether relation is required
+            help: Help text for the field
             **options: Additional field options
         """
         field_options = {**options}
@@ -127,6 +132,7 @@ class ManyToManyField(RelationField[T]):
             related_name=related_name,
             on_delete=on_delete,
             required=required,
+            help=help,
             lazy=True,
             **field_options,
         )

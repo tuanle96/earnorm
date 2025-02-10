@@ -27,6 +27,7 @@ from typing import Self
 import earnorm
 from earnorm import BaseModel, fields
 from earnorm.fields.relations.many_to_one import ManyToOneField
+from earnorm.fields.relations.one_to_many import OneToManyField
 
 # Configure logging
 logging.basicConfig(
@@ -119,11 +120,49 @@ class Post(BaseModel):
     author = fields.ManyToOneField(User, required=True, help="Post author")
 
 
-async def test_relationship_operations() -> None:
+class Department(BaseModel):
+    """Department model for demonstrating one-to-many relationships."""
+
+    _name = "department"
+
+    name = fields.StringField(required=True)
+    code = fields.StringField(required=True)
+
+    # One2Many field - will be populated by reverse relation
+    employees: OneToManyField[Employee] = fields.OneToManyField(
+        "employee", related_name="department", help="Employees in this department"
+    )
+
+
+class Employee(BaseModel):
+    """Employee model for demonstrating many-to-one relationships."""
+
+    _name = "employee"
+
+    name = fields.StringField(required=True)
+    email = fields.StringField(
+        required=True,
+        unique=True,
+        pattern=r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$",
+    )
+
+    # Many2One field that creates the one2many reverse relation
+    department: ManyToOneField["Department"] = fields.ManyToOneField(
+        "department",
+        related_name="employees",
+        required=True,
+        help="Employee's department",
+    )
+
+
+async def test_relationship_operations():
     """Test relationship operations."""
     logger.info("=== Testing Relationship Operations ===")
 
     try:
+        # Test User-Post relationship (many2one)
+        logger.info("=== Testing Many2One Relationship (User-Post) ===")
+
         # Create a manager
         logger.info("Creating manager...")
         manager = await User.create(
@@ -176,25 +215,80 @@ async def test_relationship_operations() -> None:
         )
 
         # Verify relationships
-        logger.info("Verifying relationships...")
+        # logger.info("Verifying many2one relationships...")
 
-        # Check manager relationship
-        emp1_manager = await user1.manager
-        if emp1_manager:
-            logger.info("Employee 1's manager: %s", await emp1_manager.name)
+        # # Check manager relationship
+        # emp1_manager = await user1.manager
+        # if emp1_manager:
+        #     manager_name = await emp1_manager.name
+        #     logger.info("Employee 1's manager: %s", manager_name)
 
-        emp2_manager = await user2.manager
-        if emp2_manager:
-            logger.info("Employee 2's manager: %s", await emp2_manager.name)
+        # emp2_manager = await user2.manager
+        # if emp2_manager:
+        #     manager_name = await emp2_manager.name
+        #     logger.info("Employee 2's manager: %s", manager_name)
 
-        # Check post author relationship
-        post1_author = await post1.author
-        if post1_author:
-            logger.info("Post 1's author: %s", await post1_author.name)
+        # # Check post author relationship
+        # post1_author = await post1.author
+        # if post1_author:
+        #     author_name = await post1_author.name
+        #     logger.info("Post 1's author: %s", author_name)
 
-        post2_author = await post2.author
-        if post2_author:
-            logger.info("Post 2's author: %s", await post2_author.name)
+        # post2_author = await post2.author
+        # if post2_author:
+        #     author_name = await post2_author.name
+        #     logger.info("Post 2's author: %s", author_name)
+
+        # Test Department-Employee relationship (one2many)
+        logger.info("\n=== Testing One2Many Relationship (Department-Employee) ===")
+
+        # Create departments
+        logger.info("Creating departments...")
+        dev_dept = await Department.create({"name": "Development", "code": "DEV"})
+
+        hr_dept = await Department.create({"name": "Human Resources", "code": "HR"})
+
+        # Create employees in departments
+        logger.info("Creating employees in departments...")
+        dev_emp1 = await Employee.create(
+            {"name": "Dev 1", "email": "dev1@example.com", "department": dev_dept}
+        )
+
+        dev_emp2 = await Employee.create(
+            {"name": "Dev 2", "email": "dev2@example.com", "department": dev_dept}
+        )
+
+        hr_emp1 = await Employee.create(
+            {"name": "HR 1", "email": "hr1@example.com", "department": hr_dept}
+        )
+
+        # Verify one2many relationships
+        logger.info("Verifying one2many relationships...")
+
+        # Get all employees in dev department
+        dev_employees = await dev_dept.employees
+        logger.info(f"Development department employees: {dev_employees}")
+        for emp in dev_employees:
+            emp_name = await emp.name
+            logger.info(f"Department {await dev_dept.name} employee: {emp_name}")
+
+        # Get all employees in HR department
+        hr_employees = await hr_dept.employees
+        logger.info("HR department employees:")
+        for emp in hr_employees:
+            emp_name = await emp.name
+            logger.info("- %s", emp_name)
+
+        # Verify department of employees
+        dev1_dept = await dev_emp1.department
+        if dev1_dept:
+            dept_name = await dev1_dept.name
+            logger.info("Dev1's department: %s", dept_name)
+
+        hr1_dept = await hr_emp1.department
+        if hr1_dept:
+            dept_name = await hr1_dept.name
+            logger.info("HR1's department: %s", dept_name)
 
     except Exception as e:
         logger.error("Error in relationship operations: %s", str(e))

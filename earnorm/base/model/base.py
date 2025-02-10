@@ -151,23 +151,14 @@ from earnorm.base.database.query.core.query import BaseQuery
 from earnorm.base.database.query.interfaces.domain import DomainExpression
 from earnorm.base.database.query.interfaces.domain import DomainOperator as Operator
 from earnorm.base.database.query.interfaces.domain import LogicalOperator as LogicalOp
-from earnorm.base.database.query.interfaces.operations.aggregate import (
-    AggregateProtocol as AggregateQuery,
-)
-from earnorm.base.database.query.interfaces.operations.join import (
-    JoinProtocol as JoinQuery,
-)
+from earnorm.base.database.query.interfaces.operations.aggregate import AggregateProtocol as AggregateQuery
+from earnorm.base.database.query.interfaces.operations.join import JoinProtocol as JoinQuery
 from earnorm.base.database.transaction.base import Transaction
 from earnorm.base.env import Environment
 from earnorm.base.model.meta import ModelMeta
 from earnorm.constants import FIELD_MAPPING
 from earnorm.di import Container
-from earnorm.exceptions import (
-    DatabaseError,
-    DeletedRecordError,
-    FieldValidationError,
-    ModelNotFoundError,
-)
+from earnorm.exceptions import DatabaseError, FieldValidationError, ModelNotFoundError
 from earnorm.fields import BaseField, RelationField
 from earnorm.types import ValueType
 from earnorm.types.models import ModelProtocol
@@ -337,110 +328,130 @@ class BaseModel(metaclass=ModelMeta):
         return bool(self._ids)
 
     async def __getattr__(self, name: str) -> Any:
-        """Get attribute value directly from database with caching.
-
-        When accessed from class (not instance), returns the field descriptor.
-        When accessed from instance, returns the field value.
-
-        For relation fields:
-        - Returns the model instance or None when accessed from instance
-        - Returns the field descriptor when accessed from class
+        """Get attribute value.
 
         Args:
-            name: Field name to get
+            name: Attribute name
 
         Returns:
-            Any: Field value if accessed from instance,
-                 Field descriptor if accessed from class
+            Attribute value
         """
-        logger.info(f"Getting attribute {name} for {self._name}")
-        try:
-            # Skip slot attributes
-            if name in self.__slots__:
-                return object.__getattribute__(self, name)
+        self.logger.info(f"Getting attribute {name} for {self._name}")
 
-            # Skip id/ids properties
-            if name in ("id", "ids"):
-                return object.__getattribute__(self, name)
-
-            # Check if field exists
-            if name not in self.__fields__:
-                logger.info(f"Field '{name}' not found in {self._name}")
-                raise AttributeError(
-                    f"'{self.__class__.__name__}' has no attribute '{name}'"
-                )
-
-            # Get field
-            field = self.__fields__[name]
-
-            # If accessed from class, return field descriptor
-            if not hasattr(self, "_ids"):
-                return field
-
-            # Check if record exists
-            if not self._ids:
-                raise DeletedRecordError(self._name)
-
-            # Check cache first using direct slot access
-            cache = object.__getattribute__(self, "_cache")
-            if isinstance(cache, dict) and name in cache:
-                logger.info(f"Returning cached value for {name}")
-                return cast(Any, cache[name])
-
-            record_id = self._ids[0]
-            logger.info(f"Getting attribute {name} for {self._name}:{record_id}")
-
-            # Direct database fetch using read method
-            result = await self._env.adapter.read(self._name, record_id, [name])
-
-            if not result:
-                return None
-
-            # Convert value using field object
-            value = await field.from_db(
-                result.get(name), self._env.adapter.backend_type
+        # Get field
+        field = self.__fields__.get(name)
+        if not field:
+            self.logger.warning(f"Field {name} not found")
+            raise AttributeError(
+                f"'{self.__class__.__name__}' has no attribute '{name}'"
             )
 
-            # For relation fields, ensure we return the model instance, not the field
-            if isinstance(field, RelationField):
-                # Cache the value using direct slot access
-                if isinstance(cache, dict):
-                    cache[name] = value
-                    logger.info(f"Cached relation value for {name}")
-                return value
+        self.logger.info(f"Found field {name} of type {type(field)}")
 
-            # For non-relation fields, cache and return the value
+        # Get record ID
+        record_id = self.id
+        self.logger.info(f"Getting attribute {name} for {self._name}:{record_id}")
+
+        # Get from cache first
+        cache = getattr(self, "_cache", None)
+        self.logger.info(f"Cache object: {cache}")
+
+        if cache is not None:
+            cached = cache.get(name)
+            self.logger.info(f"Cached value for {name}: {cached}")
+            if cached is not None:
+                self.logger.info(f"Returning cached value for {name}")
+                return cached
+
+        # For relation fields, get related records
+        if isinstance(field, RelationField):
+            self.logger.info(f"Getting related records for {name} using get_related()")
+            value = await field.get_related(self)
+            self.logger.info(f"Got related records: {value}")
+
+            # Cache the value
             if isinstance(cache, dict):
                 cache[name] = value
-                logger.info(f"Cached value for {name}")
-
+                self.logger.info(f"Cached relation value for {name}")
             return value
 
-        except DeletedRecordError:
-            # Re-raise DeletedRecordError for deleted records
-            raise
-        except Exception as e:
-            logger.error(f"Failed to get attribute {name}: {str(e)}", exc_info=True)
-            raise
+        # Direct database fetch using read method
+        self.logger.info(f"Fetching from database for {name}")
+        result = await self.env.adapter.read(self._name, record_id, [name])
+        self.logger.info(f"Database result: {result}")
+
+        if not result:
+            self.logger.info(f"No result found for {name}")
+            return None
+
+        # Convert value using field object
+        value = await field.from_db(result.get(name), self.env.adapter.backend_type)
+        self.logger.info(f"Converted value: {value}")
+
+        # Cache and return the value
+        if isinstance(cache, dict):
+            cache[name] = value
+            self.logger.info(f"Cached value for {name}")
+
+        return value
 
     @classmethod
     def _browse(
         cls,
         env: Environment,
-        ids: Sequence[str],
+        records_or_ids: Union[List[Dict[str, Any]], List[str], Sequence[str]],
     ) -> Self:
-        """Create recordset instance."""
-        records = object.__new__(cls)
+        """Create a recordset from a list of records or IDs.
 
-        # Initialize required attributes
-        object.__setattr__(records, "_env", env)
-        object.__setattr__(records, "_name", cls._get_instance_name())
-        object.__setattr__(records, "_ids", tuple(ids))
-        object.__setattr__(
-            records, "_cache", {}
-        )  # Initialize empty cache for new instance
+        This method is used internally to create recordsets from database records
+        or record IDs. It ensures proper caching and type safety.
 
-        return records
+        Args:
+            env: Environment instance
+            records_or_ids: List of record dictionaries or record IDs
+
+        Returns:
+            Recordset containing the records
+
+        Examples:
+            >>> # From record dictionaries
+            >>> records = [{'id': 1, 'name': 'John'}, {'id': 2, 'name': 'Jane'}]
+            >>> employees = Employee._browse(env, records)
+            >>> for emp in employees:
+            ...     print(emp.name)  # Prints: John, Jane
+
+            >>> # From record IDs
+            >>> ids = ['1', '2']
+            >>> employees = Employee._browse(env, ids)
+            >>> for emp in employees:
+            ...     print(emp.id)  # Prints: 1, 2
+        """
+        if not records_or_ids:
+            # Return empty recordset
+            recordset = cls()
+            object.__setattr__(recordset, "_env", env)
+            object.__setattr__(recordset, "_cache", {})
+            return recordset
+
+        # Create recordset
+        recordset = cls()
+        object.__setattr__(recordset, "_env", env)
+        object.__setattr__(recordset, "_cache", {})
+
+        # Handle record dictionaries
+        if isinstance(records_or_ids[0], dict):
+            records = cast(List[Dict[str, Any]], records_or_ids)
+            object.__setattr__(recordset, "_records", records)
+            # Cache records by ID
+            for record in records:
+                if record.get("id"):
+                    recordset._cache[str(record["id"])] = record
+        # Handle record IDs
+        else:
+            ids = [str(id_) for id_ in records_or_ids]
+            object.__setattr__(recordset, "_ids", tuple(ids))
+
+        return recordset
 
     @classmethod
     async def browse(cls, ids: Union[str, List[str]]) -> Self:
@@ -592,7 +603,7 @@ class BaseModel(metaclass=ModelMeta):
             )
 
             # Clear cache for updated fields
-            self._clear_cache(list(vals.keys()))
+            self._clear_cache(list(vals.keys()))  # type: ignore
 
             return self
 
@@ -1161,42 +1172,18 @@ class BaseModel(metaclass=ModelMeta):
                 message=str(e), backend=cls._env.adapter.backend_type
             ) from e
 
-    def _clear_cache(self, fields: Optional[List[str]] = None) -> None:
+    def _clear_cache(self, field_name: Optional[str] = None) -> None:
         """Clear cached values.
 
         Args:
-            fields: List of fields to clear from cache. If None, clear all cache.
-
-        Examples:
-            >>> user = User()
-            >>> user._clear_cache()  # Clear all cache
-            >>> user._clear_cache(["name", "email"])  # Clear specific fields
+            field_name: Name of field to clear, or None to clear all
         """
-        try:
-            if fields:
-                # Access _cache trực tiếp và kiểm tra type
-                logger.info(f"Clearing cache for fields: {fields}")
-                try:
-                    cache = object.__getattribute__(self, "_cache")
-                except AttributeError:
-                    # Initialize cache if not exists
-                    object.__setattr__(self, "_cache", {})
-                    return
-
-                if not isinstance(cache, dict):
-                    object.__setattr__(self, "_cache", {})
-                    return
-
-                for field in fields:
-                    if field in cache:
-                        _ = cast(Dict[str, Any], cache).pop(field, None)
-                logger.info(f"Cache after clearing: {cache}")
-            else:
-                object.__setattr__(self, "_cache", {})
-        except Exception as e:
-            logger.warning(f"Failed to clear cache: {str(e)}")
-            # Initialize empty cache in case of error
+        if not hasattr(self, "_cache"):
             object.__setattr__(self, "_cache", {})
+        if field_name:
+            self._cache.pop(field_name, None)
+        else:
+            self._cache.clear()
 
     def __init_subclass__(cls, **kwargs):  # type: ignore
         """Initialize model subclass.
@@ -1245,3 +1232,27 @@ class BaseModel(metaclass=ModelMeta):
         if model is None:
             raise ModelNotFoundError(f"Model '{name}' not found", field_name=name)
         return model
+
+    def _get_cache(self, field_name: str) -> Optional[Any]:
+        """Get cached value for a field.
+
+        Args:
+            field_name: Name of the field
+
+        Returns:
+            Cached value or None if not cached
+        """
+        if not hasattr(self, "_cache"):
+            object.__setattr__(self, "_cache", {})
+        return self._cache.get(field_name)  # type: ignore
+
+    def _set_cache(self, field_name: str, value: Any) -> None:
+        """Set cached value for a field.
+
+        Args:
+            field_name: Name of the field
+            value: Value to cache
+        """
+        if not hasattr(self, "_cache"):
+            object.__setattr__(self, "_cache", {})
+        self._cache[field_name] = value

@@ -92,126 +92,88 @@ See Also:
     - earnorm.database: Database adapters
 """
 
+from __future__ import annotations
+
 import logging
-from typing import TYPE_CHECKING, Any, Optional, Type, TypeVar
+from typing import TYPE_CHECKING, Any, Optional, Type
 
 from earnorm.base.database.adapter import DatabaseAdapter
-from earnorm.types import DatabaseModel
-from earnorm.types.models import ModelProtocol
+from earnorm.di import container
+from earnorm.types.models import DatabaseModel, ModelProtocol
 
 if TYPE_CHECKING:
     from earnorm.config.data import SystemConfigData
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T")
-
 
 class Environment:
-    """Application environment singleton.
+    """Application environment singleton."""
 
-    This class manages the application state and dependencies through:
-    - Configuration management
-    - Database connections
-    - Service registry
-    - Model registry
-    - Resource lifecycle
-
-    It implements the singleton pattern and integrates with a DI container.
-    All services are accessed through the container for dependency management.
-
-    Attributes:
-        _instance: Singleton instance
-        _initialized: Whether environment is initialized
-        _adapter: Database adapter instance
-
-    Examples:
-        >>> # Get singleton instance
-        >>> env = Environment.get_instance()
-
-        >>> # Initialize with config
-        >>> await env.init(config)
-
-        >>> # Get database adapter
-        >>> adapter = env.adapter
-        >>> users = await adapter.query(User).all()
-
-        >>> # Get model by name
-        >>> User = await env.get_model('data.user')
-        >>> user = await User.create({"name": "John"})
-
-        >>> # Cleanup
-        >>> await env.destroy()
-    """
-
-    # Singleton instance
-    _instance: Optional["Environment"] = None
+    _instance: Optional[Environment] = None
+    _initialized: bool = False
+    _adapter: Optional[DatabaseAdapter[DatabaseModel]] = None
+    logger = logging.getLogger(__name__)
 
     def __init__(self) -> None:
-        """Initialize environment singleton.
-
-        Raises:
-            RuntimeError: If instance already exists
-        """
+        """Initialize environment."""
         if Environment._instance is not None:
-            raise RuntimeError("Environment already initialized")
-
-        self._initialized = False
-        self._adapter: Optional[DatabaseAdapter[DatabaseModel]] = None
-
+            raise RuntimeError("Environment already instantiated")
         Environment._instance = self
 
     @classmethod
-    def get_instance(cls) -> "Environment":
+    def get_instance(cls) -> Environment:
         """Get singleton instance.
 
-        This method implements lazy initialization of the singleton.
-        It creates the instance on first access if it doesn't exist.
+        This method implements the singleton pattern, ensuring only one Environment
+        instance exists per application. If no instance exists, it creates one.
 
         Returns:
-            Environment singleton instance
+            Environment instance
+
+        Examples:
+            >>> env1 = Environment.get_instance()
+            >>> env2 = Environment.get_instance()
+            >>> assert env1 is env2  # Same instance
         """
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
 
     async def init(self, config: "SystemConfigData") -> None:
-        """Initialize environment with configuration.
+        """Initialize environment.
 
         This method:
-        1. Registers config in DI container
-        2. Initializes services through container
-        3. Sets up service dependencies
-        4. Configures logging
+        1. Loads configuration
+        2. Sets up services
+        3. Initializes database
+        4. Registers models
 
         Args:
             config: System configuration data
 
         Raises:
-            RuntimeError: If initialization fails
+            RuntimeError: If already initialized
         """
         if self._initialized:
-            logger.warning("Environment already initialized")
-            return
+            raise RuntimeError("Environment already initialized")
 
-        try:
-            from earnorm.di import container
+        # Register config in container
+        container.register("config", config)
 
-            # Register config
-            container.register("config", config)
+        # Get adapter from container
+        self._adapter = await container.get("database_adapter")
+        if self._adapter is None:
+            raise RuntimeError("Failed to get database adapter")
 
-            # Get services from container
-            self._adapter = await container.get("database_adapter")
+        # Inject env into adapter
+        self._adapter.env = self
 
-            # Register self in container
-            container.register("env", self)
+        # Initialize adapter
+        await self._adapter.init()
 
-            self._initialized = True
-            logger.info("Environment initialized successfully")
-
-        except Exception as e:
-            logger.error("Failed to initialize environment: %s", str(e))
-            raise RuntimeError(f"Environment initialization failed: {e}") from e
+        self._initialized = True
+        self.logger.info("Environment initialized successfully")
 
     async def destroy(self) -> None:
         """Cleanup environment resources.
@@ -229,8 +191,6 @@ class Environment:
             return
 
         try:
-            from earnorm.di import container
-
             # Cleanup database
             if container.has("database_adapter"):
                 adapter = await container.get("database_adapter")
@@ -266,8 +226,6 @@ class Environment:
         Raises:
             RuntimeError: If required service not found
         """
-        from earnorm.di import container
-
         service = await container.get(name)
         if service is None and required:
             raise RuntimeError(f"Service {name} not found in DI container")
@@ -275,21 +233,23 @@ class Environment:
 
     @property
     def adapter(self) -> DatabaseAdapter[DatabaseModel]:
-        """Get database adapter instance.
-
-        This property provides synchronous access to the database adapter.
-        It validates the environment and adapter state.
+        """Get database adapter.
 
         Returns:
             Database adapter instance
 
         Raises:
-            RuntimeError: If environment or adapter not initialized
+            RuntimeError: If environment is not initialized
         """
         if not self._initialized:
             raise RuntimeError("Environment not initialized")
+
         if self._adapter is None:
-            raise RuntimeError("Adapter not initialized. Call init() first")
+            raise RuntimeError("Database adapter not found")
+
+        # Inject env into adapter
+        self._adapter.env = self
+
         return self._adapter
 
     async def get_model(self, name: str) -> Type[ModelProtocol]:

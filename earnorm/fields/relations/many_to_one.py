@@ -34,7 +34,7 @@ Examples:
     >>> posts = await user.posts
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Dict, Generic, Optional, TypeVar, cast
 
 from earnorm.fields.relations.base import ModelType, RelationField
 from earnorm.types.models import ModelProtocol
@@ -48,7 +48,7 @@ else:
     T = TypeVar("T", bound=ModelProtocol)
 
 
-class ManyToOneField(RelationField[T]):
+class ManyToOneField(RelationField[T], Generic[T]):
     """Field for many-to-one relations.
 
     This field allows multiple records in the source model to reference one record
@@ -87,7 +87,7 @@ class ManyToOneField(RelationField[T]):
         >>> posts = await user.posts
     """
 
-    field_type = "many_to_one"
+    field_type = "many2one"
 
     def __init__(
         self,
@@ -99,23 +99,13 @@ class ManyToOneField(RelationField[T]):
         help: Optional[str] = None,
         **options: Dict[str, Any],
     ) -> None:
-        """Initialize many-to-one field.
-
-        Args:
-            model: Related model class or string reference
-            related_name: Name of reverse relation field
-            on_delete: Delete behavior ('CASCADE', 'SET_NULL', 'PROTECT')
-            required: Whether relation is required
-            help: Help text for the field
-            **options: Additional field options
-        """
         field_options = cast(
             Dict[str, Any],
             {
                 **options,
                 "index": True,
             },
-        )  # Always index foreign keys
+        )
         super().__init__(
             model,
             RelationType.MANY_TO_ONE,
@@ -126,3 +116,17 @@ class ManyToOneField(RelationField[T]):
             help=help,
             **field_options,
         )
+
+    def __set__(self, instance: Any, value: Optional[T]) -> None:
+        """Set related record.
+
+        Args:
+            instance: Model instance
+            value: Related record or None
+
+        Examples:
+            >>> post = Post()
+            >>> user = User()
+            >>> post.author = user  # Sets relation
+        """
+        super().__set__(instance, value)
