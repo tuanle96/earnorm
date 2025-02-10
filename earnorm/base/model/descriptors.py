@@ -160,15 +160,18 @@ class AsyncFieldDescriptor:
         if instance is None:
             return self.field
 
+        if not self.field:
+            raise AttributeError("Field not set")
+
         try:
-            if not self.name:
+            if not self.field.name:
                 raise AttributeError("Field name not set")
 
             # Get value using __getattr__
-            value = await instance.__getattr__(self.name)
+            value = await instance.__getattr__(self.field.name)
             return value
         except Exception as e:
-            logger.error(f"Failed to get field {self.name}: {str(e)}")
+            logger.error(f"Failed to get field {self.field.name}: {str(e)}")
             raise
 
     async def __set__(self, instance: "BaseModel", value: Any) -> None:

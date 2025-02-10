@@ -113,7 +113,7 @@ class Container(ContainerInterface):
     def register(self, name: str, service: Any, lifecycle: str = "singleton") -> None:
         """Register a service with the container.
 
-        This method registers a service that can later be retrieved using get() or get_async().
+        This method registers a service that can later be retrieved using get().
         Services can be registered with different lifecycles:
         - singleton: One instance shared across the application
         - transient: New instance created for each request
@@ -182,49 +182,6 @@ class Container(ContainerInterface):
         # Try service manager
         if self._service_manager.has(name):
             service = await self._service_manager.get_sync(name)
-            if service is not None:
-                self._cache[name] = service
-                return service
-
-        # Try factory manager
-        if self._factory_manager.has(name):
-            service = await self._factory_manager.get(name)
-            if service is not None:
-                self._cache[name] = service
-                return service
-
-        raise ServiceNotFoundError(f"Service not found: {name}")
-
-    async def get_async(self, name: str) -> Any:
-        """Get a service instance asynchronously.
-
-        Similar to get(), but supports services that require async initialization.
-        This method is preferred when:
-        1. Service has async initialization logic
-        2. Service depends on other async services
-        3. Service creation involves async operations
-
-        Args:
-            name: Name of the service to retrieve
-
-        Returns:
-            Service instance
-
-        Raises:
-            ServiceNotFoundError: If service is not found
-            ServiceInitializationError: If service initialization fails
-
-        Example:
-            >>> database = await container.get_async("database")
-            >>> await database.connect()
-        """
-        # Check cache first
-        if name in self._cache:
-            return self._cache[name]
-
-        # Try service manager
-        if self._service_manager.has(name):
-            service = await self._service_manager.get(name)
             if service is not None:
                 self._cache[name] = service
                 return service

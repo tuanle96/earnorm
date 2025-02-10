@@ -162,8 +162,13 @@ from earnorm.base.env import Environment
 from earnorm.base.model.meta import ModelMeta
 from earnorm.constants import FIELD_MAPPING
 from earnorm.di import Container
-from earnorm.exceptions import DatabaseError, DeletedRecordError, FieldValidationError
-from earnorm.fields.base import BaseField
+from earnorm.exceptions import (
+    DatabaseError,
+    DeletedRecordError,
+    FieldValidationError,
+    ModelNotFoundError,
+)
+from earnorm.fields import BaseField, RelationField
 from earnorm.types import ValueType
 from earnorm.types.models import ModelProtocol
 
@@ -334,32 +339,29 @@ class BaseModel(metaclass=ModelMeta):
     async def __getattr__(self, name: str) -> Any:
         """Get attribute value directly from database with caching.
 
-        This method first checks the cache for the requested field value.
-        If not found in cache, it fetches from database and caches the result.
+        When accessed from class (not instance), returns the field descriptor.
+        When accessed from instance, returns the field value.
+
+        For relation fields:
+        - Returns the model instance or None when accessed from instance
+        - Returns the field descriptor when accessed from class
 
         Args:
             name: Field name to get
 
         Returns:
-            Field value
-
-        Raises:
-            AttributeError: If field does not exist
-            DatabaseError: If database operation fails
-            DeletedRecordError: If trying to access attributes of a deleted record
-
-        Examples:
-            >>> user = User()
-            >>> name = await user.name  # Fetches from DB and caches
-            >>> name = await user.name  # Returns from cache
-            >>> await user.unlink()
-            >>> name = await user.name  # Raises DeletedRecordError
+            Any: Field value if accessed from instance,
+                 Field descriptor if accessed from class
         """
         logger.info(f"Getting attribute {name} for {self._name}")
         try:
-            # Check if record exists
-            if not self._ids:
-                raise DeletedRecordError(self._name)
+            # Skip slot attributes
+            if name in self.__slots__:
+                return object.__getattribute__(self, name)
+
+            # Skip id/ids properties
+            if name in ("id", "ids"):
+                return object.__getattribute__(self, name)
 
             # Check if field exists
             if name not in self.__fields__:
@@ -367,6 +369,17 @@ class BaseModel(metaclass=ModelMeta):
                 raise AttributeError(
                     f"'{self.__class__.__name__}' has no attribute '{name}'"
                 )
+
+            # Get field
+            field = self.__fields__[name]
+
+            # If accessed from class, return field descriptor
+            if not hasattr(self, "_ids"):
+                return field
+
+            # Check if record exists
+            if not self._ids:
+                raise DeletedRecordError(self._name)
 
             # Check cache first using direct slot access
             cache = object.__getattribute__(self, "_cache")
@@ -384,12 +397,19 @@ class BaseModel(metaclass=ModelMeta):
                 return None
 
             # Convert value using field object
-            field = self.__fields__[name]
             value = await field.from_db(
                 result.get(name), self._env.adapter.backend_type
             )
 
-            # Cache the value using direct slot access
+            # For relation fields, ensure we return the model instance, not the field
+            if isinstance(field, RelationField):
+                # Cache the value using direct slot access
+                if isinstance(cache, dict):
+                    cache[name] = value
+                    logger.info(f"Cached relation value for {name}")
+                return value
+
+            # For non-relation fields, cache and return the value
             if isinstance(cache, dict):
                 cache[name] = value
                 logger.info(f"Cached value for {name}")
@@ -936,6 +956,7 @@ class BaseModel(metaclass=ModelMeta):
         2. ID conversion
         3. Special field handling
         4. Auto fields (created_at, updated_at)
+        5. System fields validation and processing
 
         Args:
             vals: Values to convert
@@ -951,17 +972,25 @@ class BaseModel(metaclass=ModelMeta):
         db_vals: Dict[str, Any] = {}
         backend = cls._env.adapter.backend_type
 
-        # Only convert fields that are in vals
+        # Convert fields that are in vals
         for name, value in vals.items():
             if name in cls.__fields__:
                 field = cls.__fields__[name]
-                if not field.readonly:
+                # Skip readonly and system fields unless explicitly allowed
+                if not field.readonly or getattr(field, "system", False):
                     db_vals[name] = await field.to_db(value, backend)
 
-        # Always update updated_at field if it exists
-        if "updated_at" in cls.__fields__ and "updated_at" not in vals:
-            field = cls.__fields__["updated_at"]
-            db_vals["updated_at"] = await field.to_db(None, backend)
+        # Handle system fields and auto fields
+        for name, field in cls.__fields__.items():
+            if name not in db_vals and getattr(field, "system", False):
+                # Handle auto timestamp fields
+                if getattr(field, "auto_now_add", False) or getattr(
+                    field, "auto_now", False
+                ):
+                    from earnorm.fields.primitive import DateTimeField
+
+                    if isinstance(field, DateTimeField):
+                        db_vals[name] = await field.to_db(None, backend)
 
         return db_vals
 
@@ -1168,3 +1197,51 @@ class BaseModel(metaclass=ModelMeta):
             logger.warning(f"Failed to clear cache: {str(e)}")
             # Initialize empty cache in case of error
             object.__setattr__(self, "_cache", {})
+
+    def __init_subclass__(cls, **kwargs):  # type: ignore
+        """Initialize model subclass.
+
+        This method is called when a model class is defined.
+        It handles:
+        - Model registration via ModelMeta
+        - Field setup
+        - Relationship resolution
+        """
+        super().__init_subclass__(**kwargs)
+
+        # Setup fields and track dependencies
+        for name, field in cls.__dict__.items():
+            if isinstance(field, RelationField):
+                # Setup field
+                field.setup(name, cls._name)  # type: ignore
+
+    @classmethod
+    async def get_model(cls, name: str) -> Optional[Type["BaseModel"]]:
+        """Get model class by name.
+
+        Args:
+            name: Model name
+
+        Returns:
+            Optional[Type[BaseModel]]: Model class if found, None otherwise
+        """
+        env = cls._env
+        return await env.get_model(name)  # type: ignore
+
+    @classmethod
+    async def get_model_or_raise(cls, name: str) -> Type["BaseModel"]:
+        """Get model class by name or raise error.
+
+        Args:
+            name: Model name
+
+        Returns:
+            Type[BaseModel]: Model class
+
+        Raises:
+            ModelNotFoundError: If model is not found
+        """
+        model = await cls.get_model(name)
+        if model is None:
+            raise ModelNotFoundError(f"Model '{name}' not found", field_name=name)
+        return model

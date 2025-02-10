@@ -6,10 +6,12 @@ It handles:
 - Value validation and conversion
 - Type checking and constraints
 - Comparison operations
+- System field metadata and behavior
 """
 
 import logging
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
     Coroutine,
@@ -29,6 +31,10 @@ from earnorm.exceptions import DatabaseError
 from earnorm.fields.types import ValidationContext
 from earnorm.types.fields import ComparisonOperator, DatabaseValue
 
+if TYPE_CHECKING:
+    from earnorm.base.model import BaseModel
+    from earnorm.types.relations import RelationOptions, RelationType
+
 T = TypeVar("T")  # Field value type
 
 # Type aliases for validation
@@ -47,6 +53,43 @@ class DatabaseAdapterProtocol(Protocol):
         """Convert value between database and Python types."""
         ...
 
+    async def setup_relations(
+        self, model: Type["BaseModel"], relations: Dict[str, "RelationOptions"]
+    ) -> None:
+        """Set up database relations."""
+        ...
+
+    async def get_related(
+        self,
+        instance: Any,
+        field_name: str,
+        relation_type: "RelationType",
+        options: "RelationOptions",
+    ) -> Union[Optional[Any], List[Any]]:
+        """Get related records."""
+        ...
+
+    async def set_related(
+        self,
+        instance: Any,
+        field_name: str,
+        value: Union[Optional[Any], List[Any]],
+        relation_type: "RelationType",
+        options: "RelationOptions",
+    ) -> None:
+        """Set related records."""
+        ...
+
+    async def delete_related(
+        self,
+        instance: Any,
+        field_name: str,
+        relation_type: "RelationType",
+        options: "RelationOptions",
+    ) -> None:
+        """Delete related records."""
+        ...
+
 
 class EnvironmentProtocol(Protocol):
     """Protocol for environment interface."""
@@ -54,6 +97,10 @@ class EnvironmentProtocol(Protocol):
     @property
     def adapter(self) -> DatabaseAdapterProtocol:
         """Get database adapter."""
+        ...
+
+    async def get_model(self, name: str) -> Type["BaseModel"]:
+        """Get model by name."""
         ...
 
 
@@ -399,9 +446,17 @@ class BaseField(Generic[T]):
     - Type checking and constraints
     - Comparison operations for filtering
     - Descriptor protocol for attribute access
+    - System field metadata and behavior
 
     Args:
         **kwargs: Field options passed to subclasses.
+
+    System Field Options:
+        system (bool): Whether this is a system field
+        auto_now (bool): Auto update timestamp on write
+        auto_now_add (bool): Auto set timestamp on create
+        immutable (bool): Cannot be modified after creation
+        internal (bool): Internal use only, not exposed
 
     Examples:
         >>> class StringField(BaseField[str]):
@@ -411,6 +466,11 @@ class BaseField(Generic[T]):
         >>> class User(BaseModel):
         ...     name = StringField(required=True)
         ...     age = IntegerField()
+        ...     created_at = DateTimeField(
+        ...         system=True,
+        ...         auto_now_add=True,
+        ...         immutable=True
+        ...     )
     """
 
     name: str
@@ -427,6 +487,13 @@ class BaseField(Generic[T]):
     validators: List[Callable[[Any, ValidationContext], Coroutine[Any, Any, None]]]
     env: EnvironmentProtocol
 
+    # System field metadata
+    system: bool
+    auto_now: bool
+    auto_now_add: bool
+    immutable: bool
+    internal: bool
+
     # Field type information
     field_type: str = ""  # Database field type (e.g. "string", "integer", etc.)
     python_type: Type[T] = cast(Type[T], Any)  # Python type for the field
@@ -435,7 +502,20 @@ class BaseField(Generic[T]):
         """Initialize field with options.
 
         Args:
-            **kwargs: Field options
+            **kwargs: Field options including:
+                required (bool): Whether field is required
+                readonly (bool): Whether field is readonly
+                store (bool): Whether to store in database
+                index (bool): Whether to index field
+                help (str): Help text for field
+                compute (Callable): Compute function
+                depends (List[str]): Dependencies for compute
+                validators (List[Callable]): Custom validators
+                system (bool): Whether this is a system field
+                auto_now (bool): Auto update timestamp on write
+                auto_now_add (bool): Auto set timestamp on create
+                immutable (bool): Cannot be modified after creation
+                internal (bool): Internal use only, not exposed
         """
         self.name = ""
         self.model_name = ""
@@ -449,6 +529,31 @@ class BaseField(Generic[T]):
         self.compute = kwargs.get("compute")
         self.depends = kwargs.get("depends", [])
         self.validators = kwargs.get("validators", [])
+
+        # Initialize system field metadata
+        self.system = kwargs.get("system", False)
+        self.auto_now = kwargs.get("auto_now", False)
+        self.auto_now_add = kwargs.get("auto_now_add", False)
+        self.immutable = kwargs.get("immutable", False)
+        self.internal = kwargs.get("internal", False)
+
+        # Validate system field options
+        if self.system:
+            # System fields are readonly by default
+            self.readonly = kwargs.get("readonly", True)
+
+            # Auto timestamp fields must be datetime
+            if self.auto_now or self.auto_now_add:
+                from earnorm.fields.primitive import DateTimeField
+
+                if not isinstance(self, DateTimeField):
+                    raise ValueError(
+                        "auto_now/auto_now_add can only be used with DateTimeField"
+                    )
+
+            # Immutable fields are readonly
+            if self.immutable:
+                self.readonly = True
 
     @property
     def comparison(self) -> FieldComparison:
@@ -475,8 +580,12 @@ class BaseField(Generic[T]):
             name: Field name.
             model_name: Model name.
         """
+        logger.info(f"Setting up field {name} for model {model_name}")
         self.name = name
         self.model_name = model_name
+        logger.info(
+            f"Field setup completed: name={self.name}, model_name={self.model_name}"
+        )
 
     async def validate(
         self, value: Any, context: Optional[Dict[str, Any]] = None
@@ -507,6 +616,24 @@ class BaseField(Generic[T]):
             operation=context.get("operation"),
             values=context.get("values", dict()),
         )
+
+        # Validate system field constraints
+        if self.system:
+            # Check immutable constraint
+            if (
+                self.immutable
+                and context.get("operation") == "write"
+                and value is not None
+            ):
+                raise ValueError(f"Field {self.name} is immutable")
+
+            # Check internal field access
+            if (
+                self.internal
+                and context.get("operation") in ("create", "write")
+                and not context.get("internal", False)
+            ):
+                raise ValueError(f"Field {self.name} is internal")
 
         # Run validators
         for validator in self.validators:

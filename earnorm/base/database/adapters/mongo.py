@@ -20,8 +20,6 @@ from typing import (
     TypeVar,
     Union,
     cast,
-    get_args,
-    get_origin,
     overload,
 )
 
@@ -55,6 +53,7 @@ from earnorm.exceptions import DatabaseError
 from earnorm.pool.backends.mongo import MongoPool
 from earnorm.pool.protocols import AsyncConnectionProtocol
 from earnorm.types import DatabaseModel, JsonDict
+from earnorm.types.relations import RelationOptions, RelationType
 
 ModelT = TypeVar("ModelT", bound=DatabaseModel)
 T = TypeVar("T")
@@ -260,19 +259,19 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             model_type: Type of model or collection name
 
         Returns:
-            MongoDB collection
+            Collection instance
 
         Raises:
-            RuntimeError: If not connected
+            RuntimeError: If database not initialized
         """
         if self._sync_db is None:
-            raise RuntimeError("Not connected to MongoDB")
+            raise RuntimeError("Database not initialized")
 
-        collection_name = (
-            self._get_collection_name(model_type)
-            if isinstance(model_type, type)
-            else str(model_type)
-        )
+        if isinstance(model_type, str):
+            collection_name = model_type
+        else:
+            collection_name = model_type._name  # type: ignore
+
         return self._sync_db[collection_name]
 
     def _to_object_id(self, str_id: Optional[str]) -> Optional[ObjectId]:
@@ -686,7 +685,28 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         field_type: FieldType,
         target_type: Optional[Type[T]] = None,
     ) -> T:
-        """Convert between MongoDB and Python types."""
+        """Convert value between database and Python types.
+
+        This method handles conversion between Python types and MongoDB types:
+        - ObjectId <-> str for IDs
+        - datetime <-> str for dates
+        - Decimal <-> str for decimals
+        - Enum <-> str for enums
+        - dict <-> str for JSON
+        - list <-> list for arrays
+        - relation IDs for relationships
+
+        Args:
+            value: Value to convert
+            field_type: Field type ("string", "integer", etc)
+            target_type: Target Python type
+
+        Returns:
+            Converted value
+
+        Raises:
+            ValueError: If conversion fails
+        """
         try:
             if value is None:
                 return None  # type: ignore
@@ -697,18 +717,33 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             if isinstance(value, Decimal128):
                 value = float(value.to_decimal())
 
-            # Get target type if not provided
-            if target_type is None:
-                target_type = TYPE_MAPPING.get(field_type, Any)  # type: ignore
+            # Handle relation fields
+            if field_type in ["many2one", "one2one"]:
+                # For many-to-one and one-to-one, store single ObjectId
+                if hasattr(value, "id"):
+                    return ObjectId(str(value.id))  # type: ignore
+                elif isinstance(value, str):
+                    return ObjectId(value)  # type: ignore
+                elif isinstance(value, ObjectId):
+                    return value  # type: ignore
+                raise ValueError("Cannot convert value to ObjectId")
 
-            # Validate type compatibility
-            expected_type = TYPE_MAPPING.get(field_type)
-            if expected_type and not issubclass(get_origin(target_type) or target_type, expected_type):  # type: ignore
-                raise TypeError(
-                    f"Target type {target_type} is not compatible with field type {field_type}"
-                )
+            elif field_type in ["one2many", "many2many"]:
+                # For one-to-many and many-to-many, store list of ObjectIds
+                if isinstance(value, list):
+                    return [
+                        (
+                            ObjectId(str(v.id))  # type: ignore
+                            if hasattr(v, "id")  # type: ignore
+                            else (
+                                ObjectId(v) if isinstance(v, str) else v  # type: ignore
+                            )
+                        )
+                        for v in value  # type: ignore
+                    ]  # type: ignore
+                raise ValueError("Cannot convert value to ObjectId list")
 
-            # Convert based on field type
+            # Handle other field types
             if field_type == "string":
                 return str(value)  # type: ignore
             elif field_type == "integer":
@@ -733,29 +768,18 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                 return value  # type: ignore
             elif field_type == "enum" and target_type:
                 if isinstance(value, target_type):
-                    return value  # type: ignore
+                    return value
                 return target_type(value)  # type: ignore
             elif field_type == "array":
                 if isinstance(value, str):
                     value = json.loads(value)
                 if not isinstance(value, (list, tuple)):
-                    raise ValueError(f"Cannot convert {value} to array")
-
-                # Get item type from List[T]
-                item_type = get_args(target_type)[0] if get_args(target_type) else Any
-                if item_type is None or item_type == Any:
-                    return list(value)  # type: ignore
-
-                # Convert each item using the specified type
-                converted: List[T] = [
-                    item_type(item) if item is not None else None  # type: ignore
-                    for item in value  # type: ignore
-                ]
-                return converted  # type: ignore
+                    raise ValueError(f"Expected list or tuple, got {type(value)}")
+                return list(value)  # type: ignore
             elif field_type == "json":
                 if isinstance(value, str):
-                    return json.loads(value)  # type: ignore
-                return value  # type: ignore
+                    return json.loads(value)
+                return value
             else:
                 raise ValueError(f"Unsupported field type: {field_type}")
 
@@ -858,3 +882,484 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         """
         collection = self._get_collection(model_type)
         return MongoJoin[ModelT, DatabaseModel](collection, model_type)
+
+    async def setup_relations(
+        self, model: Type[ModelT], relations: Dict[str, RelationOptions]
+    ) -> None:
+        """Set up relation fields for model.
+
+        This method:
+        1. Creates necessary indexes
+        2. Sets up foreign key constraints
+        3. Creates junction tables for many-to-many
+        4. Validates relation configurations
+
+        Args:
+            model: Model class
+            relations: Relation field configurations
+
+        Raises:
+            DatabaseError: If setup fails
+        """
+        try:
+            collection = self._get_collection(model._name)  # type: ignore
+
+            # Create indexes for each relation
+            for field_name, options in relations.items():
+                # Create index on foreign key field
+                if options.index:
+                    await collection.create_index(
+                        [(field_name, 1)],
+                        unique=options.relation_type == RelationType.ONE_TO_ONE,
+                        sparse=True,
+                    )
+
+                # Create junction collection for many-to-many
+                if options.relation_type == RelationType.MANY_TO_MANY:
+                    if options.through:
+                        # Use custom through model
+                        through_collection = self._get_collection(
+                            options.through._name  # type: ignore
+                        )
+                    else:
+                        # Create default junction collection
+                        through_name = f"{model._name}_{field_name}"  # type: ignore
+                        through_collection = self._get_collection(through_name)
+
+                        # Create indexes on both sides
+                        await through_collection.create_index(
+                            [
+                                ("source_id", 1),
+                                ("target_id", 1),
+                            ],
+                            unique=True,
+                        )
+
+        except Exception as e:
+            raise DatabaseError(
+                message=f"Failed to setup relations: {str(e)}",
+                backend=self.backend_type,
+            ) from e
+
+    async def get_related(
+        self,
+        instance: ModelT,
+        field_name: str,
+        relation_type: RelationType,
+        options: RelationOptions,
+    ) -> Union[Optional[ModelT], List[ModelT]]:
+        """Get related records for relation field.
+
+        Args:
+            instance: Model instance
+            field_name: Relation field name
+            relation_type: Type of relation
+            options: Relation options
+
+        Returns:
+            Single record for one-to-one/many-to-one
+            List of records for one-to-many/many-to-many
+
+        Raises:
+            DatabaseError: If operation fails
+            RuntimeError: If model resolution fails
+        """
+        try:
+            # Resolve model if string reference
+            model = options.model
+            if isinstance(model, str):
+                model = await self.env.get_model(model)
+                if not model:
+                    raise RuntimeError(f"Model {model} not found")
+                options.model = cast(Type[ModelT], model)
+
+            resolved_model = cast(Type[ModelT], model)
+
+            # Get target collection
+            target_collection = self._get_collection(resolved_model)
+
+            if not instance.id:
+                return (
+                    []
+                    if relation_type
+                    in (RelationType.ONE_TO_MANY, RelationType.MANY_TO_MANY)
+                    else None
+                )
+
+            if relation_type == RelationType.MANY_TO_MANY:
+                # Get through collection
+                if options.through:
+                    through_collection = self._get_collection(
+                        options.through._name  # type: ignore
+                    )
+                    local_field, foreign_field = options.through_fields or (
+                        "source_id",
+                        "target_id",
+                    )
+                else:
+                    through_collection = self._get_collection(
+                        f"{instance._name}_{field_name}"  # type: ignore
+                    )
+                    local_field, foreign_field = "source_id", "target_id"
+
+                # Get target IDs from through collection
+                cursor = through_collection.find({local_field: instance.id})
+                target_ids = [doc[foreign_field] async for doc in cursor]
+
+                if not target_ids:
+                    return []
+
+                # Get target records
+                target_collection = self._get_collection(options.model._name)  # type: ignore
+                cursor = target_collection.find({"_id": {"$in": target_ids}})
+                return [
+                    options.model._browse(self._env, [str(doc["_id"])])  # type: ignore
+                    async for doc in cursor
+                ]
+
+            elif relation_type == RelationType.ONE_TO_MANY:
+                # Get target collection
+                target_collection = self._get_collection(options.model._name)  # type: ignore
+
+                # Get target records
+                cursor = target_collection.find({options.related_name: instance.id})
+                return [
+                    options.model._browse(self._env, [str(doc["_id"])])  # type: ignore
+                    async for doc in cursor
+                ]  # type: ignore
+
+            else:
+                # Get target collection
+                target_collection = self._get_collection(options.model._name)  # type: ignore
+
+                # Get single target record
+                doc = await target_collection.find_one({"_id": instance.id})
+                if not doc:
+                    return None
+
+                return options.model._browse(self._env, [str(doc["_id"])])  # type: ignore
+
+        except Exception as e:
+            raise DatabaseError(
+                message=f"Failed to get related records: {str(e)}",
+                backend=self.backend_type,
+            ) from e
+
+    async def set_related(
+        self,
+        instance: ModelT,
+        field_name: str,
+        value: Union[Optional[ModelT], List[ModelT]],
+        relation_type: RelationType,
+        options: RelationOptions,
+    ) -> None:
+        """Set related records for relation field.
+
+        Args:
+            instance: Model instance
+            field_name: Relation field name
+            value: Related record(s) to set
+            relation_type: Type of relation
+            options: Relation options
+
+        Raises:
+            DatabaseError: If operation fails
+            RuntimeError: If model resolution fails
+            ValueError: If value type doesn't match model type
+        """
+        try:
+            # Resolve model if string reference
+            model = options.model
+            if isinstance(model, str):
+                model = await self.env.get_model(model)
+                if not model:
+                    raise RuntimeError(f"Model {model} not found")
+                options.model = cast(Type[ModelT], model)
+
+            resolved_model = cast(Type[ModelT], model)
+
+            # Validate value type
+            if isinstance(value, list):
+                for item in value:
+                    if not isinstance(item, resolved_model):
+                        raise ValueError(
+                            f"Expected {resolved_model.__name__}, got {type(item)}"
+                        )
+            elif value is not None and not isinstance(value, resolved_model):
+                raise ValueError(
+                    f"Expected {resolved_model.__name__}, got {type(value)}"
+                )
+
+            # Get target collection
+            target_collection = self._get_collection(resolved_model)
+
+            if not instance.id:
+                return
+
+            if relation_type == RelationType.MANY_TO_MANY:
+                # Get through collection
+                if options.through:
+                    through_collection = self._get_collection(
+                        options.through._name  # type: ignore
+                    )
+                    local_field, foreign_field = options.through_fields or (
+                        "source_id",
+                        "target_id",
+                    )
+                else:
+                    through_collection = self._get_collection(
+                        f"{instance._name}_{field_name}"  # type: ignore
+                    )
+                    local_field, foreign_field = "source_id", "target_id"
+
+                # Delete existing relations
+                await through_collection.delete_many({local_field: instance.id})
+
+                if not value:
+                    return
+
+                # Create new relations
+                docs = [  # type: ignore
+                    {local_field: instance.id, foreign_field: target.id}  # type: ignore
+                    for target in value  # type: ignore
+                ]
+                await through_collection.insert_many(docs)  # type: ignore
+
+            elif relation_type == RelationType.ONE_TO_MANY:
+                if not value:
+                    return
+
+                # Update target records
+                target_collection = self._get_collection(options.model._name)  # type: ignore
+                target_ids = [target.id for target in value]  # type: ignore
+
+                # Remove old relations
+                await target_collection.update_many(
+                    {options.related_name: instance.id},  # type: ignore
+                    {"$unset": {options.related_name: ""}},
+                )
+
+                # Set new relations
+                await target_collection.update_many(
+                    {"_id": {"$in": target_ids}},
+                    {"$set": {options.related_name: instance.id}},
+                )
+
+            else:
+                # Update single target record
+                target_collection = self._get_collection(options.model._name)  # type: ignore
+
+                if value:
+                    await target_collection.update_one(
+                        {"_id": value.id}, {"$set": {options.related_name: instance.id}}
+                    )
+
+        except Exception as e:
+            raise DatabaseError(
+                message=f"Failed to set related records: {str(e)}",
+                backend=self.backend_type,
+            ) from e
+
+    async def delete_related(
+        self,
+        instance: ModelT,
+        field_name: str,
+        relation_type: RelationType,
+        options: RelationOptions,
+    ) -> None:
+        """Delete related records based on on_delete behavior.
+
+        Args:
+            instance: Model instance
+            field_name: Relation field name
+            relation_type: Type of relation
+            options: Relation options
+
+        Raises:
+            DatabaseError: If operation fails
+            RuntimeError: If model resolution fails
+        """
+        try:
+            # Resolve model if string reference
+            model = options.model
+            if isinstance(model, str):
+                model = await self.env.get_model(model)
+                if not model:
+                    raise RuntimeError(f"Model {model} not found")
+                options.model = cast(Type[ModelT], model)
+
+            resolved_model = cast(Type[ModelT], model)
+
+            # Get target collection
+            target_collection = self._get_collection(resolved_model)
+
+            if not instance.id:
+                return
+
+            if relation_type == RelationType.MANY_TO_MANY:
+                # Get through collection
+                if options.through:
+                    through_collection = self._get_collection(
+                        options.through._name  # type: ignore
+                    )
+                    local_field, foreign_field = options.through_fields or (
+                        "source_id",
+                        "target_id",
+                    )
+                else:
+                    through_collection = self._get_collection(
+                        f"{instance._name}_{field_name}"  # type: ignore
+                    )
+                    local_field, foreign_field = "source_id", "target_id"
+
+                # Delete relations
+                await through_collection.delete_many({local_field: instance.id})
+
+            elif relation_type == RelationType.ONE_TO_MANY:
+                # Get target collection
+                target_collection = self._get_collection(options.model._name)  # type: ignore
+
+                if options.on_delete == "CASCADE":
+                    # Delete target records
+                    await target_collection.delete_many(
+                        {options.related_name: instance.id}
+                    )
+                elif options.on_delete == "SET_NULL":
+                    # Set relation to null
+                    await target_collection.update_many(
+                        {options.related_name: instance.id},
+                        {"$unset": {options.related_name: ""}},
+                    )
+
+            else:
+                # Get target collection
+                target_collection = self._get_collection(options.model._name)  # type: ignore
+
+                if options.on_delete == "CASCADE":
+                    # Delete target record
+                    await target_collection.delete_one({"_id": instance.id})
+                elif options.on_delete == "SET_NULL":
+                    # Set relation to null
+                    await target_collection.update_one(
+                        {"_id": instance.id}, {"$unset": {options.related_name: ""}}
+                    )
+
+        except Exception as e:
+            raise DatabaseError(
+                message=f"Failed to delete related records: {str(e)}",
+                backend=self.backend_type,
+            ) from e
+
+    async def bulk_load_related(
+        self,
+        instances: List[ModelT],
+        field_name: str,
+        relation_type: RelationType,
+        options: RelationOptions,
+    ) -> Dict[str, Union[Optional[ModelT], List[ModelT]]]:
+        """Load related records for multiple instances efficiently.
+
+        Args:
+            instances: List of model instances
+            field_name: Relation field name
+            relation_type: Type of relation
+            options: Relation options
+
+        Returns:
+            Dict mapping instance IDs to their related records
+
+        Raises:
+            DatabaseError: If operation fails
+        """
+        try:
+            if not instances:
+                return {}
+
+            instance_ids = [instance.id for instance in instances]
+            result: Dict[str, Union[Optional[ModelT], List[ModelT]]] = {}
+
+            if relation_type == RelationType.MANY_TO_MANY:
+                # Get through collection
+                if options.through:
+                    through_collection = self._get_collection(
+                        options.through._name  # type: ignore
+                    )
+                    local_field, foreign_field = options.through_fields or (
+                        "source_id",
+                        "target_id",
+                    )
+                else:
+                    through_collection = self._get_collection(
+                        f"{instances[0]._name}_{field_name}"  # type: ignore
+                    )
+                    local_field, foreign_field = "source_id", "target_id"
+
+                # Get all relations
+                cursor = through_collection.find({local_field: {"$in": instance_ids}})
+                relations = {
+                    doc[local_field]: doc[foreign_field] async for doc in cursor
+                }
+
+                if not relations:
+                    return {instance.id: [] for instance in instances}
+
+                # Get all target records
+                target_collection = self._get_collection(options.model._name)  # type: ignore
+                target_ids = list(relations.values())
+                cursor = target_collection.find({"_id": {"$in": target_ids}})
+                targets = {  # type: ignore
+                    str(doc["_id"]): options.model._browse(self._env, [str(doc["_id"])])  # type: ignore
+                    async for doc in cursor
+                }
+
+                # Map relations to instances
+                for instance in instances:
+                    result[instance.id] = [
+                        targets[target_id]
+                        for target_id in relations.get(instance.id, [])
+                        if target_id in targets
+                    ]
+
+            elif relation_type == RelationType.ONE_TO_MANY:
+                # Get target collection
+                target_collection = self._get_collection(options.model._name)  # type: ignore
+
+                # Get all target records
+                cursor = target_collection.find(
+                    {options.related_name: {"$in": instance_ids}}
+                )
+                targets = {  # type: ignore
+                    doc[options.related_name]: options.model._browse(  # type: ignore
+                        self._env, [str(doc["_id"])]  # type: ignore
+                    )
+                    async for doc in cursor
+                }
+
+                # Map targets to instances
+                for instance in instances:
+                    result[instance.id] = targets.get(instance.id, [])  # type: ignore
+
+            else:
+                # Get target collection
+                target_collection = self._get_collection(options.model._name)  # type: ignore
+
+                # Get all target records
+                cursor = target_collection.find({"_id": {"$in": instance_ids}})
+                targets = {  # type: ignore
+                    str(doc["_id"]): options.model._browse(  # type: ignore
+                        self._env, [str(doc["_id"])]  # type: ignore
+                    )
+                    async for doc in cursor
+                }
+
+                # Map targets to instances
+                for instance in instances:
+                    result[instance.id] = targets.get(instance.id)  # type: ignore
+
+            return result
+
+        except Exception as e:
+            raise DatabaseError(
+                message=f"Failed to bulk load related records: {str(e)}",
+                backend=self.backend_type,
+            ) from e

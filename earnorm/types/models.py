@@ -1,4 +1,7 @@
-"""Model-related type definitions."""
+"""Model type definitions.
+
+This module contains type definitions for models to avoid circular imports.
+"""
 
 from typing import (
     Any,

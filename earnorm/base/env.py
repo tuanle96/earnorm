@@ -311,3 +311,12 @@ class Environment:
         if model is None:
             raise ValueError(f"Model {name} not found")
         return model
+
+    @property
+    def is_initialized(self) -> bool:
+        """Check if environment is initialized.
+
+        Returns:
+            bool: True if initialized, False otherwise
+        """
+        return self._initialized

@@ -15,7 +15,7 @@ This module provides basic field types for primitive data:
 """
 
 from earnorm.fields.primitive.boolean import BooleanField
-from earnorm.fields.primitive.datetime import DateTimeField
+from earnorm.fields.primitive.datetime import DateField, DateTimeField, TimeField
 from earnorm.fields.primitive.decimal import DecimalField
 from earnorm.fields.primitive.enum import EnumField
 from earnorm.fields.primitive.file import FileField
@@ -31,6 +31,8 @@ __all__ = [
     "FloatField",
     "BooleanField",
     "DateTimeField",
+    "DateField",
+    "TimeField",
     "DecimalField",
     "UUIDField",
     "JSONField",

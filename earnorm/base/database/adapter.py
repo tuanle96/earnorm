@@ -23,14 +23,32 @@ from abc import ABC, abstractmethod
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Dict, Generic, List, Literal, Optional, Type, TypeVar, Union, get_args, get_origin, overload
+from typing import (
+    Any,
+    Dict,
+    Generic,
+    List,
+    Literal,
+    Optional,
+    Type,
+    TypeVar,
+    Union,
+    get_args,
+    get_origin,
+    overload,
+)
 
 from earnorm.base.database.query.core.query import BaseQuery
 from earnorm.base.database.query.interfaces.domain import DomainExpression
-from earnorm.base.database.query.interfaces.operations.aggregate import AggregateProtocol as AggregateQuery
-from earnorm.base.database.query.interfaces.operations.join import JoinProtocol as JoinQuery
+from earnorm.base.database.query.interfaces.operations.aggregate import (
+    AggregateProtocol as AggregateQuery,
+)
+from earnorm.base.database.query.interfaces.operations.join import (
+    JoinProtocol as JoinQuery,
+)
 from earnorm.base.database.transaction.base import TransactionManager
 from earnorm.types import DatabaseModel
+from earnorm.types.relations import RelationOptions, RelationType
 
 ModelT = TypeVar("ModelT", bound=DatabaseModel)
 JoinT = TypeVar("JoinT", bound=DatabaseModel)
@@ -927,3 +945,199 @@ class DatabaseAdapter(Generic[ModelT], ABC):
     def is_model_instance(self, obj: Any) -> bool:
         """Check if object is a model instance."""
         return not isinstance(obj, type) and isinstance(obj, DatabaseModel)
+
+    @abstractmethod
+    async def setup_relations(
+        self, model: Type[ModelT], relations: Dict[str, RelationOptions]
+    ) -> None:
+        """Set up relation fields for model.
+
+        This method:
+        1. Creates necessary indexes
+        2. Sets up foreign key constraints
+        3. Creates junction tables for many-to-many
+        4. Validates relation configurations
+
+        The method handles both string and class references for related models.
+        If a string reference is provided, it will be resolved to the actual model class.
+
+        Args:
+            model: Model class
+            relations: Relation field configurations
+
+        Raises:
+            DatabaseError: If setup fails
+            RuntimeError: If model resolution fails
+
+        Examples:
+            >>> # Setup with class reference
+            >>> class User(BaseModel):
+            ...     _name = 'res.user'
+            >>> class Post(BaseModel):
+            ...     _name = 'res.post'
+            ...     author = ManyToOneField(User)
+            >>> await adapter.setup_relations(Post, {'author': relation_options})
+
+            >>> # Setup with string reference
+            >>> class Comment(BaseModel):
+            ...     _name = 'res.comment'
+            ...     post = ManyToOneField('res.post')
+            >>> await adapter.setup_relations(Comment, {'post': relation_options})
+        """
+        # Resolve string model references
+        for field_name, options in relations.items():
+            if isinstance(options.model, str):
+                try:
+                    resolved_model = await self.env.get_model(options.model)
+                    options.model = resolved_model
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Failed to resolve model {options.model} for field {field_name}"
+                    ) from e
+
+    @abstractmethod
+    async def get_related(
+        self,
+        instance: ModelT,
+        field_name: str,
+        relation_type: RelationType,
+        options: RelationOptions,
+    ) -> Union[Optional[ModelT], List[ModelT]]:
+        """Get related records for relation field.
+
+        This method handles both string and class references for related models.
+        If a string reference is provided, it will be resolved to the actual model class.
+
+        Args:
+            instance: Model instance
+            field_name: Relation field name
+            relation_type: Type of relation
+            options: Relation options
+
+        Returns:
+            Single record for one-to-one/many-to-one
+            List of records for one-to-many/many-to-many
+
+        Raises:
+            DatabaseError: If operation fails
+            RuntimeError: If model resolution fails
+
+        Examples:
+            >>> # Get related with class reference
+            >>> post = await Post.browse("123")
+            >>> author = await adapter.get_related(
+            ...     post, "author", RelationType.MANY_TO_ONE, options
+            ... )
+
+            >>> # Get related with string reference
+            >>> comment = await Comment.browse("456")
+            >>> post = await adapter.get_related(
+            ...     comment, "post", RelationType.MANY_TO_ONE, options
+            ... )
+        """
+        pass
+
+    @abstractmethod
+    async def set_related(
+        self,
+        instance: ModelT,
+        field_name: str,
+        value: Union[Optional[ModelT], List[ModelT]],
+        relation_type: RelationType,
+        options: RelationOptions,
+    ) -> None:
+        """Set related records for relation field.
+
+        This method handles both string and class references for related models.
+        If a string reference is provided, it will be resolved to the actual model class.
+
+        Args:
+            instance: Model instance
+            field_name: Relation field name
+            value: Related record(s) to set
+            relation_type: Type of relation
+            options: Relation options
+
+        Raises:
+            DatabaseError: If operation fails
+            RuntimeError: If model resolution fails
+            ValueError: If value type doesn't match model type
+
+        Examples:
+            >>> # Set related with class reference
+            >>> post = await Post.browse("123")
+            >>> user = await User.browse("456")
+            >>> await adapter.set_related(
+            ...     post, "author", user, RelationType.MANY_TO_ONE, options
+            ... )
+
+            >>> # Set related with string reference
+            >>> comment = await Comment.browse("789")
+            >>> post = await Post.browse("123")
+            >>> await adapter.set_related(
+            ...     comment, "post", post, RelationType.MANY_TO_ONE, options
+            ... )
+        """
+        pass
+
+    @abstractmethod
+    async def delete_related(
+        self,
+        instance: ModelT,
+        field_name: str,
+        relation_type: RelationType,
+        options: RelationOptions,
+    ) -> None:
+        """Delete related records based on on_delete behavior.
+
+        This method handles both string and class references for related models.
+        If a string reference is provided, it will be resolved to the actual model class.
+
+        Args:
+            instance: Model instance
+            field_name: Relation field name
+            relation_type: Type of relation
+            options: Relation options
+
+        Raises:
+            DatabaseError: If operation fails
+            RuntimeError: If model resolution fails
+
+        Examples:
+            >>> # Delete related with class reference
+            >>> post = await Post.browse("123")
+            >>> await adapter.delete_related(
+            ...     post, "author", RelationType.MANY_TO_ONE, options
+            ... )
+
+            >>> # Delete related with string reference
+            >>> comment = await Comment.browse("456")
+            >>> await adapter.delete_related(
+            ...     comment, "post", RelationType.MANY_TO_ONE, options
+            ... )
+        """
+        pass
+
+    @abstractmethod
+    async def bulk_load_related(
+        self,
+        instances: List[ModelT],
+        field_name: str,
+        relation_type: RelationType,
+        options: RelationOptions,
+    ) -> Dict[str, Union[Optional[ModelT], List[ModelT]]]:
+        """Load related records for multiple instances efficiently.
+
+        Args:
+            instances: List of model instances
+            field_name: Relation field name
+            relation_type: Type of relation
+            options: Relation options
+
+        Returns:
+            Dict mapping instance IDs to their related records
+
+        Raises:
+            DatabaseError: If operation fails
+        """
+        pass

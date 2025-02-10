@@ -1,18 +1,32 @@
 """Simple example usage with detailed logging.
 
-This example demonstrates:
+This module demonstrates:
 1. Model definition with auto env injection
 2. CRUD operations with recordsets
 3. Search and filtering
 4. Error handling and logging
+
+Examples:
+    >>> async def run():
+    ...     await earnorm.init("config.yaml")
+    ...     user = await User.create({
+    ...         "name": "John",
+    ...         "email": "john@example.com"
+    ...     })
 """
+
+from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import date, datetime, time, timezone
+from decimal import Decimal
+from enum import Enum
 from typing import Self
 
 import earnorm
 from earnorm import BaseModel, fields
+from earnorm.fields.relations.many_to_one import ManyToOneField
 
 # Configure logging
 logging.basicConfig(
@@ -22,32 +36,56 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# Define User model first since it will be referenced by other models
 class User(BaseModel):
-    """User model with auto env injection.
+    """User model for demonstrating all types of relationships."""
 
-    This model demonstrates:
-    - Auto environment injection
-    - Field definitions with validation
-    - CRUD operations on recordsets
-
-    Examples:
-        >>> user = User()  # env auto-injected
-        >>> new_user = await user.create({
-        ...     "name": "John Doe",
-        ...     "email": "john@example.com",
-        ...     "age": 30
-        ... })
-        >>> print(new_user.name)  # Access as recordset
-    """
-
-    # Collection configuration
     _name = "user"
 
-    # Fields with validation
-    name = fields.StringField(required=True)
-    email = fields.StringField(required=True, unique=True)
-    age = fields.IntegerField(required=True)
+    # Enum for role field
+    class UserRole(str, Enum):
+        """User role enumeration."""
+
+        ADMIN = "admin"
+        USER = "user"
+        GUEST = "guest"
+
+    # Basic fields
+    name = fields.StringField(required=True, min_length=2, max_length=100)
+    email = fields.StringField(
+        required=True,
+        unique=True,
+        pattern=r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$",
+    )
+    age = fields.IntegerField(required=True, min_value=0, max_value=150)
     status = fields.StringField(required=False)
+
+    # Number fields
+    salary = fields.DecimalField(
+        required=False, min_value=Decimal("0"), max_digits=10, decimal_places=2
+    )
+    score = fields.FloatField(
+        required=False, min_value=0.0, max_value=100.0, default=0.0
+    )
+
+    # Boolean field
+    is_active = fields.BooleanField(default=True)
+
+    # Date/Time fields
+    birth_date = fields.DateField(required=True)
+    created_at = fields.DateTimeField(auto_now_add=True)
+    updated_at = fields.DateTimeField(auto_now=True)
+    last_login = fields.DateTimeField(required=False)
+    working_hours = fields.TimeField(required=False)
+
+    # Complex fields
+    preferences = fields.JSONField(required=False, default=dict)
+    role = fields.EnumField(UserRole, default=UserRole.USER)
+
+    # Many-to-One relationship
+    manager: ManyToOneField["User"] = fields.ManyToOneField(
+        "User", help="User's manager"
+    )
 
     async def get_adult_users(self) -> Self:
         """Retrieve and return all adult users from the database.
@@ -66,26 +104,267 @@ class User(BaseModel):
             domain=[("age", ">", 18)],
             limit=10,
         )
-        # Filter active users
-        return await users.filtered(lambda user: user.age is not None and user.age > 18)
+        return users
+
+
+class Post(BaseModel):
+    """Post model for demonstrating many-to-one relationships."""
+
+    _name = "post"
+
+    title = fields.StringField(required=True)
+    content = fields.StringField(required=True)
+
+    # Back reference to User
+    author = fields.ManyToOneField(User, required=True, help="Post author")
+
+
+async def test_relationship_operations() -> None:
+    """Test relationship operations."""
+    logger.info("=== Testing Relationship Operations ===")
+
+    try:
+        # Create a manager
+        logger.info("Creating manager...")
+        manager = await User.create(
+            {
+                "name": "Manager",
+                "email": "manager@example.com",
+                "age": 40,
+                "birth_date": date(1980, 1, 1),
+            }
+        )
+
+        # Create users with manager
+        logger.info("Creating users with manager...")
+        user1 = await User.create(
+            {
+                "name": "Employee 1",
+                "email": "emp1@example.com",
+                "age": 25,
+                "birth_date": date(1995, 1, 1),
+                "manager": manager,  # Pass User instance
+            }
+        )
+
+        user2 = await User.create(
+            {
+                "name": "Employee 2",
+                "email": "emp2@example.com",
+                "age": 30,
+                "birth_date": date(1990, 1, 1),
+                "manager": manager.id,  # Can use ID instead of instance
+            }
+        )
+
+        # Create posts for users
+        logger.info("Creating posts...")
+        post1 = await Post.create(
+            {
+                "title": "First Post",
+                "content": "Content of first post",
+                "author": user1,  # Pass User instance
+            }
+        )
+
+        post2 = await Post.create(
+            {
+                "title": "Second Post",
+                "content": "Content of second post",
+                "author": user2.id,  # Can use ID instead of instance
+            }
+        )
+
+        # Verify relationships
+        logger.info("Verifying relationships...")
+
+        # Check manager relationship
+        emp1_manager = await user1.manager
+        if emp1_manager:
+            logger.info("Employee 1's manager: %s", await emp1_manager.name)
+
+        emp2_manager = await user2.manager
+        if emp2_manager:
+            logger.info("Employee 2's manager: %s", await emp2_manager.name)
+
+        # Check post author relationship
+        post1_author = await post1.author
+        if post1_author:
+            logger.info("Post 1's author: %s", await post1_author.name)
+
+        post2_author = await post2.author
+        if post2_author:
+            logger.info("Post 2's author: %s", await post2_author.name)
+
+    except Exception as e:
+        logger.error("Error in relationship operations: %s", str(e))
+        raise
+
+
+async def test_single_operations():
+    """Test single record CRUD operations."""
+    logger.info("=== Testing Single Record Operations ===")
+
+    try:
+        # CREATE - Single record with all field types
+        logger.info("Creating single user...")
+        user = await User.create(
+            {
+                "name": "John Doe",
+                "email": "john@example.com",
+                "age": 25,
+                "status": "active",
+                "salary": Decimal("5000.50"),
+                "score": 95.5,
+                "is_active": True,
+                "birth_date": date(1990, 1, 1),
+                "last_login": datetime.now(timezone.utc),
+                "working_hours": time(9, 0, 0),
+                "preferences": {"theme": "dark", "notifications": True},
+                "role": User.UserRole.ADMIN,
+            }
+        )
+        logger.info("Created user: %s with email %s", user, await user.email)
+
+        # READ - Get by ID
+        logger.info("Reading user by ID...")
+        user_id = user.id
+        user = await User.browse(user_id)
+        logger.info("Retrieved user: %s", user)
+
+        # UPDATE - Modify fields
+        logger.info("Updating user...")
+        await user.write(
+            {
+                "name": "John Smith",
+                "age": 26,
+            }
+        )
+        logger.info("Updated user: %s", user)
+
+        # DELETE - Remove record
+        logger.info("Deleting user...")
+        await user.unlink()
+        logger.info("Deleted user with ID: %s", user_id)
+
+    except Exception as e:
+        logger.error("Error in single operations: %s", str(e))
+        raise
+
+
+async def test_bulk_operations():
+    """Test bulk record operations."""
+    logger.info("=== Testing Bulk Operations ===")
+
+    try:
+        # Bulk CREATE
+        logger.info("Creating multiple users...")
+        users = await User.create(
+            [
+                {
+                    "name": f"User {i}",
+                    "email": f"user{i}@example.com",
+                    "age": 20 + i,
+                    "birth_date": date(1990, 1, 1),
+                }
+                for i in range(5)
+            ]
+        )
+        logger.info("Created %d users", len(users))
+
+        # Bulk UPDATE
+        logger.info("Updating multiple users...")
+        await users.write(
+            {
+                "status": "junior",
+            }
+        )
+
+        # Bulk DELETE
+        logger.info("Deleting multiple users...")
+        await users.unlink()
+        logger.info("Deleted %d users", len(users))
+
+    except Exception as e:
+        logger.error("Error in bulk operations: %s", str(e))
+        raise
+
+
+async def test_search_operations():
+    """Test search and filtering operations."""
+    logger.info("=== Testing Search Operations ===")
+
+    try:
+        # Create test data
+        await User.create(
+            [
+                {
+                    "name": "Alice Smith",
+                    "email": "alice@example.com",
+                    "age": 25,
+                    "birth_date": date(1990, 1, 1),
+                    "salary": Decimal("6000.00"),
+                    "is_active": True,
+                },
+                {
+                    "name": "Bob Johnson",
+                    "email": "bob@example.com",
+                    "age": 30,
+                    "birth_date": date(1985, 1, 1),
+                    "salary": Decimal("7000.00"),
+                    "is_active": True,
+                },
+                {
+                    "name": "Charlie Brown",
+                    "email": "charlie@example.com",
+                    "age": 35,
+                    "birth_date": date(1980, 1, 1),
+                    "salary": Decimal("8000.00"),
+                    "is_active": False,
+                },
+            ]
+        )
+
+        # Basic search
+        logger.info("Performing basic search...")
+        users = await User.search(domain=[("age", ">", 28)])
+        logger.info("Found %d users over 28", len(users))
+
+        # Complex search with multiple conditions
+        logger.info("Performing complex search...")
+        users = await User.search(
+            domain=[
+                ("is_active", "=", True),
+                ("salary", ">=", 6500),
+            ]
+        )
+        logger.info("Found %d active users with salary >= 6500.00", len(users))
+
+        # Search with sorting
+        logger.info("Performing sorted search...")
+        users = await User.search(
+            domain=[("is_active", "=", True)],
+            order="salary desc",
+        )
+        logger.info("Found %d users, sorted by salary", len(users))
+
+        # Search with limit and offset
+        logger.info("Performing paginated search...")
+        users = await User.search(
+            domain=[],
+            limit=2,
+            offset=1,
+            order="age asc",
+        )
+        logger.info("Found %d users (paginated)", len(users))
+
+    except Exception as e:
+        logger.error("Error in search operations: %s", str(e))
+        raise
 
 
 async def main():
-    """Main function demonstrating CRUD operations with User model.
-
-    This function shows:
-    1. Single record operations:
-       - Create single user
-       - Read/Search single user
-       - Update single user
-       - Delete single user
-
-    2. Bulk operations:
-       - Create multiple users
-       - Read/Search multiple users
-       - Update multiple users
-       - Delete multiple users
-    """
+    """Run all tests."""
     try:
         # Initialize EarnORM
         logger.info("Initializing ORM...")
@@ -96,194 +375,27 @@ async def main():
         )
         logger.info("ORM initialized successfully")
 
-        # ===== SINGLE RECORD OPERATIONS =====
-        logger.info("=== Starting Single Record Operations ===")
-
-        # CREATE - Create a new user
-        logger.info("Creating new user...")
-        new_user_one = await User.create(
-            {
-                "name": "John Doe",
-                "email": "john@example.com",
-                "age": 25,
-                "status": "active",
-            }
-        )
-        logger.info(f"Created user: {await new_user_one.to_dict()}")
-
-        await new_user_one.write({"age": 26})
-
-        # try to delete
-        await new_user_one.unlink()
-
-        # # print slots
-        # print(f"Slots for user one: {new_user_one.__slots__}")
-        # print(f"Slots new_user_one|ids: {new_user_one._ids}")
-        # print(f"Slots new_user_one|env: {new_user_one._env}")
-        # print(f"Slots new_user_one|name: {new_user_one._name}")
-        # print(f"Slots new_user_one|prefetch_ids: {new_user_one._prefetch_ids}")
-
-        # CREATE - Create a new user
-        # test_data = [
-        #     {"name": "Alice Smith", "email": "alice@example.com", "age": 22},
-        #     {"name": "Bob Johnson", "email": "bob@example.com", "age": 19},
-        #     {"name": "Charlie Brown", "email": "charlie@example.com", "age": 25},
-        #     {"name": "David Wilson", "email": "david@example.com", "age": 17},
-        #     {"name": "Eve Anderson", "email": "eve@example.com", "age": 28},
-        # ]
-        # new_users = await User.create(test_data)
-        # print(f"new_users: {new_users}")
-
-        # test write
-        # await new_users.write({"name": "Justin"})
-
-        # first_new_users = new_users[0]
-        # print(f"Slots first_new_users|ids: {first_new_users._ids}")
-        # print(f"Slots first_new_users|env: {first_new_users._env}")
-        # print(f"Slots first_new_users|name: {first_new_users._name}")
-        # print(f"Slots first_new_users|prefetch_ids: {first_new_users._prefetch_ids}")
-
-        # search
-        justin_users = await User.search(domain=[])
-        logger.info(f"justin_users: {len(justin_users)} with ids {justin_users.ids}")
-
-        for justin in justin_users:
-            logger.info(f"justin: {await justin.name}")
-            logger.info(f"justin: {await justin.name}")
-
-            # change name
-            await justin.write({"name": "Justin 1"})
-
-            # print cache
-            logger.info(f"justin cache: {await justin.name}")
-
-            # delete
-            await justin.unlink()
-
-            # try to get name
-            logger.info(f"justin cache: {await justin.name}")
-
-        # browse for first user to test prefetch
-        # first_new_user = await User.browse("67a464fd7b6393d0963383d7")
-        # print(f"Slots first_new_user|ids: {first_new_user._ids}")
-        # print(f"Slots first_new_user|env: {first_new_user._env}")
-        # print(f"Slots first_new_user|name: {first_new_user._name}")
-        # print(f"Slots first_new_user|age: {await first_new_user.age}")
-        # name_of_user = await first_new_user.age
-        # print(f"name_of_user: {name_of_user}")
-
-        # search
-        # search_users = await User.search(domain=[("age", ">", 18)], limit=10)
-        # print(f"Slots search_users|ids: {search_users._ids}")
-        # print(f"Slots search_users|env: {search_users._env}")
-        # print(f"Slots search_users|name: {search_users._name}")
-        # print(f"Slots search_users|prefetch_ids: {search_users._prefetch_ids}")
-
-        # # READ - Get user by ID
-        # logger.info(f"Reading user by ID: {new_user.id}")
-        # found_user = await User.browse(new_user.id)
-        # if found_user:
-        #     user_data = await found_user.to_dict()
-        #     logger.info(
-        #         f"Found user by ID: {user_data} by id {found_user.id} and email {found_user.email}"
-        # )
-
-        # READ - Search user by email
-        # logger.info("Searching user by email: john@example.com")
-        # users = await User.search(domain=[("email", "=", "john@example.com")])
-        # if users:
-        #     user_data = await users[0].to_dict()
-        #     logger.info(
-        #         f"Found user by email: {user_data} by email {users[0].email} and name {users[0].name}"
-        #     )
-
-        # UPDATE - Update user age
-        # logger.info(f"Updating user {user_data['name']}'s age...")
-        # await users[0].write({"age": 26})
-        # updated_data = await users[0].to_dict()
-        # logger.info(f"Updated user data: {updated_data}")
-
-        # DELETE - Delete single user
-        # logger.info(f"Deleting user: {updated_data['name']}")
-        # success = await users[0].unlink()
-        # logger.info(f"User deletion {'successful' if success else 'failed'}")
-
-        # ===== BULK OPERATIONS =====
-        # logger.info("=== Starting Bulk Operations ===")
-
-        # BULK CREATE - Create multiple users
-        # logger.info("Creating multiple users...")
-        # bulk_users = []
-        # test_data = [
-        #     {"name": "Alice Smith", "email": "alice@example.com", "age": 22},
-        #     {"name": "Bob Johnson", "email": "bob@example.com", "age": 19},
-        #     {"name": "Charlie Brown", "email": "charlie@example.com", "age": 25},
-        #     {"name": "David Wilson", "email": "david@example.com", "age": 17},
-        #     {"name": "Eve Anderson", "email": "eve@example.com", "age": 28},
-        # ]
-
-        # for data in test_data:
-        #     user = await User.create(data)
-        #     bulk_users.append(user)  # type: ignore
-        #     logger.info(f"Created user: {await user.to_dict()}")
-
-        # # BULK READ - Search all users
-        # logger.info("Searching all users...")
-        # all_users = await User.search(domain=[], limit=10)
-        # users_data = [await u.to_dict() for u in all_users]
-        # logger.info(f"Found {len(all_users)} users: {users_data}")
-
-        # # BULK READ - Search by age range
-        # logger.info("Searching users by age range (18-25)...")
-        # age_range_users = await User.search(
-        #     domain=[("age", ">=", 18), ("age", "<=", 25)], limit=10
-        # )
-        # age_range_data = [await u.to_dict() for u in age_range_users]
-        # logger.info(
-        #     f"Found {len(age_range_users)} users in age range: {age_range_data}"
-        # )
-
-        # # BULK UPDATE - Update all adult users
-        # logger.info("Updating all adult users...")
-        # adult_users = await User.search(domain=[("age", ">=", 18)], limit=10)
-        # if adult_users:
-        #     await adult_users.write({"status": "active"})
-        #     updated_data = [await u.to_dict() for u in adult_users]
-        #     logger.info(f"Updated {len(adult_users)} adult users: {updated_data}")
-
-        # # BULK DELETE - Delete users under 18
-        # logger.info("Deleting users under 18...")
-        # minor_users = await User.search(domain=[("age", "<", 18)], limit=10)
-        # minor_data = [await u.to_dict() for u in minor_users]
-        # logger.info(f"Found {len(minor_users)} users under 18: {minor_data}")
-        # if minor_users:
-        #     success = await minor_users.unlink()
-        #     logger.info(
-        #         f"Deletion of minor users {'successful' if success else 'failed'}"
-        #     )
-
-        # # Cleanup remaining users
-        # logger.info("Cleaning up all remaining users...")
-        # remaining_users = await User.search(domain=[], limit=100)
-        # if remaining_users:
-        #     await remaining_users.unlink()
-        #     logger.info(f"Deleted {len(remaining_users)} remaining users")
+        # Run tests
+        # await test_single_operations()
+        # await test_bulk_operations()
+        # await test_search_operations()
+        await test_relationship_operations()
 
     except Exception as e:
-        logger.error(f"Error occurred: {str(e)}", exc_info=True)
+        logger.error("Error in main: %s", str(e))
         raise
+
     finally:
-        # Cleanup and close connections
-        # logger.info("Cleaning up environment...")
+        # Cleanup environment
         try:
             from earnorm.base.env import Environment
 
             env = Environment.get_instance()
             if env:
                 await env.destroy()
-                # logger.info("Environment cleaned up successfully")
+                logger.info("Environment cleaned up successfully")
         except Exception as e:
-            logger.error(f"Failed to cleanup environment: {str(e)}")
+            logger.error(f"Error during cleanup: {str(e)}", exc_info=True)
 
 
 if __name__ == "__main__":
