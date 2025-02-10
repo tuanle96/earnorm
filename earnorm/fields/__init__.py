@@ -89,6 +89,15 @@ from earnorm.fields.primitive import (
     UUIDField,
 )
 
+# Relation fields
+from earnorm.fields.relations import (
+    ManyToManyField,
+    ManyToOneField,
+    OneToManyField,
+    OneToOneField,
+    RelationField,
+)
+
 # Validators
 from earnorm.fields.validators.base import (
     RangeValidator,
@@ -138,6 +147,12 @@ __all__ = [
     "DictField",
     "TupleField",
     "EmbeddedField",
+    # Relation fields
+    "ManyToManyField",
+    "ManyToOneField",
+    "OneToManyField",
+    "OneToOneField",
+    "RelationField",
     # Validators
     "Validator",
     "ValidatorChain",

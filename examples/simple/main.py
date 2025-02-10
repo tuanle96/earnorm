@@ -22,10 +22,11 @@ import logging
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from enum import Enum
-from typing import Self, cast
+from typing import Self
 
 import earnorm
 from earnorm import BaseModel, fields
+from earnorm.fields.relations.many_to_one import ManyToOneField
 
 # Configure logging
 logging.basicConfig(
@@ -82,8 +83,8 @@ class User(BaseModel):
     role = fields.EnumField(UserRole, default=UserRole.USER)
 
     # Many-to-One relationship
-    manager = fields.ManyToOneField(
-        "user", help="User's manager"  # Use string reference to avoid circular import
+    manager: ManyToOneField["User"] = fields.ManyToOneField(
+        "User", help="User's manager"
     )
 
     async def get_adult_users(self) -> Self:
@@ -115,11 +116,7 @@ class Post(BaseModel):
     content = fields.StringField(required=True)
 
     # Back reference to User
-    author = fields.ManyToOneField(
-        "user",  # Use string reference to avoid circular import
-        required=True,
-        help="Post author",
-    )
+    author = fields.ManyToOneField(User, required=True, help="Post author")
 
 
 async def test_relationship_operations() -> None:
@@ -184,20 +181,20 @@ async def test_relationship_operations() -> None:
         # Check manager relationship
         emp1_manager = await user1.manager
         if emp1_manager:
-            logger.info("Employee 1's manager: %s", emp1_manager.name)
+            logger.info("Employee 1's manager: %s", await emp1_manager.name)
 
         emp2_manager = await user2.manager
         if emp2_manager:
-            logger.info("Employee 2's manager: %s", emp2_manager.name)
+            logger.info("Employee 2's manager: %s", await emp2_manager.name)
 
         # Check post author relationship
         post1_author = await post1.author
         if post1_author:
-            logger.info("Post 1's author: %s", post1_author.name)
+            logger.info("Post 1's author: %s", await post1_author.name)
 
         post2_author = await post2.author
         if post2_author:
-            logger.info("Post 2's author: %s", post2_author.name)
+            logger.info("Post 2's author: %s", await post2_author.name)
 
     except Exception as e:
         logger.error("Error in relationship operations: %s", str(e))
@@ -227,7 +224,7 @@ async def test_single_operations():
                 "role": User.UserRole.ADMIN,
             }
         )
-        logger.info("Created user: %s", user)
+        logger.info("Created user: %s with email %s", user, await user.email)
 
         # READ - Get by ID
         logger.info("Reading user by ID...")

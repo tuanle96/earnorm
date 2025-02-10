@@ -83,7 +83,7 @@ class ConfigBackupError(ConfigError):
 
 
 @dataclass
-class ValidationError:
+class ValidationError(BaseException):
     """Structured validation error with context.
 
     This class provides detailed error information including:
