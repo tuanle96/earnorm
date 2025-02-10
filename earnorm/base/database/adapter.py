@@ -95,6 +95,28 @@ class DatabaseAdapter(Generic[ModelT], ABC):
         ModelT: Type of model being queried
     """
 
+    def __init__(self) -> None:
+        """Initialize database adapter."""
+        self._env = None
+
+    @property
+    def env(self) -> Any:
+        """Get environment instance.
+
+        Returns:
+            Environment instance
+        """
+        return self._env
+
+    @env.setter
+    def env(self, value: Any) -> None:
+        """Set environment instance.
+
+        Args:
+            value: Environment instance
+        """
+        self._env = value
+
     @abstractmethod
     async def init(self) -> None:
         """Initialize and connect to database.

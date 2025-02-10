@@ -82,6 +82,8 @@ class RelationField(BaseField[T], RelationProtocol[T]):
         ...     )
     """
 
+    logger = logging.getLogger(__name__)
+
     def __init__(
         self,
         model: ModelType[T],
@@ -143,7 +145,7 @@ class RelationField(BaseField[T], RelationProtocol[T]):
         if not class_name:
             raise ValueError("Class name cannot be empty")
 
-        # Convert camel case to snake case
+        # Convert camel case to snake case and lowercase
         import re
 
         name = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", class_name)
@@ -152,16 +154,8 @@ class RelationField(BaseField[T], RelationProtocol[T]):
     async def _resolve_model(self) -> Type[T]:
         """Resolve model reference to actual class.
 
-        This method resolves model references in the following order:
-        1. Return cached model if already resolved
-        2. If reference is a class, use it directly
-        3. If reference is a string:
-           - Try converting class name to model name first
-           - If not found, try exact name as fallback
-           - Cache the result for future use
-
         Returns:
-            Resolved model class
+            Type[T]: Resolved model class
 
         Raises:
             RuntimeError: If environment not set or model not found
@@ -169,44 +163,38 @@ class RelationField(BaseField[T], RelationProtocol[T]):
         """
         # Return cached model if available
         if self._resolved_model is not None:
+            self.logger.info(f"Using cached resolved model: {self._resolved_model}")
             return self._resolved_model
 
-        # Handle class reference
-        if isinstance(self._model_ref, type):
+        # Handle class reference - nếu đã là class thì dùng trực tiếp
+        if hasattr(self._model_ref, "_name"):
+            self.logger.info(f"Model reference is already a class: {self._model_ref}")
             self._resolved_model = cast(Type[T], self._model_ref)
             return self._resolved_model
 
         # Handle string reference
         if not self.env:
+            self.logger.error("Environment not set during model resolution")
             raise RuntimeError("Environment not set")
 
-        # Initialize model_name
-        model_name = str(self._model_ref)  # type: ignore
-
-        # Try converting class name to model name first
-        try:
-            model_name = self._convert_class_name_to_model_name(self._model_ref)  # type: ignore
-            model = await self.env.get_model(model_name)
-            self._resolved_model = cast(Type[T], model)
-            return self._resolved_model
-        except Exception as e:
-            logger.debug(f"Failed to convert class name {self._model_ref}: {str(e)}")
-
-        # Try exact name as fallback
+        # Resolve model using exact name
+        self.logger.info(f"Resolving model by name: {self._model_ref}")
         model = await self.env.get_model(self._model_ref)  # type: ignore
         if model:
+            self.logger.info(f"Found model: {model}")
             self._resolved_model = cast(Type[T], model)
             return self._resolved_model
 
         # Model not found
-        raise RuntimeError(
+        error_msg = (
             f"Model not found for reference '{self._model_ref}'. "
-            f"Make sure the model exists and is properly registered. "
-            f"Tried both converted name '{model_name}' and exact name '{self._model_ref}'"
+            f"Make sure the model exists and is properly registered with correct _name attribute."
         )
+        self.logger.error(error_msg)
+        raise RuntimeError(error_msg)
 
     @property
-    def model(self) -> Type[T]:
+    async def model(self) -> Type[T]:
         """Get model reference.
 
         Returns:
@@ -217,9 +205,10 @@ class RelationField(BaseField[T], RelationProtocol[T]):
         """
         if isinstance(self._model_ref, type):
             return cast(Type[T], self._model_ref)
-        if self._resolved_model is not None:
-            return self._resolved_model
-        raise RuntimeError("Model not resolved")
+        if self._resolved_model is None:
+            self.logger.info(f"Auto resolving model for {self._model_ref}")
+            self._resolved_model = await self._resolve_model()
+        return self._resolved_model
 
     async def get_model(self) -> Type[T]:
         """Get resolved model class.
@@ -237,6 +226,7 @@ class RelationField(BaseField[T], RelationProtocol[T]):
         2. Validates relation configuration
         3. Sets up reverse relation if needed
         4. Creates database indexes
+        5. Resolves model reference if needed
 
         Args:
             name: Field name
@@ -253,6 +243,11 @@ class RelationField(BaseField[T], RelationProtocol[T]):
             raise RuntimeError(f"Model {model_name} not found")
 
         self._owner_model = cast(Type[T], owner_model)
+
+        # Resolve model reference if needed
+        if not isinstance(self._model_ref, type):
+            self.logger.info(f"Resolving model during setup: {self._model_ref}")
+            self._resolved_model = await self._resolve_model()
 
         # Set up reverse relation
         if self.related_name:
@@ -307,13 +302,11 @@ class RelationField(BaseField[T], RelationProtocol[T]):
 
         # Get relation options
         options = RelationOptions(
-            model=self.model,
-            relation_type=self.relation_type,
-            related_name=self.related_name,
+            model=cast(Union[Type[ModelProtocol], str], self._model_ref),
+            related_name=self.related_name or "",
             on_delete=self.on_delete,
-            through=None,  # Set by subclasses
-            through_fields=None,  # Set by subclasses
-            index=True,  # Always index foreign keys
+            through=None,
+            through_fields=None,
         )
 
         # Set up in database
@@ -445,20 +438,20 @@ class RelationField(BaseField[T], RelationProtocol[T]):
             raise RuntimeError("Environment not set")
 
         # Get from database
-        return await self.env.adapter.get_related(
+        records = await self.env.adapter.get_related(
             instance,
             self.name,
-            self.relation_type,
+            RelationType(self.field_type),
             RelationOptions(
-                model=self.model,
-                relation_type=self.relation_type,
-                related_name=self.related_name,
+                model=cast(Union[Type[ModelProtocol], str], self._model_ref),
+                related_name=self.related_name or "",
                 on_delete=self.on_delete,
-                through=None,  # Set by subclasses
-                through_fields=None,  # Set by subclasses
-                index=True,
+                through=None,
+                through_fields=None,
             ),
         )
+
+        return records
 
     async def set_related(
         self, instance: Any, value: Union[Optional[T], List[T]]
@@ -480,15 +473,13 @@ class RelationField(BaseField[T], RelationProtocol[T]):
             instance,
             self.name,
             value,
-            self.relation_type,
+            RelationType(self.field_type),
             RelationOptions(
-                model=self.model,
-                relation_type=self.relation_type,
-                related_name=self.related_name,
+                model=cast(Union[Type[ModelProtocol], str], self._model_ref),
+                related_name=self.related_name or "",
                 on_delete=self.on_delete,
-                through=None,  # Set by subclasses
-                through_fields=None,  # Set by subclasses
-                index=True,
+                through=None,
+                through_fields=None,
             ),
         )
 
@@ -505,14 +496,44 @@ class RelationField(BaseField[T], RelationProtocol[T]):
         await self.env.adapter.delete_related(
             instance,
             self.name,
-            self.relation_type,
+            RelationType(self.field_type),
             RelationOptions(
-                model=self.model,
-                relation_type=self.relation_type,
-                related_name=self.related_name,
+                model=cast(Union[Type[ModelProtocol], str], self._model_ref),
+                related_name=self.related_name or "",
                 on_delete=self.on_delete,
-                through=None,  # Set by subclasses
-                through_fields=None,  # Set by subclasses
-                index=True,
+                through=None,
+                through_fields=None,
             ),
         )
+
+    async def __get__(self, instance: Optional[Any], owner: Optional[type] = None) -> T:
+        """Get related record(s).
+
+        This method is common for all relation fields. It ensures that:
+        1. Always returns a recordset (never None)
+        2. Returns empty recordset if no related records found
+        3. Properly casts return type to recordset type
+
+        Args:
+            instance: Model instance
+            owner: Model class
+
+        Returns:
+            Recordset containing related record(s) (may be empty)
+
+        Examples:
+            >>> model = Model()
+            >>> related = await model.relation  # Returns recordset
+            >>> if related.id:  # Check if has records
+            ...     print(await related.name)
+        """
+        if instance is None:
+            return self  # type: ignore
+
+        value = await super().__get__(instance, owner)
+        if value is None:
+            # Return empty recordset instead of None
+            model = await self._resolve_model()
+            return model._browse(model._env, [])  # type: ignore
+
+        return cast(T, value)  # Cast to recordset type

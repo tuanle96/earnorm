@@ -20,6 +20,7 @@ Examples:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
@@ -34,14 +35,12 @@ from typing import (
     Union,
 )
 
-from earnorm.types.models import ModelProtocol
-
 if TYPE_CHECKING:
-    from earnorm.base.model import BaseModel
+    from earnorm.types.models import ModelProtocol
 
-    T = TypeVar("T", bound="BaseModel")
-else:
-    T = TypeVar("T", bound=ModelProtocol)
+# Covariant type variable for relation fields
+T_co = TypeVar("T_co", covariant=True)
+ModelT = TypeVar("ModelT", bound="ModelProtocol")
 
 
 class RelationFieldOptions(TypedDict, total=False):
@@ -57,58 +56,85 @@ class RelationFieldOptions(TypedDict, total=False):
 
 
 class RelationType(str, Enum):
-    """Enum for relation field types."""
+    """Relation type enum.
 
-    ONE_TO_ONE = "one_to_one"
-    MANY_TO_ONE = "many_to_one"
-    ONE_TO_MANY = "one_to_many"
-    MANY_TO_MANY = "many_to_many"
-
-
-class RelationProtocol(Protocol[T]):
-    """Protocol defining relation field interface.
-
-    This protocol defines the core interface that all relation fields must implement.
-    It includes:
-    1. Basic attributes (model, type, etc)
-    2. CRUD operations for related records
-    3. Validation and conversion methods
-
-    Examples:
-        >>> class CustomRelation(RelationProtocol[User]):
-        ...     @property
-        ...     def model(self) -> Type[User]:
-        ...         return User
-        ...     relation_type = RelationType.ONE_TO_ONE
-        ...
-        ...     async def get_related(self) -> Optional[User]:
-        ...         # Custom implementation
-        ...         pass
+    Attributes:
+        ONE_TO_ONE: One-to-one relation
+        ONE_TO_MANY: One-to-many relation
+        MANY_TO_ONE: Many-to-one relation
+        MANY_TO_MANY: Many-to-many relation
     """
 
-    @property
-    def model(self) -> Type[T]:
-        """Get the related model class.
+    ONE_TO_ONE = "one2one"
+    ONE_TO_MANY = "one2many"
+    MANY_TO_ONE = "many2one"
+    MANY_TO_MANY = "many2many"
 
-        Returns:
-            Type[T]: The related model class
-        """
-        ...
 
-    relation_type: RelationType
-    """Type of relation."""
+@dataclass
+class RelationOptions:
+    """Options for relation fields.
 
-    related_name: Optional[str]
-    """Name of reverse relation field."""
+    Attributes:
+        model: Related model class or string reference
+        related_name: Name of reverse relation field
+        on_delete: Delete behavior ('CASCADE', 'SET_NULL', 'PROTECT')
+        through: Through model for many-to-many relations
+        through_fields: Field names for through model
+        lazy: Whether to load related records lazily
+        required: Whether relation is required
+        help: Help text for the field
 
-    on_delete: str
-    """Delete behavior ('CASCADE', 'SET_NULL', 'PROTECT')."""
+    Examples:
+        >>> options = RelationOptions(
+        ...     model='Employee',
+        ...     related_name='department',
+        ...     on_delete='CASCADE',
+        ...     lazy=True
+        ... )
+    """
 
-    async def get_related(self, instance: Any) -> Union[Optional[T], List[T]]:
+    model: Union[Type[ModelProtocol], str]
+    related_name: str
+    on_delete: str = "CASCADE"
+    through: Optional[Dict[str, Any]] = None
+    through_fields: Optional[Dict[str, Any]] = None
+    lazy: bool = True
+    required: bool = False
+    help: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        """Validate options after initialization."""
+        if not self.related_name:
+            raise ValueError("related_name is required")
+
+        if self.on_delete not in ("CASCADE", "SET_NULL", "PROTECT"):
+            raise ValueError(
+                f"Invalid on_delete value: {self.on_delete}. "
+                "Must be one of: CASCADE, SET_NULL, PROTECT"
+            )
+
+
+class RelationProtocol(Protocol[T_co]):
+    """Protocol for relation fields.
+
+    This protocol defines the interface that all relation fields must implement.
+    It ensures type safety and proper handling of related records.
+
+    Type Parameters:
+        T_co: Covariant type of related model
+
+    Examples:
+        >>> class OneToManyField(RelationField[T], Generic[T]):
+        ...     def __init__(self, model: ModelType[T], **options):
+        ...         super().__init__(model, RelationType.ONE_TO_MANY, **options)
+    """
+
+    async def get_related(self, instance: Any) -> Optional[Union[T_co, List[T_co]]]:
         """Get related record(s).
 
         Args:
-            instance: Model instance to get related records for
+            instance: Model instance
 
         Returns:
             Single record for one-to-one/many-to-one
@@ -116,13 +142,11 @@ class RelationProtocol(Protocol[T]):
         """
         ...
 
-    async def set_related(
-        self, instance: Any, value: Union[Optional[T], List[T]]
-    ) -> None:
+    async def set_related(self, instance: Any, value: Any) -> None:
         """Set related record(s).
 
         Args:
-            instance: Model instance to set related records for
+            instance: Model instance
             value: Related record(s) to set
         """
         ...
@@ -131,42 +155,6 @@ class RelationProtocol(Protocol[T]):
         """Delete related record(s).
 
         Args:
-            instance: Model instance to delete related records for
+            instance: Model instance
         """
         ...
-
-
-class RelationOptions(Dict[str, Any]):
-    """Type for relation field options.
-
-    This type defines the structure of options passed to relation fields.
-    It includes all configuration options like:
-    - model: Related model class
-    - relation_type: Type of relation
-    - related_name: Name of reverse relation
-    - on_delete: Delete behavior
-    - through: Through model for many-to-many
-    - through_fields: Field names in through model
-    - index: Whether to create index
-    """
-
-    model: Type[ModelProtocol]
-    """Related model class."""
-
-    relation_type: RelationType
-    """Type of relation."""
-
-    related_name: Optional[str]
-    """Name of reverse relation field."""
-
-    on_delete: str
-    """Delete behavior ('CASCADE', 'SET_NULL', 'PROTECT')."""
-
-    through: Optional[Type[ModelProtocol]]
-    """Through model for many-to-many relations."""
-
-    through_fields: Optional[tuple[str, str]]
-    """Field names in through model (local_field, foreign_field)."""
-
-    index: bool
-    """Whether to create index for foreign key."""

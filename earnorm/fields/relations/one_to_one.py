@@ -30,7 +30,7 @@ Examples:
     >>> user = await profile.user
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Dict, Generic, Optional, TypeVar, cast
 
 from earnorm.fields.relations.base import ModelType, RelationField
 from earnorm.types.models import ModelProtocol
@@ -44,7 +44,7 @@ else:
     T = TypeVar("T", bound=ModelProtocol)
 
 
-class OneToOneField(RelationField[T]):
+class OneToOneField(RelationField[T], Generic[T]):
     """Field for one-to-one relations.
 
     This field ensures that each record in the source model corresponds to exactly one
@@ -56,6 +56,7 @@ class OneToOneField(RelationField[T]):
         related_name: Name of reverse relation field
         on_delete: Delete behavior ('CASCADE', 'SET_NULL', 'PROTECT')
         required: Whether relation is required
+        help: Help text for the field
         **options: Additional field options
 
     Examples:
@@ -79,6 +80,8 @@ class OneToOneField(RelationField[T]):
         >>> user = await profile.user
     """
 
+    field_type = "one2one"
+
     def __init__(
         self,
         model: ModelType[T],
@@ -86,6 +89,7 @@ class OneToOneField(RelationField[T]):
         related_name: Optional[str] = None,
         on_delete: str = "CASCADE",
         required: bool = False,
+        help: Optional[str] = None,
         **options: Dict[str, Any],
     ) -> None:
         """Initialize one-to-one field.
@@ -95,6 +99,7 @@ class OneToOneField(RelationField[T]):
             related_name: Name of reverse relation field
             on_delete: Delete behavior ('CASCADE', 'SET_NULL', 'PROTECT')
             required: Whether relation is required
+            help: Help text for the field
             **options: Additional field options
         """
         field_options = cast(
@@ -111,6 +116,7 @@ class OneToOneField(RelationField[T]):
             related_name=related_name,
             on_delete=on_delete,
             required=required,
+            help=help,
             lazy=True,
             **field_options,
         )

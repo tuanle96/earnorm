@@ -9,44 +9,22 @@ import logging
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import (
-    Any,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Protocol,
-    Type,
-    TypeVar,
-    Union,
-    cast,
-    overload,
-)
+from typing import Any, Dict, List, Literal, Optional, Protocol, Type, TypeVar, Union, cast, overload
 
 from bson import ObjectId
 from bson.decimal128 import Decimal128
-from motor.motor_asyncio import (
-    AsyncIOMotorClient,
-    AsyncIOMotorCollection,
-    AsyncIOMotorDatabase,
-)
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection, AsyncIOMotorDatabase
 from pymongo.operations import DeleteOne, InsertOne, UpdateOne
 
 from earnorm.base.database.adapter import DatabaseAdapter, FieldType
 from earnorm.base.database.query.backends.mongo.converter import MongoConverter
-from earnorm.base.database.query.backends.mongo.operations.aggregate import (
-    MongoAggregate,
-)
+from earnorm.base.database.query.backends.mongo.operations.aggregate import MongoAggregate
 from earnorm.base.database.query.backends.mongo.operations.join import MongoJoin
 from earnorm.base.database.query.backends.mongo.query import MongoQuery
 from earnorm.base.database.query.core.query import BaseQuery
 from earnorm.base.database.query.interfaces.domain import DomainExpression
-from earnorm.base.database.query.interfaces.operations.aggregate import (
-    AggregateProtocol as AggregateQuery,
-)
-from earnorm.base.database.query.interfaces.operations.join import (
-    JoinProtocol as JoinQuery,
-)
+from earnorm.base.database.query.interfaces.operations.aggregate import AggregateProtocol as AggregateQuery
+from earnorm.base.database.query.interfaces.operations.join import JoinProtocol as JoinQuery
 from earnorm.base.database.transaction.backends.mongo import MongoTransactionManager
 from earnorm.di import container
 from earnorm.exceptions import DatabaseError
@@ -253,26 +231,21 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
     def _get_collection(
         self, model_type: Union[Type[ModelT], str]
     ) -> AsyncIOMotorCollection[Dict[str, Any]]:
-        """Get MongoDB collection for model type or collection name.
+        """Get collection for model.
 
         Args:
-            model_type: Type of model or collection name
+            model_type: Model class or name
 
         Returns:
             Collection instance
-
-        Raises:
-            RuntimeError: If database not initialized
         """
-        if self._sync_db is None:
-            raise RuntimeError("Database not initialized")
-
+        # Get collection name
         if isinstance(model_type, str):
             collection_name = model_type
         else:
             collection_name = model_type._name  # type: ignore
 
-        return self._sync_db[collection_name]
+        return self._sync_db[collection_name]  # type: ignore
 
     def _to_object_id(self, str_id: Optional[str]) -> Optional[ObjectId]:
         """Convert string ID to MongoDB ObjectId.
@@ -886,164 +859,230 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
     async def setup_relations(
         self, model: Type[ModelT], relations: Dict[str, RelationOptions]
     ) -> None:
-        """Set up relation fields for model.
+        """Set up database relations.
 
         This method:
         1. Creates necessary indexes
         2. Sets up foreign key constraints
         3. Creates junction tables for many-to-many
-        4. Validates relation configurations
 
         Args:
             model: Model class
-            relations: Relation field configurations
-
-        Raises:
-            DatabaseError: If setup fails
+            relations: Relation field options
         """
         try:
+            # Get collection
             collection = self._get_collection(model._name)  # type: ignore
 
-            # Create indexes for each relation
+            # Set up each relation
             for field_name, options in relations.items():
+                # Get target model
+                target_model = options.model
+                if isinstance(target_model, str):
+                    target_model = await self.env.get_model(target_model)
+                    if not target_model:
+                        raise RuntimeError(f"Target model not found: {options.model}")
+
                 # Create index on foreign key field
-                if options.index:
+                if options.index:  # type: ignore
+                    self.logger.info(f"Creating index for {field_name}")
                     await collection.create_index(
                         [(field_name, 1)],
-                        unique=options.relation_type == RelationType.ONE_TO_ONE,
+                        unique=options.relation_type == RelationType.ONE_TO_ONE,  # type: ignore
                         sparse=True,
                     )
 
                 # Create junction collection for many-to-many
-                if options.relation_type == RelationType.MANY_TO_MANY:
+                if options.relation_type == RelationType.MANY_TO_MANY:  # type: ignore
                     if options.through:
                         # Use custom through model
                         through_collection = self._get_collection(
-                            options.through._name  # type: ignore
+                            options.through["model"]._name  # type: ignore
+                        )
+                        self.logger.info(
+                            f"Using custom through collection: {through_collection.name}"
                         )
                     else:
                         # Create default junction collection
-                        through_name = f"{model._name}_{field_name}"  # type: ignore
-                        through_collection = self._get_collection(through_name)
-
-                        # Create indexes on both sides
-                        await through_collection.create_index(
-                            [
-                                ("source_id", 1),
-                                ("target_id", 1),
-                            ],
-                            unique=True,
+                        through_collection = self._get_collection(
+                            f"{model._name}_{field_name}"  # type: ignore
+                        )
+                        self.logger.info(
+                            f"Created default junction collection: {through_collection.name}"
                         )
 
+                        # Create indexes on junction collection
+                        await through_collection.create_index(
+                            [("source_id", 1), ("target_id", 1)],
+                            unique=True,
+                        )
+                        await through_collection.create_index("source_id")
+                        await through_collection.create_index("target_id")
+
         except Exception as e:
-            raise DatabaseError(
-                message=f"Failed to setup relations: {str(e)}",
-                backend=self.backend_type,
-            ) from e
+            self.logger.error(f"Failed to setup relations: {str(e)}")
+            raise
 
     async def get_related(
         self,
-        instance: ModelT,
+        instance: Any,
         field_name: str,
         relation_type: RelationType,
         options: RelationOptions,
-    ) -> Union[Optional[ModelT], List[ModelT]]:
-        """Get related records for relation field.
+    ) -> ModelT:
+        """Get related record(s).
 
         Args:
             instance: Model instance
-            field_name: Relation field name
-            relation_type: Type of relation
+            field_name: Field name
+            relation_type: Relation type
             options: Relation options
 
         Returns:
-            Single record for one-to-one/many-to-one
-            List of records for one-to-many/many-to-many
-
-        Raises:
-            DatabaseError: If operation fails
-            RuntimeError: If model resolution fails
+            Related record(s)
         """
         try:
-            # Resolve model if string reference
-            model = options.model
-            if isinstance(model, str):
-                model = await self.env.get_model(model)
-                if not model:
-                    raise RuntimeError(f"Model {model} not found")
-                options.model = cast(Type[ModelT], model)
+            # Get source ID
+            source_id = instance.id
+            self.logger.info(
+                f"Getting related records for {instance._name}:{source_id}, field: {field_name}, type: {relation_type}"
+            )
 
-            resolved_model = cast(Type[ModelT], model)
+            # Get target model
+            target_model = options.model
+            if isinstance(target_model, str):
+                # Resolve string reference
+                target_model = await self.env.get_model(target_model)
+                if target_model is None:
+                    raise RuntimeError(f"Target model not found: {options.model}")
 
-            # Get target collection
-            target_collection = self._get_collection(resolved_model)
+            # Now target_model is guaranteed to be a class
+            collection = self._get_collection(target_model._name)  # type: ignore
 
-            if not instance.id:
-                return (
-                    []
-                    if relation_type
-                    in (RelationType.ONE_TO_MANY, RelationType.MANY_TO_MANY)
-                    else None
+            if relation_type == RelationType.ONE_TO_MANY:
+                self.logger.info(
+                    f"Handling ONE_TO_MANY relation, related_name: {options.related_name}"
                 )
-
-            if relation_type == RelationType.MANY_TO_MANY:
-                # Get through collection
-                if options.through:
-                    through_collection = self._get_collection(
-                        options.through._name  # type: ignore
-                    )
-                    local_field, foreign_field = options.through_fields or (
-                        "source_id",
-                        "target_id",
-                    )
-                else:
-                    through_collection = self._get_collection(
-                        f"{instance._name}_{field_name}"  # type: ignore
-                    )
-                    local_field, foreign_field = "source_id", "target_id"
-
-                # Get target IDs from through collection
-                cursor = through_collection.find({local_field: instance.id})
-                target_ids = [doc[foreign_field] async for doc in cursor]
-
-                if not target_ids:
-                    return []
-
-                # Get target records
-                target_collection = self._get_collection(options.model._name)  # type: ignore
-                cursor = target_collection.find({"_id": {"$in": target_ids}})
-                return [
-                    options.model._browse(self._env, [str(doc["_id"])])  # type: ignore
-                    async for doc in cursor
+                # Use aggregation pipeline for better performance
+                pipeline = [
+                    {"$match": {options.related_name: source_id}},
+                    {"$project": {"_id": 1}},
+                    {"$addFields": {"id": {"$toString": "$_id"}}},
+                    {"$replaceRoot": {"newRoot": {"id": "$id"}}},
+                    {"$group": {"_id": None, "ids": {"$push": "$id"}}},
+                    {"$project": {"_id": 0, "ids": 1}},
                 ]
 
-            elif relation_type == RelationType.ONE_TO_MANY:
-                # Get target collection
-                target_collection = self._get_collection(options.model._name)  # type: ignore
+                target_records = await collection.aggregate(pipeline).to_list(
+                    length=None
+                )
 
-                # Get target records
-                cursor = target_collection.find({options.related_name: instance.id})
-                return [
-                    options.model._browse(self._env, [str(doc["_id"])])  # type: ignore
-                    async for doc in cursor
-                ]  # type: ignore
+                # Extract IDs from result
+                target_ids: List[str] = (
+                    target_records[0]["ids"] if target_records else []
+                )
+                self.logger.info(f"Found {len(target_ids)} records using aggregation")
 
-            else:
-                # Get target collection
-                target_collection = self._get_collection(options.model._name)  # type: ignore
+                # Always return recordset (may be empty)
+                result: ModelT = target_model._browse(target_model._env, target_ids)  # type: ignore
+                self.logger.info(f"Returning recordset: {result}")
+                return result  # type: ignore
 
-                # Get single target record
-                doc = await target_collection.find_one({"_id": instance.id})
-                if not doc:
-                    return None
+            elif relation_type == RelationType.MANY_TO_ONE:
+                self.logger.info("Handling MANY_TO_ONE relation")
+                # Direct query using foreign key
+                target_record = await self.read(target_model._name, source_id)
+                self.logger.info(f"Found target record: {target_record}")
+                if not target_record:
+                    result = target_model._browse(target_model._env, [])
+                    self.logger.info("No record found, returning empty recordset")
+                    return result
+                result = target_model._browse(target_model._env, [target_record])
+                self.logger.info(f"Returning recordset with record: {result}")
+                return result
 
-                return options.model._browse(self._env, [str(doc["_id"])])  # type: ignore
+            elif relation_type == RelationType.ONE_TO_ONE:
+                self.logger.info("Handling ONE_TO_ONE relation")
+                # Similar to many-to-one but enforce uniqueness
+                target_record = await self.read(target_model._name, source_id)
+                self.logger.info(f"Found target record: {target_record}")
+                if not target_record:
+                    result = target_model._browse(target_model._env, [])
+                    self.logger.info("No record found, returning empty recordset")
+                    return result
+                result = target_model._browse(target_model._env, [target_record])
+                self.logger.info(f"Returning recordset with record: {result}")
+                return result
+
+            elif relation_type == RelationType.MANY_TO_MANY:
+                self.logger.info("Handling MANY_TO_MANY relation")
+                # Handle through model if specified
+                if options.through:
+                    self.logger.info(f"Using through model: {options.through}")
+                    # Query through model first
+                    through_collection = self._get_collection(
+                        options.through["model"]._name  # type: ignore
+                    )
+                    cursor = through_collection.find(
+                        {options.through_fields["fields"][0]: source_id}
+                    )
+                    through_records = []
+                    async for doc in cursor:
+                        self.logger.info(f"Found through document: {doc}")
+                        converted = await self._convert_document(doc)
+                        self.logger.info(f"Converted through document: {converted}")
+                        through_records.append(converted)
+
+                    if not through_records:
+                        result = target_model._browse(target_model._env, [])
+                        self.logger.info(
+                            "No through records found, returning empty recordset"
+                        )
+                        return result
+
+                    # Then query target model
+                    target_ids = [
+                        r[options.through_fields["fields"][1]] for r in through_records
+                    ]
+                    self.logger.info(f"Found target IDs: {target_ids}")
+
+                    target_records = []
+                    for target_id in target_ids:
+                        record = await self.read(target_model._name, target_id)
+                        self.logger.info(f"Found target record: {record}")
+                        if record:
+                            target_records.append(record)
+
+                    result = target_model._browse(target_model._env, target_records)
+                    self.logger.info(
+                        f"Returning recordset with {len(target_records)} records"
+                    )
+                    return result
+                else:
+                    self.logger.info("Using direct many-to-many relation")
+                    # Direct many-to-many
+                    cursor = collection.find({field_name: source_id})
+                    target_records = []
+                    async for doc in cursor:
+                        self.logger.info(f"Found document: {doc}")
+                        converted = await self._convert_document(doc)
+                        self.logger.info(f"Converted document: {converted}")
+                        target_records.append(converted)
+
+                    result = target_model._browse(
+                        target_model._env, target_records or []
+                    )
+                    self.logger.info(
+                        f"Returning recordset with {len(target_records)} records"
+                    )
+                    return result
+
+            self.logger.warning(f"Unknown relation type: {relation_type}")
+            return None
 
         except Exception as e:
-            raise DatabaseError(
-                message=f"Failed to get related records: {str(e)}",
-                backend=self.backend_type,
-            ) from e
+            self.logger.error(f"Failed to get related records: {str(e)}")
+            raise
 
     async def set_related(
         self,
@@ -1151,7 +1190,8 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
 
                 if value:
                     await target_collection.update_one(
-                        {"_id": value.id}, {"$set": {options.related_name: instance.id}}
+                        {"_id": value.id},  # type: ignore
+                        {"$set": {options.related_name: instance.id}},  # type: ignore
                     )
 
         except Exception as e:
@@ -1202,7 +1242,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                     through_collection = self._get_collection(
                         options.through._name  # type: ignore
                     )
-                    local_field, foreign_field = options.through_fields or (
+                    local_field, foreign_field = options.through_fields or (  # type: ignore
                         "source_id",
                         "target_id",
                     )
@@ -1210,7 +1250,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                     through_collection = self._get_collection(
                         f"{instance._name}_{field_name}"  # type: ignore
                     )
-                    local_field, foreign_field = "source_id", "target_id"
+                    local_field, foreign_field = "source_id", "target_id"  # type: ignore
 
                 # Delete relations
                 await through_collection.delete_many({local_field: instance.id})
