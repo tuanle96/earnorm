@@ -9,22 +9,44 @@ import logging
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Protocol, Type, TypeVar, Union, cast, overload
+from typing import (
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Protocol,
+    Type,
+    TypeVar,
+    Union,
+    cast,
+    overload,
+)
 
 from bson import ObjectId
 from bson.decimal128 import Decimal128
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection, AsyncIOMotorDatabase
+from motor.motor_asyncio import (
+    AsyncIOMotorClient,
+    AsyncIOMotorCollection,
+    AsyncIOMotorDatabase,
+)
 from pymongo.operations import DeleteOne, InsertOne, UpdateOne
 
 from earnorm.base.database.adapter import DatabaseAdapter, FieldType
 from earnorm.base.database.query.backends.mongo.converter import MongoConverter
-from earnorm.base.database.query.backends.mongo.operations.aggregate import MongoAggregate
+from earnorm.base.database.query.backends.mongo.operations.aggregate import (
+    MongoAggregate,
+)
 from earnorm.base.database.query.backends.mongo.operations.join import MongoJoin
 from earnorm.base.database.query.backends.mongo.query import MongoQuery
 from earnorm.base.database.query.core.query import BaseQuery
 from earnorm.base.database.query.interfaces.domain import DomainExpression
-from earnorm.base.database.query.interfaces.operations.aggregate import AggregateProtocol as AggregateQuery
-from earnorm.base.database.query.interfaces.operations.join import JoinProtocol as JoinQuery
+from earnorm.base.database.query.interfaces.operations.aggregate import (
+    AggregateProtocol as AggregateQuery,
+)
+from earnorm.base.database.query.interfaces.operations.join import (
+    JoinProtocol as JoinQuery,
+)
 from earnorm.base.database.transaction.backends.mongo import MongoTransactionManager
 from earnorm.di import container
 from earnorm.exceptions import DatabaseError
@@ -767,7 +789,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
 
     @overload
     async def read(
-        self, source: str, id_or_ids: str, fields: List[str]
+        self, source: str, id_or_ids: str, fields: Optional[List[str]] = None
     ) -> Optional[Dict[str, Any]]: ...
 
     @overload
@@ -780,7 +802,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
 
     @overload
     async def read(
-        self, source: str, id_or_ids: List[str], fields: List[str]
+        self, source: str, id_or_ids: List[str], fields: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]: ...
 
     async def read(
@@ -990,29 +1012,41 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
 
             elif relation_type == RelationType.MANY_TO_ONE:
                 self.logger.info("Handling MANY_TO_ONE relation")
+
+                source_record = await self.read(
+                    instance._name, source_id, fields=[field_name]
+                )
+                if not source_record:
+                    return target_model._browse(target_model._env, [])  # type: ignore
+
+                target_id = source_record[field_name]  # type: ignore
+
                 # Direct query using foreign key
-                target_record = await self.read(target_model._name, source_id)
+                target_record: Dict[str, Any] = await self.read(  # type: ignore
+                    target_model._name, target_id, fields=["id"]  # type: ignore
+                )  # type: ignore
                 self.logger.info(f"Found target record: {target_record}")
                 if not target_record:
-                    result = target_model._browse(target_model._env, [])
+                    result = target_model._browse(target_model._env, [])  # type: ignore
                     self.logger.info("No record found, returning empty recordset")
-                    return result
-                result = target_model._browse(target_model._env, [target_record])
+                    return result  # type: ignore
+                target_record_id: str = target_record["id"]
+                result = target_model._browse(target_model._env, [target_record_id])  # type: ignore
                 self.logger.info(f"Returning recordset with record: {result}")
-                return result
+                return result  # type: ignore
 
             elif relation_type == RelationType.ONE_TO_ONE:
                 self.logger.info("Handling ONE_TO_ONE relation")
                 # Similar to many-to-one but enforce uniqueness
-                target_record = await self.read(target_model._name, source_id)
+                target_record = await self.read(target_model._name, source_id)  # type: ignore
                 self.logger.info(f"Found target record: {target_record}")
                 if not target_record:
-                    result = target_model._browse(target_model._env, [])
+                    result = target_model._browse(target_model._env, [])  # type: ignore
                     self.logger.info("No record found, returning empty recordset")
-                    return result
-                result = target_model._browse(target_model._env, [target_record])
+                    return result  # type: ignore
+                result = target_model._browse(target_model._env, [target_record])  # type: ignore
                 self.logger.info(f"Returning recordset with record: {result}")
-                return result
+                return result  # type: ignore
 
             elif relation_type == RelationType.MANY_TO_MANY:
                 self.logger.info("Handling MANY_TO_MANY relation")
@@ -1023,10 +1057,18 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                     through_collection = self._get_collection(
                         options.through["model"]._name  # type: ignore
                     )
+                    if (
+                        not options.through_fields
+                        or "fields" not in options.through_fields
+                    ):
+                        raise ValueError(
+                            "through_fields is required for many-to-many relations and must contain 'fields' key"
+                        )
+
                     cursor = through_collection.find(
                         {options.through_fields["fields"][0]: source_id}
                     )
-                    through_records = []
+                    through_records: List[Dict[str, Any]] = []
                     async for doc in cursor:
                         self.logger.info(f"Found through document: {doc}")
                         converted = await self._convert_document(doc)
@@ -1034,11 +1076,11 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                         through_records.append(converted)
 
                     if not through_records:
-                        result = target_model._browse(target_model._env, [])
+                        result = target_model._browse(target_model._env, [])  # type: ignore
                         self.logger.info(
                             "No through records found, returning empty recordset"
                         )
-                        return result
+                        return result  # type: ignore
 
                     # Then query target model
                     target_ids = [
@@ -1048,34 +1090,34 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
 
                     target_records = []
                     for target_id in target_ids:
-                        record = await self.read(target_model._name, target_id)
+                        record = await self.read(target_model._name, target_id)  # type: ignore
                         self.logger.info(f"Found target record: {record}")
                         if record:
-                            target_records.append(record)
+                            target_records.append(record)  # type: ignore
 
-                    result = target_model._browse(target_model._env, target_records)
+                    result = target_model._browse(target_model._env, target_records)  # type: ignore
                     self.logger.info(
                         f"Returning recordset with {len(target_records)} records"
                     )
-                    return result
+                    return result  # type: ignore
                 else:
                     self.logger.info("Using direct many-to-many relation")
                     # Direct many-to-many
                     cursor = collection.find({field_name: source_id})
-                    target_records = []
+                    target_records: List[Dict[str, Any]] = []
                     async for doc in cursor:
                         self.logger.info(f"Found document: {doc}")
                         converted = await self._convert_document(doc)
                         self.logger.info(f"Converted document: {converted}")
                         target_records.append(converted)
 
-                    result = target_model._browse(
-                        target_model._env, target_records or []
-                    )
+                    result = target_model._browse(  # type: ignore
+                        target_model._env, target_records or []  # type: ignore
+                    )  # type: ignore
                     self.logger.info(
-                        f"Returning recordset with {len(target_records)} records"
+                        f"Returning recordset with {len(target_records)} records"  # type: ignore
                     )
-                    return result
+                    return result  # type: ignore
 
             self.logger.warning(f"Unknown relation type: {relation_type}")
             return None
@@ -1262,13 +1304,13 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                 if options.on_delete == "CASCADE":
                     # Delete target records
                     await target_collection.delete_many(
-                        {options.related_name: instance.id}
+                        {options.related_name: instance.id}  # type: ignore
                     )
                 elif options.on_delete == "SET_NULL":
                     # Set relation to null
                     await target_collection.update_many(
-                        {options.related_name: instance.id},
-                        {"$unset": {options.related_name: ""}},
+                        {options.related_name: instance.id},  # type: ignore
+                        {"$unset": {options.related_name: ""}},  # type: ignore
                     )
 
             else:
