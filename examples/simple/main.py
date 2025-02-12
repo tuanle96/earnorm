@@ -85,7 +85,7 @@ class User(BaseModel):
 
     # Many-to-One relationship
     manager: ManyToOneField["User"] = fields.ManyToOneField(
-        "User", help="User's manager"
+        "user", help="User's manager"
     )
 
     async def get_adult_users(self) -> Self:
@@ -215,29 +215,29 @@ async def test_relationship_operations():
         )
 
         # Verify relationships
-        # logger.info("Verifying many2one relationships...")
+        logger.info("Verifying many2one relationships...")
 
-        # # Check manager relationship
-        # emp1_manager = await user1.manager
-        # if emp1_manager:
-        #     manager_name = await emp1_manager.name
-        #     logger.info("Employee 1's manager: %s", manager_name)
+        # Check manager relationship
+        emp1_manager = await user1.manager
+        if emp1_manager:
+            manager_name = await emp1_manager.name
+            logger.info("Employee 1's manager: %s", manager_name)
 
-        # emp2_manager = await user2.manager
-        # if emp2_manager:
-        #     manager_name = await emp2_manager.name
-        #     logger.info("Employee 2's manager: %s", manager_name)
+        emp2_manager = await user2.manager
+        if emp2_manager:
+            manager_name = await emp2_manager.name
+            logger.info("Employee 2's manager: %s", manager_name)
 
-        # # Check post author relationship
-        # post1_author = await post1.author
-        # if post1_author:
-        #     author_name = await post1_author.name
-        #     logger.info("Post 1's author: %s", author_name)
+        # Check post author relationship
+        post1_author = await post1.author
+        if post1_author:
+            author_name = await post1_author.name
+            logger.info("Post 1's author: %s", author_name)
 
-        # post2_author = await post2.author
-        # if post2_author:
-        #     author_name = await post2_author.name
-        #     logger.info("Post 2's author: %s", author_name)
+        post2_author = await post2.author
+        if post2_author:
+            author_name = await post2_author.name
+            logger.info("Post 2's author: %s", author_name)
 
         # Test Department-Employee relationship (one2many)
         logger.info("\n=== Testing One2Many Relationship (Department-Employee) ===")
@@ -249,18 +249,23 @@ async def test_relationship_operations():
         hr_dept = await Department.create({"name": "Human Resources", "code": "HR"})
 
         # Create employees in departments
-        logger.info("Creating employees in departments...")
+        logger.info("Creating employees in department id: %s", dev_dept.id)
         dev_emp1 = await Employee.create(
             {"name": "Dev 1", "email": "dev1@example.com", "department": dev_dept}
         )
+        logger.info("Created employee: %s", dev_emp1.id)
 
+        logger.info("Creating employee in department id: %s", dev_dept.id)
         dev_emp2 = await Employee.create(
             {"name": "Dev 2", "email": "dev2@example.com", "department": dev_dept}
         )
+        logger.info("Created employee: %s", dev_emp2.id)
 
+        logger.info("Creating employee in department id: %s", hr_dept.id)
         hr_emp1 = await Employee.create(
             {"name": "HR 1", "email": "hr1@example.com", "department": hr_dept}
         )
+        logger.info("Created employee: %s", hr_emp1.id)
 
         # Verify one2many relationships
         logger.info("Verifying one2many relationships...")
@@ -281,11 +286,13 @@ async def test_relationship_operations():
 
         # Verify department of employees
         dev1_dept = await dev_emp1.department
+        logger.info(f"Dev1's department: {dev1_dept}")
         if dev1_dept:
             dept_name = await dev1_dept.name
             logger.info("Dev1's department: %s", dept_name)
 
         hr1_dept = await hr_emp1.department
+        logger.info(f"HR1's department: {hr1_dept}")
         if hr1_dept:
             dept_name = await hr1_dept.name
             logger.info("HR1's department: %s", dept_name)

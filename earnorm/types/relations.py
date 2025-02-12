@@ -95,7 +95,7 @@ class RelationOptions:
     """
 
     model: Union[Type[ModelProtocol], str]
-    related_name: str
+    related_name: Optional[str] = None
     on_delete: str = "CASCADE"
     through: Optional[Dict[str, Any]] = None
     through_fields: Optional[Dict[str, Any]] = None
@@ -105,8 +105,6 @@ class RelationOptions:
 
     def __post_init__(self) -> None:
         """Validate options after initialization."""
-        if not self.related_name:
-            raise ValueError("related_name is required")
 
         if self.on_delete not in ("CASCADE", "SET_NULL", "PROTECT"):
             raise ValueError(
