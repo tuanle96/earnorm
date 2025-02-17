@@ -152,46 +152,14 @@ class RelationField(BaseField[T], RelationProtocol[T]):
         return re.sub("([a-z0-9])([A-Z])", r"\1_\2", name).lower()
 
     async def _resolve_model(self) -> Type[T]:
-        """Resolve model reference to actual class.
-
-        Returns:
-            Type[T]: Resolved model class
-
-        Raises:
-            RuntimeError: If environment not set or model not found
-            ValueError: If model reference is invalid
-        """
-        # Return cached model if available
-        if self._resolved_model is not None:
-            self.logger.info(f"Using cached resolved model: {self._resolved_model}")
-            return self._resolved_model
-
-        # Handle class reference - nếu đã là class thì dùng trực tiếp
-        if hasattr(self._model_ref, "_name"):
-            self.logger.info(f"Model reference is already a class: {self._model_ref}")
-            self._resolved_model = cast(Type[T], self._model_ref)
-            return self._resolved_model
-
-        # Handle string reference
-        if not self.env:
-            self.logger.error("Environment not set during model resolution")
-            raise RuntimeError("Environment not set")
-
-        # Resolve model using exact name
-        self.logger.info(f"Resolving model by name: {self._model_ref}")
-        model = await self.env.get_model(self._model_ref)  # type: ignore
-        if model:
-            self.logger.info(f"Found model: {model}")
-            self._resolved_model = cast(Type[T], model)
-            return self._resolved_model
-
-        # Model not found
-        error_msg = (
-            f"Model not found for reference '{self._model_ref}'. "
-            f"Make sure the model exists and is properly registered with correct _name attribute."
-        )
-        self.logger.error(error_msg)
-        raise RuntimeError(error_msg)
+        """Resolve model reference to actual model class."""
+        if isinstance(self._model_ref, str):
+            # Get model from environment
+            if not self.env:
+                raise RuntimeError("Environment not set")
+            model = await self.env.get_model(self._model_ref)
+            return cast(Type[T], model)
+        return cast(Type[T], self._model_ref)
 
     @property
     async def model(self) -> Type[T]:
@@ -257,37 +225,31 @@ class RelationField(BaseField[T], RelationProtocol[T]):
         await self._setup_database()
 
     async def _setup_reverse_relation(self) -> None:
-        """Set up reverse relation field.
-
-        This method creates the reverse relation field on the related model.
-        The type of reverse relation depends on the relation type:
-        - one_to_one -> one_to_one
-        - many_to_one -> one_to_many
-        - one_to_many -> many_to_one
-        - many_to_many -> many_to_many
-        """
-        if not self.related_name or not self._owner_model:
+        """Setup reverse relation field."""
+        if not self.related_name:
             return
-
-        # Get reverse relation type
-        reverse_type = {
-            RelationType.ONE_TO_ONE: RelationType.ONE_TO_ONE,
-            RelationType.MANY_TO_ONE: RelationType.ONE_TO_MANY,
-            RelationType.ONE_TO_MANY: RelationType.MANY_TO_ONE,
-            RelationType.MANY_TO_MANY: RelationType.MANY_TO_MANY,
-        }[self.relation_type]
 
         # Create reverse field
         reverse_field = RelationField(
-            self._owner_model,
-            reverse_type,
+            model=cast(ModelType[T], self._owner_model),
+            relation_type=self._get_reverse_relation_type(),
             related_name=self.name,
-            on_delete=self.on_delete,
-            lazy=self.lazy,
         )
 
         # Add to related model
-        setattr(self.model, self.related_name, reverse_field)
+        target_model = await self._resolve_model()
+        setattr(target_model, self.related_name, reverse_field)
+
+    def _get_reverse_relation_type(self) -> RelationType:
+        """Get reverse relation type based on current relation type."""
+        if self.relation_type == RelationType.ONE_TO_ONE:
+            return RelationType.ONE_TO_ONE
+        elif self.relation_type == RelationType.ONE_TO_MANY:
+            return RelationType.MANY_TO_ONE
+        elif self.relation_type == RelationType.MANY_TO_ONE:
+            return RelationType.ONE_TO_MANY
+        else:  # MANY_TO_MANY
+            return RelationType.MANY_TO_MANY
 
     async def _setup_database(self) -> None:
         """Set up database for relation.
@@ -361,150 +323,42 @@ class RelationField(BaseField[T], RelationProtocol[T]):
                 )
 
     async def to_db(self, value: Optional[T], backend: str) -> DatabaseValue:
-        """Convert Python value to database format.
+        """Convert to database value.
 
-        Args:
-            value: Value to convert
-            backend: Database backend type
-
-        Returns:
-            Converted value for database
+        This is a base implementation that should be overridden by subclasses.
         """
-        if value is None:
-            return None
-
-        if isinstance(value, str):
-            return value
-
-        if isinstance(value, list):
-            return [str(item.id) for item in value]
-
-        return str(value.id)
+        raise NotImplementedError("Must be implemented by subclass")
 
     async def from_db(self, value: DatabaseValue, backend: str) -> Optional[T]:
-        """Convert database value to Python format.
+        """Convert from database value.
 
-        Args:
-            value: Value to convert
-            backend: Database backend type
-
-        Returns:
-            Converted value
+        This is a base implementation that should be overridden by subclasses.
         """
-        if value is None:
-            return None
-
-        model = await self._resolve_model()
-
-        if isinstance(value, list):
-            records = []
-            for item in value:
-                record = await model.browse(str(item))
-                if record:
-                    records.append(record)  # type: ignore
-            return cast(Optional[T], records)
-
-        record = await model.browse(str(value))
-        return cast(Optional[T], record)
+        raise NotImplementedError("Must be implemented by subclass")
 
     @property
     def model_ref(self) -> ModelType[T]:
-        """Get model reference.
-
-        Returns:
-            Model reference (string or class)
-        """
+        """Get model reference."""
         return self._model_ref
 
     @property
     def resolved_model(self) -> Optional[Type[T]]:
-        """Get resolved model class.
-
-        Returns:
-            Resolved model class or None if not resolved
-        """
+        """Get resolved model class."""
         return self._resolved_model
 
-    async def get_related(self, instance: Any) -> Union[Optional[T], List[T]]:
-        """Get related record(s).
-
-        Args:
-            instance: Model instance to get related records for
-
-        Returns:
-            Related record(s)
-        """
-        if not self.env:
-            raise RuntimeError("Environment not set")
-
-        # Get from database
-        records = await self.env.adapter.get_related(
-            instance,
-            self.name,
-            RelationType(self.field_type),
-            RelationOptions(
-                model=cast(Union[Type[ModelProtocol], str], self._model_ref),
-                related_name=self.related_name or "",
-                on_delete=self.on_delete,
-                through=None,
-                through_fields=None,
-            ),
-        )
-
-        return records
+    async def get_related(self, source_instance: Any) -> Union[Optional[T], List[T]]:
+        """Get related record(s)."""
+        raise NotImplementedError("Must be implemented by subclass")
 
     async def set_related(
-        self, instance: Any, value: Union[Optional[T], List[T]]
+        self, source_instance: Any, value: Union[Optional[T], List[T]]
     ) -> None:
-        """Set related record(s).
+        """Set related record(s)."""
+        raise NotImplementedError("Must be implemented by subclass")
 
-        Args:
-            instance: Model instance to set related records for
-            value: Related record(s) to set
-        """
-        if not self.env:
-            raise RuntimeError("Environment not set")
-
-        # Validate value
-        await self.validate(value)
-
-        # Set in database
-        await self.env.adapter.set_related(
-            instance,
-            self.name,
-            value,
-            RelationType(self.field_type),
-            RelationOptions(
-                model=cast(Union[Type[ModelProtocol], str], self._model_ref),
-                related_name=self.related_name or "",
-                on_delete=self.on_delete,
-                through=None,
-                through_fields=None,
-            ),
-        )
-
-    async def delete_related(self, instance: Any) -> None:
-        """Delete related record(s).
-
-        Args:
-            instance: Model instance to delete related records for
-        """
-        if not self.env:
-            raise RuntimeError("Environment not set")
-
-        # Delete from database
-        await self.env.adapter.delete_related(
-            instance,
-            self.name,
-            RelationType(self.field_type),
-            RelationOptions(
-                model=cast(Union[Type[ModelProtocol], str], self._model_ref),
-                related_name=self.related_name or "",
-                on_delete=self.on_delete,
-                through=None,
-                through_fields=None,
-            ),
-        )
+    async def delete_related(self, source_instance: Any) -> None:
+        """Delete related record(s)."""
+        raise NotImplementedError("Must be implemented by subclass")
 
     async def __get__(self, instance: Optional[Any], owner: Optional[type] = None) -> T:
         """Get related record(s).

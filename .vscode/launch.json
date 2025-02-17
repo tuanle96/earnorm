@@ -29,6 +29,14 @@
             "args": [],
             "console": "integratedTerminal",
             "justMyCode": false
+        },
+        {
+            "name": "Python: Simple",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "examples.simple.main",
+            "console": "integratedTerminal",
+            "justMyCode": false
         }
     ]
 }

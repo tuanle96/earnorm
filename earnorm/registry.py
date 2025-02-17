@@ -1,16 +1,16 @@
 """Registry module for registering services."""
 
 import logging
-from typing import TypeVar, cast
+from typing import Any, TypeVar, cast
 
-from earnorm.base.database.adapters.mongo import MongoAdapter
+from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
+
+from earnorm.base.database.adapters.mongo import MongoAdapter, MongoConnection
 from earnorm.base.env import Environment
 from earnorm.config import SystemConfig
 from earnorm.di import container
-from earnorm.pool import PoolRegistry, create_mongo_pool
+from earnorm.pool import create_mongo_pool
 from earnorm.pool.protocols import AsyncPoolProtocol
-from earnorm.pool.types import MongoCollectionType, MongoDBType
-from earnorm.types.models import ModelProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -79,36 +79,43 @@ async def register_database_services(config: SystemConfig) -> None:
 
     This includes:
     - MongoDB adapter and pool
+
+    Args:
+        config: System configuration instance
+
+    Examples:
+        >>> await register_database_services(config)
+        >>> adapter = container.get("database_adapter")
     """
     # Skip if no database config
     if not config.database_uri or not config.database_name:
         return
 
-    # Create and register MongoDB pool if not exists
-    if not container.has("mongodb_pool"):
-        mongo_pool = cast(
-            AsyncPoolProtocol[MongoDBType, MongoCollectionType],
-            await create_mongo_pool(
-                uri=config.database_uri or "",
-                database=config.database_name,
-                min_size=int(config.database_options.get("min_pool_size") or 1),
-                max_size=int(config.database_options.get("max_pool_size") or 10),
-            ),
-        )
-        await mongo_pool.init()
-        PoolRegistry.register("mongodb", mongo_pool)
-        container.register("mongodb_pool", mongo_pool)
+    # Create MongoDB pool with correct type arguments
+    mongo_pool = cast(
+        AsyncPoolProtocol[
+            MongoConnection[AsyncIOMotorDatabase[Any], AsyncIOMotorCollection[Any]],
+            AsyncIOMotorCollection[Any],
+        ],
+        await create_mongo_pool(
+            uri=config.database_uri,
+            database=config.database_name,
+            min_size=int(config.database_options.get("min_pool_size") or 1),
+            max_size=int(config.database_options.get("max_pool_size") or 10),
+        ),
+    )
+    await mongo_pool.init()
 
-    # Register MongoDB adapter if not exists
-    if not container.has("mongodb_adapter"):
-        adapter = MongoAdapter[
-            ModelProtocol
-        ]()  # Use ModelProtocol instead of DatabaseModel
-        await adapter.init()
-        container.register("mongodb_adapter", adapter)
-        # Also register as default database adapter
-        container.register("database_adapter", adapter)
-        logger.info("MongoDB adapter registered successfully")
+    # Create adapter with pool
+    adapter = MongoAdapter(pool=mongo_pool)
+    await adapter.init()
+
+    # Register services
+    container.register("mongodb_pool", mongo_pool)
+    container.register("mongodb_adapter", adapter)
+    container.register("database_adapter", adapter)
+
+    logger.info("MongoDB adapter registered successfully")
 
 
 async def register_all(config: SystemConfig) -> None:

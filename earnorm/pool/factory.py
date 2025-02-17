@@ -24,7 +24,6 @@ Examples:
 from typing import Any, Dict, Type, TypeVar, cast
 
 from earnorm.pool.backends.mongo.pool import MongoPool
-from earnorm.pool.backends.redis.pool import RedisPool
 from earnorm.pool.protocols.pool import AsyncPoolProtocol
 
 # Define type variables for database and collection types
@@ -36,8 +35,7 @@ class PoolFactory:
     """Pool factory for creating database connection pools."""
 
     _pools: Dict[str, Type[AsyncPoolProtocol[Any, Any]]] = {
-        "mongodb": cast(Type[AsyncPoolProtocol[Any, Any]], MongoPool),
-        "redis": cast(Type[AsyncPoolProtocol[Any, Any]], RedisPool),
+        "mongodb": cast(Type[AsyncPoolProtocol[Any, Any]], MongoPool)
     }
 
     @classmethod
@@ -126,76 +124,6 @@ async def create_mongo_pool(
         database=database,
         min_size=min_size,
         max_size=max_size,
-        retry_policy=retry_policy,
-        circuit_breaker=circuit_breaker,
-        **kwargs,
-    )
-
-    await pool.init()
-    return pool
-
-
-async def create_redis_pool(
-    *,
-    host: str = "localhost",
-    port: int = 6379,
-    db: int = 0,
-    username: str | None = None,
-    password: str | None = None,
-    min_size: int = 1,
-    max_size: int = 10,
-    socket_timeout: float | None = None,
-    socket_connect_timeout: float | None = None,
-    socket_keepalive: bool = True,
-    retry_policy: Any | None = None,
-    circuit_breaker: Any | None = None,
-    **kwargs: Any,
-) -> RedisPool[Any, None]:
-    """Create Redis connection pool.
-
-    Args:
-        host: Redis host
-        port: Redis port
-        db: Redis database number
-        username: Redis username
-        password: Redis password
-        min_size: Minimum pool size
-        max_size: Maximum pool size
-        socket_timeout: Socket timeout in seconds
-        socket_connect_timeout: Socket connect timeout in seconds
-        socket_keepalive: Whether to enable socket keepalive
-        retry_policy: Optional retry policy
-        circuit_breaker: Optional circuit breaker
-        **kwargs: Additional pool options
-
-    Returns:
-        Redis connection pool
-
-    Examples:
-        ```python
-        pool = await create_redis_pool(
-            host="localhost",
-            port=6379,
-            db=0,
-            min_size=1,
-            max_size=5,
-            socket_timeout=30,
-            socket_connect_timeout=10,
-            socket_keepalive=True
-        )
-        ```
-    """
-    pool = RedisPool[Any, None](
-        host=host,
-        port=port,
-        db=db,
-        username=username,
-        password=password,
-        min_size=min_size,
-        max_size=max_size,
-        socket_timeout=socket_timeout,
-        socket_connect_timeout=socket_connect_timeout,
-        socket_keepalive=socket_keepalive,
         retry_policy=retry_policy,
         circuit_breaker=circuit_breaker,
         **kwargs,

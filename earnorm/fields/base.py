@@ -47,6 +47,11 @@ logger = logging.getLogger(__name__)
 class DatabaseAdapterProtocol(Protocol):
     """Protocol for database adapter interface."""
 
+    @property
+    def backend_type(self) -> str:
+        """Get database backend type."""
+        ...
+
     async def convert_value(
         self, value: Any, field_type: str, target_type: Type[Any]
     ) -> Any:
@@ -90,6 +95,15 @@ class DatabaseAdapterProtocol(Protocol):
         """Delete related records."""
         ...
 
+    async def read(
+        self,
+        store: str,
+        id_or_ids: Union[str, List[str]],
+        fields: Optional[List[str]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Read records from database."""
+        ...
+
 
 class EnvironmentProtocol(Protocol):
     """Protocol for environment interface."""
@@ -97,6 +111,11 @@ class EnvironmentProtocol(Protocol):
     @property
     def adapter(self) -> DatabaseAdapterProtocol:
         """Get database adapter."""
+        ...
+
+    @property
+    def logger(self) -> logging.Logger:
+        """Get logger instance."""
         ...
 
     async def get_model(self, name: str) -> Type["BaseModel"]:

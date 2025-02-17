@@ -338,7 +338,7 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
                 MongoConnection(
                     client=self._client,
                     database=self._database,
-                    collection="",  # Empty string as default collection
+                    store="",  # Empty string as default store
                     retry_policy=self._retry_policy,
                     circuit_breaker=self._circuit_breaker,
                 ),

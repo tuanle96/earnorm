@@ -42,6 +42,8 @@ if TYPE_CHECKING:
 T_co = TypeVar("T_co", covariant=True)
 ModelT = TypeVar("ModelT", bound="ModelProtocol")
 
+T = TypeVar("T")
+
 
 class RelationFieldOptions(TypedDict, total=False):
     """Type for relation field options."""
@@ -113,46 +115,19 @@ class RelationOptions:
             )
 
 
-class RelationProtocol(Protocol[T_co]):
-    """Protocol for relation fields.
+class RelationProtocol(Protocol[T]):
+    """Protocol for relation fields."""
 
-    This protocol defines the interface that all relation fields must implement.
-    It ensures type safety and proper handling of related records.
-
-    Type Parameters:
-        T_co: Covariant type of related model
-
-    Examples:
-        >>> class OneToManyField(RelationField[T], Generic[T]):
-        ...     def __init__(self, model: ModelType[T], **options):
-        ...         super().__init__(model, RelationType.ONE_TO_MANY, **options)
-    """
-
-    async def get_related(self, instance: Any) -> Optional[Union[T_co, List[T_co]]]:
-        """Get related record(s).
-
-        Args:
-            instance: Model instance
-
-        Returns:
-            Single record for one-to-one/many-to-one
-            List of records for one-to-many/many-to-many
-        """
+    async def get_related(self, source_instance: Any) -> Union[Optional[T], List[T]]:
+        """Get related record(s)."""
         ...
 
-    async def set_related(self, instance: Any, value: Any) -> None:
-        """Set related record(s).
-
-        Args:
-            instance: Model instance
-            value: Related record(s) to set
-        """
+    async def set_related(
+        self, source_instance: Any, value: Union[Optional[T], List[T]]
+    ) -> None:
+        """Set related record(s)."""
         ...
 
-    async def delete_related(self, instance: Any) -> None:
-        """Delete related record(s).
-
-        Args:
-            instance: Model instance
-        """
+    async def delete_related(self, source_instance: Any) -> None:
+        """Delete related record(s)."""
         ...

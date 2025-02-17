@@ -34,17 +34,17 @@ from earnorm.pool.core.retry import RetryPolicy
 from earnorm.pool.protocols.connection import AsyncConnectionProtocol
 
 DBType = TypeVar("DBType", bound=AsyncIOMotorDatabase[dict[str, Any]])
-CollType = TypeVar("CollType", bound=AsyncIOMotorCollection[dict[str, Any]])
+StoreType = TypeVar("StoreType", bound=AsyncIOMotorCollection[dict[str, Any]])
 
 
-class MongoConnection(AsyncConnectionProtocol[DBType, CollType]):
+class MongoConnection(AsyncConnectionProtocol[DBType, StoreType]):
     """MongoDB connection implementation."""
 
     def __init__(
         self,
         client: AsyncIOMotorClient[dict[str, Any]],
         database: str,
-        collection: str,
+        store: str,
         max_idle_time: int = DEFAULT_MAX_IDLE_TIME,
         max_lifetime: int = DEFAULT_MAX_LIFETIME,
         retry_policy: RetryPolicy | None = None,
@@ -55,7 +55,7 @@ class MongoConnection(AsyncConnectionProtocol[DBType, CollType]):
         Args:
             client: MongoDB client
             database: Database name
-            collection: Collection name
+            store: Store name (collection in MongoDB)
             max_idle_time: Maximum idle time in seconds
             max_lifetime: Maximum lifetime in seconds
             retry_policy: Retry policy
@@ -63,7 +63,7 @@ class MongoConnection(AsyncConnectionProtocol[DBType, CollType]):
         """
         self._client = client
         self._database = database
-        self._collection = collection
+        self._store = store
         self._max_idle_time = max_idle_time
         self._max_lifetime = max_lifetime
         self._retry_policy = retry_policy
@@ -138,8 +138,14 @@ class MongoConnection(AsyncConnectionProtocol[DBType, CollType]):
         """Internal execute implementation."""
         try:
             self.touch()
-            collection = self.collection
-            method = getattr(collection, operation)
+            store = self.store
+            method = getattr(store, operation)
+
+            # Special handling for find operation which returns cursor
+            if operation == "find":
+                return method(**kwargs)
+
+            # Other operations need to be awaited
             result = await method(**kwargs)
             return result
         except Exception as e:
@@ -168,9 +174,21 @@ class MongoConnection(AsyncConnectionProtocol[DBType, CollType]):
         """Get database instance."""
         return cast(DBType, self._client[self._database])
 
-    def get_collection(self, name: str) -> CollType:
-        """Get collection instance."""
-        return cast(CollType, self.get_database()[name])
+    def get_store(self, name: str) -> StoreType:
+        """Get store instance.
+
+        Args:
+            name: Store name (collection in MongoDB)
+
+        Returns:
+            Store instance (AsyncIOMotorCollection)
+
+        Raises:
+            ValueError: If store name is empty
+        """
+        if not name:
+            raise ValueError("Store name cannot be empty")
+        return cast(StoreType, self.get_database()[name])
 
     @property
     def db(self) -> DBType:
@@ -178,9 +196,26 @@ class MongoConnection(AsyncConnectionProtocol[DBType, CollType]):
         return self.get_database()
 
     @property
-    def collection(self) -> CollType:
-        """Get collection instance."""
-        return self.get_collection(self._collection)
+    def store(self) -> StoreType:
+        """Get current store instance."""
+        return self.get_store(self._store)
+
+    def set_store(self, name: str) -> None:
+        """Set current store name.
+
+        Args:
+            name: Store name (collection in MongoDB)
+
+        Raises:
+            ValueError: If store name is empty
+
+        Examples:
+            >>> conn.set_store("users")
+            >>> await conn.execute("find_one")  # Uses "users" collection
+        """
+        if not name:
+            raise ValueError("Store name cannot be empty")
+        self._store = name
 
     async def connect(self) -> None:
         """Connect to MongoDB.

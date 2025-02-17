@@ -18,7 +18,7 @@ from typing import Any, Protocol, TypeVar
 
 # Type variables
 DBType = TypeVar("DBType", covariant=True)
-CollType = TypeVar("CollType", covariant=True)
+StoreType = TypeVar("StoreType", covariant=True)
 
 
 class AsyncLifecycle(Protocol):
@@ -66,7 +66,7 @@ class AsyncLifecycle(Protocol):
         ...
 
 
-class AsyncOperations(Protocol[DBType, CollType]):
+class AsyncOperations(Protocol[DBType, StoreType]):
     """Protocol for async operations."""
 
     async def execute(self, operation: str, **kwargs: Any) -> Any:
@@ -83,16 +83,16 @@ class AsyncOperations(Protocol[DBType, CollType]):
 
 
 class AsyncConnectionProtocol(
-    AsyncLifecycle, AsyncOperations[DBType, CollType], Protocol
+    AsyncLifecycle, AsyncOperations[DBType, StoreType], Protocol
 ):
     """Protocol for async database connections.
 
     This protocol defines the interface that all async database connections must implement.
-    It provides methods for getting collections and managing the connection lifecycle.
+    It provides methods for getting stores and managing the connection lifecycle.
 
     Type Parameters:
         DBType: The database type (e.g. AsyncIOMotorDatabase)
-        CollType: The collection type (e.g. AsyncIOMotorCollection)
+        StoreType: The store type (e.g. AsyncIOMotorCollection for MongoDB, Table for SQL)
     """
 
     @property
@@ -156,17 +156,17 @@ class AsyncConnectionProtocol(
         """
         ...
 
-    def get_collection(self, name: str) -> CollType:
-        """Get collection instance.
+    def get_store(self, name: str) -> StoreType:
+        """Get store instance.
 
         Args:
-            name: Collection name
+            name: Store name (e.g. collection in MongoDB, table in SQL)
 
         Returns:
-            Collection instance
+            Store instance
 
         Raises:
-            ValueError: If collection name is empty
+            ValueError: If store name is empty
         """
         ...
 
@@ -176,6 +176,17 @@ class AsyncConnectionProtocol(
         ...
 
     @property
-    def collection(self) -> CollType:
-        """Get collection instance."""
+    def store(self) -> StoreType:
+        """Get current store instance."""
+        ...
+
+    def set_store(self, name: str) -> None:
+        """Set current store name.
+
+        Args:
+            name: Store name (e.g. collection in MongoDB, table in SQL)
+
+        Raises:
+            ValueError: If store name is empty
+        """
         ...

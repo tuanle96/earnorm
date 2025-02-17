@@ -401,9 +401,10 @@ class ModelMeta(type):
                     and field.default is None
                     and not getattr(field, "auto_now_add", False)  # type: ignore
                 ):
-                    logger.warning(
-                        f"Field {field_name} in {model_cls.__name__} is required but has no default value"
-                    )
+                    # logger.warning(
+                    #     f"Field {field_name} in {model_cls.__name__} is required but has no default value"
+                    # )
+                    pass
 
                 # 2.4. Relation field validation
                 if isinstance(field, RelationField):

@@ -99,7 +99,7 @@ from typing import TYPE_CHECKING, Any, Optional, Type
 
 from earnorm.base.database.adapter import DatabaseAdapter
 from earnorm.di import container
-from earnorm.types.models import DatabaseModel, ModelProtocol
+from earnorm.types.models import ModelProtocol
 
 if TYPE_CHECKING:
     from earnorm.config.data import SystemConfigData
@@ -112,14 +112,38 @@ class Environment:
 
     _instance: Optional[Environment] = None
     _initialized: bool = False
-    _adapter: Optional[DatabaseAdapter[DatabaseModel]] = None
-    logger = logging.getLogger(__name__)
+    _adapter: Optional[DatabaseAdapter[Any, Any]] = None
+    _logger: Optional[logging.Logger] = None
 
     def __init__(self) -> None:
         """Initialize environment."""
         if Environment._instance is not None:
             raise RuntimeError("Environment already instantiated")
         Environment._instance = self
+        self._logger = logging.getLogger(__name__)
+
+    @property
+    def logger(self) -> logging.Logger:
+        """Get logger instance.
+
+        Returns:
+            Logger instance for environment
+
+        Raises:
+            RuntimeError: If logger is not initialized
+        """
+        if self._logger is None:
+            raise RuntimeError("Logger not initialized")
+        return self._logger
+
+    @logger.setter
+    def logger(self, value: logging.Logger) -> None:
+        """Set logger instance.
+
+        Args:
+            value: Logger instance to use
+        """
+        self._logger = value
 
     @classmethod
     def get_instance(cls) -> Environment:
@@ -232,7 +256,7 @@ class Environment:
         return service
 
     @property
-    def adapter(self) -> DatabaseAdapter[DatabaseModel]:
+    def adapter(self) -> DatabaseAdapter[Any, Any]:
         """Get database adapter.
 
         Returns:

@@ -130,7 +130,6 @@ import logging
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncContextManager,
     ClassVar,
     Dict,
     List,
@@ -146,22 +145,15 @@ from typing import (
     overload,
 )
 
-from earnorm import api
-from earnorm.base.database.query.core.query import BaseQuery
-from earnorm.base.database.query.interfaces.domain import DomainExpression
+from earnorm.base.database.query.backends.mongo.converter import MongoConverter
 from earnorm.base.database.query.interfaces.domain import DomainOperator as Operator
 from earnorm.base.database.query.interfaces.domain import LogicalOperator as LogicalOp
-from earnorm.base.database.query.interfaces.operations.aggregate import AggregateProtocol as AggregateQuery
-from earnorm.base.database.query.interfaces.operations.join import JoinProtocol as JoinQuery
-from earnorm.base.database.transaction.base import Transaction
 from earnorm.base.env import Environment
 from earnorm.base.model.meta import ModelMeta
-from earnorm.constants import FIELD_MAPPING
 from earnorm.di import Container
-from earnorm.exceptions import DatabaseError, FieldValidationError, ModelNotFoundError
+from earnorm.exceptions import DatabaseError, ModelNotFoundError, ValidationError
 from earnorm.fields import BaseField, RelationField
 from earnorm.types import ValueType
-from earnorm.types.models import ModelProtocol
 
 if TYPE_CHECKING:
     pass
@@ -169,7 +161,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Define type variables
-T = TypeVar("T")
+T = TypeVar("T", bound="BaseModel")
 V = TypeVar("V")
 
 
@@ -183,15 +175,6 @@ class ContainerProtocol(Protocol):
     async def get_environment(self) -> Optional[Environment]:
         """Get environment from container."""
         ...
-
-
-class LoggerProtocol(Protocol):
-    """Protocol for logger interface."""
-
-    def warning(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
-    def error(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
-    def debug(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
-    def info(self, msg: str, *args: Any, **kwargs: Any) -> None: ...
 
 
 class FieldsDescriptor:
@@ -278,7 +261,6 @@ class BaseModel(metaclass=ModelMeta):
     _skip_default_fields: ClassVar[bool] = False
     _abstract: ClassVar[bool] = False
     _env: Environment  # Environment instance
-    logger: LoggerProtocol = logging.getLogger(__name__)
 
     # Model fields (will be set by metaclass)
     __fields__ = FieldsDescriptor()
@@ -336,62 +318,64 @@ class BaseModel(metaclass=ModelMeta):
         Returns:
             Attribute value
         """
-        self.logger.info(f"Getting attribute {name} for {self._name}")
+        self.env.logger.info(f"Getting attribute {name} for {self._name}")
 
         # Get field
         field = self.__fields__.get(name)
         if not field:
-            self.logger.warning(f"Field {name} not found")
+            self.env.logger.warning(f"Field {name} not found")
             raise AttributeError(
                 f"'{self.__class__.__name__}' has no attribute '{name}'"
             )
 
-        self.logger.info(f"Found field {name} of type {type(field)}")
+        self.env.logger.info(f"Found field {name} of type {type(field)}")
 
         # Get record ID
         record_id = self.id
-        self.logger.info(f"Getting attribute {name} for {self._name}:{record_id}")
+        self.env.logger.info(f"Getting attribute {name} for {self._name}:{record_id}")
 
         # Get from cache first
         cache = getattr(self, "_cache", None)
-        self.logger.info(f"Cache object: {cache}")
+        self.env.logger.info(f"Cache object: {cache}")
 
         if cache is not None:
             cached = cache.get(name)
-            self.logger.info(f"Cached value for {name}: {cached}")
+            self.env.logger.info(f"Cached value for {name}: {cached}")
             if cached is not None:
-                self.logger.info(f"Returning cached value for {name}")
+                self.env.logger.info(f"Returning cached value for {name}")
                 return cached
 
         # For relation fields, get related records
         if isinstance(field, RelationField):
-            self.logger.info(f"Getting related records for {name} using get_related()")
+            self.env.logger.info(
+                f"Getting related records for {name} using get_related()"
+            )
             value = await field.get_related(self)
-            self.logger.info(f"Got related records: {value}")
+            self.env.logger.info(f"Got related records: {value}")
 
             # Cache the value
             if isinstance(cache, dict):
                 cache[name] = value
-                self.logger.info(f"Cached relation value for {name}")
+                self.env.logger.info(f"Cached relation value for {name}")
             return value
 
         # Direct database fetch using read method
-        self.logger.info(f"Fetching from database for {name}")
+        self.env.logger.info(f"Fetching from database for {name}")
         result = await self.env.adapter.read(self._name, record_id, [name])
-        self.logger.info(f"Database result: {result}")
+        self.env.logger.info(f"Database result: {result}")
 
         if not result:
-            self.logger.info(f"No result found for {name}")
+            self.env.logger.info(f"No result found for {name}")
             return None
 
         # Convert value using field object
-        value = await field.from_db(result.get(name), self.env.adapter.backend_type)
-        self.logger.info(f"Converted value: {value}")
+        value = await field.from_db(result.get(name), self.env.adapter.backend_type)  # type: ignore
+        self.env.logger.info(f"Converted value: {value}")
 
         # Cache and return the value
         if isinstance(cache, dict):
             cache[name] = value
-            self.logger.info(f"Cached value for {name}")
+            self.env.logger.info(f"Cached value for {name}")
 
         return value
 
@@ -467,18 +451,6 @@ class BaseModel(metaclass=ModelMeta):
         return cls._browse(cls._env, id_list)
 
     @classmethod
-    async def _where_calc(
-        cls, domain: Sequence[Union[Tuple[str, str, Any], str]]
-    ) -> BaseQuery[ModelProtocol]:
-        """Build query from domain."""
-        query = await cls._env.adapter.query(cast(Type[ModelProtocol], cls))
-        query.reset()
-        if domain:
-            expr = DomainExpression(cast(List[Any], list(domain)))
-            query = query.filter(expr.to_list())
-        return cast(BaseQuery[ModelProtocol], query)
-
-    @classmethod
     async def search(
         cls,
         domain: Optional[
@@ -488,78 +460,70 @@ class BaseModel(metaclass=ModelMeta):
         limit: Optional[int] = None,
         order: Optional[str] = None,
     ) -> Self:
-        """Search records matching domain.
+        """Search for records matching domain.
 
         Args:
-            domain: Search domain expression
+            domain: Domain expression
             offset: Number of records to skip
             limit: Maximum number of records to return
-            order: Order by expression
+            order: Sort order (field_name asc/desc)
 
         Returns:
-            Self: Recordset containing matching records
+            Recordset containing matching records
 
-        Raises:
-            DatabaseError: If search operation fails
+        Examples:
+            >>> # Search with domain expression
+            >>> users = await User.search(
+            ...     domain=[("age", ">", 18), "&", ("status", "=", "active")]
+            ... )
+
+            >>> # Search with limit and offset
+            >>> recent_users = await User.search(
+            ...     order='create_date desc',
+            ...     limit=10
+            ... )
         """
+        if not cls._env:
+            raise RuntimeError("Environment not initialized")
+
         try:
-            # Log search parameters
-            logger.info(
-                "Searching %s with domain=%s, offset=%s, limit=%s, order=%s",
-                cls._name,
-                domain,
-                offset,
-                limit,
-                order,
+            # Convert domain to MongoDB query using MongoConverter
+            filter_dict: Dict[str, Any] = {}
+            if domain:
+                converter = MongoConverter()
+                filter_dict = converter.convert(cast(List[Any], list(domain)))
+
+            # Search records using adapter
+            ids = await cls._env.adapter.search(
+                store=str(cls._name),
+                filter=filter_dict,
+                fields=["_id"],  # Only get IDs
+                offset=offset,
+                limit=limit,
+                order=order,
             )
 
-            # Calculate where clause
-            query = await cls._where_calc(domain or [])
-            logger.info("Generated query: %s", query)
+            # Return recordset using browse
+            return await cls.browse(ids)
 
-            # Add options
-            if offset:
-                query.offset(offset)
-            if limit is not None:
-                query.limit(limit)
-            if order:
-                query.order_by(order)
-
-            # Get backend type and field mapping
-            backend_type = cls._env.adapter.backend_type
-            id_field = FIELD_MAPPING.get(backend_type, {}).get("id", "id")
-            logger.info(
-                "Using backend %s with id_field %s",
-                backend_type,
-                id_field,
-            )
-
-            # Select ID field based on backend
-            query.select(id_field)
-
-            # Execute query and get raw data
-            result = await query.to_raw_data()
-            logger.info("Query raw result: %s", result)
-
-            # Extract IDs using both id and _id fields
-            ids = []
-            for doc in result:
-                if id_field in doc:
-                    ids.append(str(doc[id_field]))  # type: ignore
-                elif "id" in doc:
-                    ids.append(str(doc["id"]))  # type: ignore
-            logger.info("Extracted IDs: %s", ids)  # type: ignore
-
-            return cls._browse(cls._env, tuple(ids))  # type: ignore
-
-        except Exception as e:
-            logger.error("Search failed: %s", str(e), exc_info=True)
-            raise DatabaseError(
-                message=f"Search failed: {str(e)}",
-                backend=cls._env.adapter.backend_type,
+        except ValueError as e:
+            cls._env.logger.error("Invalid search parameters: %s", str(e))
+            raise ValidationError(
+                field_name="domain",
+                code="invalid_domain",
+                message=f"Invalid search parameters: {e}",
             ) from e
 
-    @api.multi
+        except DatabaseError as e:
+            cls._env.logger.error("Database error during search: %s", str(e))
+            raise DatabaseError(
+                f"Search failed: {e}", backend=cls._env.adapter.backend_type
+            ) from e
+
+        except Exception as e:
+            cls._env.logger.error("Unexpected error during search: %s", str(e))
+            raise RuntimeError(f"Search failed unexpectedly: {e}") from e
+
     async def write(self, vals: Dict[str, Any]) -> Self:
         """Update records with values.
 
@@ -586,24 +550,19 @@ class BaseModel(metaclass=ModelMeta):
             return self
 
         try:
-            # Validate values before update
-            await self._validate_write(vals)
-
             # Convert values to database format
             db_vals = await self._convert_to_db(vals)
 
-            # Create domain expression for id filter
-            domain_expr = DomainExpression([("id", "in", list(self._ids))])
-
-            # Update records
+            # Update records using IDs
             await self._env.adapter.update(
-                cast(Type[ModelProtocol], type(self)),
-                domain_expr,
-                db_vals,
+                store=str(type(self)._name),
+                ids=list(self._ids),
+                values=db_vals,
             )
 
-            # Clear cache for updated fields
-            self._clear_cache(list(vals.keys()))  # type: ignore
+            # Clear cache for each updated field
+            for field_name in vals.keys():
+                self._clear_cache(str(field_name))
 
             return self
 
@@ -612,76 +571,6 @@ class BaseModel(metaclass=ModelMeta):
             raise DatabaseError(
                 message=str(e), backend=self._env.adapter.backend_type
             ) from e
-
-    async def _validate_write(self, vals: Dict[str, Any]) -> None:
-        """Validate record update.
-
-        This method performs the following validations:
-                1. Check if records exist
-                2. Check field types and constraints
-                3. Check unique constraints
-                4. Apply custom validation rules
-
-                Args:
-                    vals: Field values to validate
-
-                Raises:
-                    FieldValidationError: If validation fails
-                    ValidationError: If custom validation fails
-                    ValueError: If records don't exist
-        """
-        logger.info("Validating write values: %s", vals)
-
-        try:
-            if not self._ids:
-                raise ValueError("No records to update")
-
-            # Check if records exist in database
-            domain_tuple = cast(
-                Tuple[str, Operator, ValueType],
-                ("id", "in", list(self._ids)),
-            )
-            query = await self._where_calc([domain_tuple])
-            count = await query.count()
-            if count != len(self._ids):
-                raise ValueError("Some records do not exist")
-
-            # Create validation context
-            context = {
-                "model": self,
-                "env": self._env,
-                "operation": "write",
-                "values": vals,
-            }
-
-            # Validate field values
-            for name, value in vals.items():
-                if name not in self.__fields__:
-                    raise FieldValidationError(
-                        message=f"Field '{name}' does not exist",
-                        field_name=name,
-                        code="field_not_found",
-                    )
-                field = self.__fields__[name]
-                if field.readonly:
-                    raise FieldValidationError(
-                        message=f"Field '{name}' is readonly",
-                        field_name=name,
-                        code="field_readonly",
-                    )
-                try:
-                    field_context = {**context, "field_name": name}
-                    await field.validate(value, context=field_context)
-                except ValueError as e:
-                    raise FieldValidationError(
-                        message=str(e),
-                        field_name=name,
-                        code="field_validation_error",
-                    ) from e
-
-        except Exception as e:
-            logger.error("Validation failed: %s", str(e))
-            raise
 
     @property
     def id(self) -> str:
@@ -720,43 +609,6 @@ class BaseModel(metaclass=ModelMeta):
         if isinstance(key, slice):
             return self._browse(self._env, self._ids[key])
         return self._browse(self._env, (self._ids[key],))
-
-    @classmethod
-    async def aggregate(cls) -> AggregateQuery[ModelProtocol]:
-        """Create aggregate query.
-
-        Returns:
-            AggregateQuery: Aggregate query builder
-        """
-        query = await cls._env.adapter.get_aggregate_query(
-            cast(Type[ModelProtocol], cls)
-        )
-        return query
-
-    @classmethod
-    async def join(
-        cls,
-        model: str,
-        on: Dict[str, str],
-        join_type: str = "inner",
-    ) -> JoinQuery[ModelProtocol, Any]:
-        """Create join query.
-
-        Args:
-            model: Model to join with
-            on: Join conditions {local_field: foreign_field}
-            join_type: Join type (inner, left, right)
-
-        Returns:
-            Join query builder
-        """
-        logger.info(
-            "Creating join query for model %s with %s",
-            cls._name,
-            model,
-        )
-        query = await cls._env.adapter.get_join_query(cast(Type[ModelProtocol], cls))
-        return query.join(model, on, join_type)
 
     @overload
     @classmethod
@@ -838,8 +690,8 @@ class BaseModel(metaclass=ModelMeta):
 
                 # Create records and get IDs
                 record_ids = await cls._env.adapter.create(
-                    cast(Type[ModelProtocol], cls),
-                    db_vals_list,
+                    store=str(cls._name),
+                    values=db_vals_list,
                 )
 
                 # Return single recordset with all IDs
@@ -848,8 +700,8 @@ class BaseModel(metaclass=ModelMeta):
                 # Create single record
                 db_vals = await cls._convert_to_db(values)
                 record_id = await cls._env.adapter.create(
-                    cast(Type[ModelProtocol], cls),
-                    db_vals,
+                    store=str(cls._name),
+                    values=db_vals,
                 )
                 return cls._browse(env, [str(record_id)])
 
@@ -859,40 +711,76 @@ class BaseModel(metaclass=ModelMeta):
                 message=str(e), backend=cls._env.adapter.backend_type
             ) from e
 
-    @api.one
     async def to_dict(
         self, fields: Optional[List[str]] = None, exclude: Optional[List[str]] = None
     ) -> Dict[str, Any]:
-        """Convert model to dictionary."""
+        """Convert model to dictionary.
+
+        This method converts the current record to a dictionary format.
+        It handles:
+        1. Field selection and exclusion
+        2. Type conversion from database to Python
+        3. Error handling for each field
+        4. Cache management
+
+        Args:
+            fields: List of field names to include (None for all fields)
+            exclude: List of field names to exclude
+
+        Returns:
+            Dict[str, Any]: Dictionary containing field values
+
+        Examples:
+            >>> user = await User.browse("123")
+            >>> # Get all fields
+            >>> data = await user.to_dict()
+            >>> print(data["name"])  # "John"
+            >>>
+            >>> # Get specific fields
+            >>> data = await user.to_dict(fields=["name", "email"])
+            >>> print(data.keys())  # ["name", "email"]
+            >>>
+            >>> # Exclude fields
+            >>> data = await user.to_dict(exclude=["password"])
+            >>> print("password" in data)  # False
+        """
         result: Dict[str, Any] = {}
 
-        if not fields:
-            fields = list(self.__fields__.keys())
+        try:
+            # Determine fields to convert
+            if not fields:
+                fields = list(self.__fields__.keys())
+            if exclude:
+                fields = [f for f in fields if f not in exclude]
 
-        logger.info(f"Getting fields: {self.__fields__}")
+            # Get record data from database
+            if self._ids:
+                record_id = self._ids[0]
+                db_result = await self._env.adapter.read(
+                    store=str(self._name), id_or_ids=record_id, fields=fields
+                )
 
-        for field in fields:
-            try:
-                # Direct database fetch for each field
-                if self._ids:
-                    record_id = self._ids[0]
-                    db_result = await self._env.adapter.read(
-                        cast(Type[ModelProtocol], type(self)), record_id, [field]
-                    )
-                    if db_result:
-                        field_obj = self.__fields__[field]
-                        value = await field_obj.from_db(
-                            db_result.get(field), self._env.adapter.backend_type
-                        )
-                        result[field] = value
-                    else:
-                        result[field] = None
-                else:
-                    result[field] = None
+                if isinstance(db_result, dict):
+                    # Convert each field
+                    for field_name in fields:
+                        try:
+                            if field_name in self.__fields__:
+                                field_obj = self.__fields__[field_name]
+                                db_value = db_result.get(field_name)
+                                value = await field_obj.from_db(
+                                    db_value, self._env.adapter.backend_type
+                                )
+                                result[field_name] = value
+                        except Exception as e:
+                            self.env.logger.error(
+                                f"Error converting field {field_name}: {str(e)}"
+                            )
+                            result[field_name] = None
 
-            except Exception as e:
-                logger.error(f"Error converting field {field}: {str(e)}")
-                result[field] = None
+        except Exception as e:
+            self.env.logger.error(f"Error converting record to dict: {str(e)}")
+            # Return empty dict on error
+            return {}
 
         return result
 
@@ -901,18 +789,6 @@ class BaseModel(metaclass=ModelMeta):
         for name, value in data.items():
             if name in self.__fields__ and not self.__fields__[name].readonly:
                 setattr(self, name, value)
-
-    async def with_transaction(
-        self,
-    ) -> AsyncContextManager[Transaction[ModelProtocol]]:
-        """Get transaction context manager.
-
-        Returns:
-            Transaction context manager
-        """
-        return await self._env.adapter.transaction(
-            model_type=cast(Type[ModelProtocol], type(self))
-        )
 
     @classmethod
     async def _get_env(cls) -> Environment:
@@ -1005,49 +881,45 @@ class BaseModel(metaclass=ModelMeta):
 
         return db_vals
 
-    async def _create(self, vals: Dict[str, Any]) -> None:
-        """Create record in database.
-
-        Args:
-            vals: Values to create record with
-        """
-        # Convert values to database format
-        db_vals = await self._convert_to_db(vals)
-
-        # Create record in database
-        record_id = await self._env.adapter.create(
-            cast(Type[ModelProtocol], type(self)), db_vals
-        )
-
-        # Set record ID
-        self._ids = (record_id,)
-
-    @api.multi
     async def unlink(self) -> bool:
-        """Delete record from database.
+        """Delete records from database.
+
+        This method deletes the current recordset from the database.
+        It handles:
+        1. Building delete query with proper filters
+        2. Executing delete operation
+        3. Clearing cache and recordset data
+        4. Error handling and logging
 
         Returns:
-            True if record was deleted
+            bool: True if records were deleted successfully, False otherwise
+
+        Raises:
+            DatabaseError: If deletion fails due to database error
+
+        Examples:
+            >>> # Delete single record
+            >>> user = await User.browse("123")
+            >>> success = await user.unlink()
+            >>>
+            >>> # Delete multiple records
+            >>> users = await User.search([("active", "=", False)])
+            >>> success = await users.unlink()
         """
         try:
-            await self._unlink()
-            return True
-        except Exception as e:
-            logger.error(f"Failed to delete {self._name} records: {str(e)}")
-            return False
+            if not self._ids:
+                return True
 
-    async def _unlink(self) -> None:
-        """Delete records from database."""
-        try:
-            # Build delete query
-            query = await self._where_calc([("id", "in", list(self._ids))])
+            # Execute delete operation using IDs
+            result = await self._env.adapter.delete(
+                store=str(self._name),
+                ids=list(self._ids),
+            )
 
-            # Execute delete
-            result = cast(Dict[str, int], await query.delete())
-            deleted_count = result.get("deleted_count", 0)
-
+            # Check deletion count
+            deleted_count = result or 0
             if deleted_count != len(self._ids):
-                self.logger.warning(
+                self.env.logger.warning(
                     f"Deleted {deleted_count} records out of {len(self._ids)}"
                 )
 
@@ -1057,7 +929,10 @@ class BaseModel(metaclass=ModelMeta):
             # Clear recordset data
             self._ids = ()
 
+            return True
+
         except Exception as e:
+            self.env.logger.error(f"Failed to delete {self._name} records: {str(e)}")
             raise DatabaseError(
                 message=f"Failed to delete records: {str(e)}",
                 backend=self._env.adapter.backend_type,
@@ -1093,84 +968,6 @@ class BaseModel(metaclass=ModelMeta):
                 f"Expected single {self._name} record, got {len(self._ids)} records"
             )
         return self
-
-    @classmethod
-    async def read(
-        cls, record_id: str, fields: Optional[List[str]] = None
-    ) -> Optional[Dict[str, Any]]:
-        """Read a single record.
-
-        Args:
-            record_id: Record ID to read
-            fields: Optional list of fields to read
-
-        Returns:
-            Dict containing record data if found, None otherwise
-
-        Raises:
-            DatabaseError: If read operation fails
-        """
-        try:
-            return await cls._env.adapter.read(
-                cast(Type[ModelProtocol], cls),
-                record_id,
-                fields,
-            )
-        except Exception as e:
-            logger.error("Failed to read record: %s", str(e), exc_info=True)
-            raise DatabaseError(
-                message=str(e), backend=cls._env.adapter.backend_type
-            ) from e
-
-    @classmethod
-    async def update(cls, record_id: str, values: Dict[str, Any]) -> int:
-        """Update a single record.
-
-        Args:
-            record_id: Record ID to update
-            values: Values to update
-
-        Returns:
-            Number of records updated
-
-        Raises:
-            DatabaseError: If update fails
-        """
-        try:
-            return await cls._env.adapter.update(
-                cast(Type[ModelProtocol], cls),
-                {"id": record_id},
-                values,
-            )
-        except Exception as e:
-            logger.error("Failed to update record: %s", str(e), exc_info=True)
-            raise DatabaseError(
-                message=str(e), backend=cls._env.adapter.backend_type
-            ) from e
-
-    @classmethod
-    async def delete(cls, record_id: str) -> Optional[int]:
-        """Delete a single record.
-
-        Args:
-            record_id: Record ID to delete
-
-        Returns:
-            Number of records deleted
-
-        Raises:
-            DatabaseError: If deletion fails
-        """
-        try:
-            return await cls._env.adapter.delete(
-                cast(Type[ModelProtocol], cls),
-                {"id": record_id},
-            )
-        except Exception as e:
-            logger.error("Failed to delete record: %s", str(e), exc_info=True)
-            raise DatabaseError(
-                message=str(e), backend=cls._env.adapter.backend_type
-            ) from e
 
     def _clear_cache(self, field_name: Optional[str] = None) -> None:
         """Clear cached values.

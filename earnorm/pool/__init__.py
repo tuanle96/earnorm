@@ -30,7 +30,6 @@ from typing import Any, Dict, Optional
 
 from .backends.base import BasePool
 from .backends.mongo import MongoPool
-from .backends.redis import RedisPool
 from .constants import (
     DEFAULT_CONNECTION_TIMEOUT,
     DEFAULT_MAX_IDLE_TIME,
@@ -39,7 +38,7 @@ from .constants import (
     DEFAULT_MIN_POOL_SIZE,
 )
 from .core import CircuitBreaker, CircuitState, RetryPolicy, with_resilience
-from .factory import PoolFactory, create_mongo_pool, create_redis_pool
+from .factory import PoolFactory, create_mongo_pool
 from .protocols import AsyncPoolProtocol
 from .registry import PoolRegistry
 from .utils import (
@@ -86,7 +85,6 @@ __all__ = [
     "PoolConfig",
     # Backends
     "MongoPool",
-    "RedisPool",
     # Factory & Registry
     "PoolFactory",
     "PoolRegistry",
@@ -107,5 +105,4 @@ __all__ = [
     "cleanup_stale_connections",
     # Factory functions
     "create_mongo_pool",
-    "create_redis_pool",
 ]
