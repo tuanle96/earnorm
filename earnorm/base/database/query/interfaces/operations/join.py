@@ -10,7 +10,7 @@ Examples:
 """
 
 from abc import abstractmethod
-from typing import Any, Dict, Generic, List, Optional, Type, TypeVar, Union
+from typing import Any, Generic, TypeVar
 
 from earnorm.base.database.query.interfaces.operations.base import OperationProtocol
 from earnorm.types import DatabaseModel, JsonDict
@@ -25,8 +25,8 @@ class JoinProtocol(OperationProtocol[ModelT], Generic[ModelT, JoinT]):
     @abstractmethod
     def join(
         self,
-        model: Union[str, Type[JoinT]],
-        on: Optional[Dict[str, Any]] = None,
+        model: str | type[JoinT],
+        on: dict[str, Any] | None = None,
         join_type: str = "inner",
     ) -> "JoinProtocol[ModelT, JoinT]":
         """Add join condition.
@@ -106,7 +106,7 @@ class JoinProtocol(OperationProtocol[ModelT], Generic[ModelT, JoinT]):
         """
         ...
 
-    def get_pipeline_stages(self) -> List[JsonDict]:
+    def get_pipeline_stages(self) -> list[JsonDict]:
         """Get MongoDB aggregation pipeline stages for this join.
 
         Returns:

@@ -38,7 +38,7 @@ Example:
 """
 
 import logging
-from typing import Awaitable, Callable, List
+from collections.abc import Awaitable, Callable
 
 from earnorm.di.lifecycle.protocol import LifecycleAware
 from earnorm.exceptions import EventError
@@ -81,10 +81,10 @@ class LifecycleEvents:
         2. Error handling configuration
         3. Event propagation settings
         """
-        self.on_before_init: List[EventHandler] = []
-        self.on_after_init: List[EventHandler] = []
-        self.on_before_destroy: List[EventHandler] = []
-        self.on_after_destroy: List[EventHandler] = []
+        self.on_before_init: list[EventHandler] = []
+        self.on_after_init: list[EventHandler] = []
+        self.on_before_destroy: list[EventHandler] = []
+        self.on_after_destroy: list[EventHandler] = []
 
     async def before_init(self, obj: LifecycleAware) -> None:
         """Emit before initialization event.

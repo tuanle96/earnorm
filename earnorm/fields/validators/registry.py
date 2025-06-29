@@ -15,7 +15,8 @@ Examples:
     >>> field = StringField(validators=[validator])
 """
 
-from typing import Any, Callable, Dict, Final, List, Optional, TypeVar, final
+from collections.abc import Callable
+from typing import Any, Final, TypeVar, final
 
 from earnorm.fields.validators.base import (
     RangeValidator,
@@ -30,8 +31,8 @@ T = TypeVar("T")  # Type of value to validate
 
 # Type aliases with better type hints
 ValidatorFactory = Callable[..., Validator[Any]]
-ValidatorCache = Dict[str, Dict[str, Validator[Any]]]
-ValidatorRegistry = Dict[str, ValidatorFactory]
+ValidatorCache = dict[str, dict[str, Validator[Any]]]
+ValidatorRegistry = dict[str, ValidatorFactory]
 
 
 @final
@@ -85,7 +86,7 @@ class ValidatorManager:
     def create(
         self,
         name: str,
-        cache_key: Optional[str] = None,
+        cache_key: str | None = None,
         **kwargs: Any,
     ) -> Validator[Any]:
         """Create validator instance.
@@ -119,7 +120,7 @@ class ValidatorManager:
 
         return validator
 
-    def clear_cache(self, name: Optional[str] = None) -> None:
+    def clear_cache(self, name: str | None = None) -> None:
         """Clear validator cache.
 
         Args:
@@ -131,7 +132,7 @@ class ValidatorManager:
         elif name in self._cache:
             self._cache[name].clear()
 
-    def get_names(self) -> List[str]:
+    def get_names(self) -> list[str]:
         """Get names of registered validators.
 
         Returns:

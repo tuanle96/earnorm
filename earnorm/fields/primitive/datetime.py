@@ -24,8 +24,8 @@ Examples:
     ...     this_month = Post.find(Post.published_at.same_month(datetime.now()))
 """
 
-from datetime import date, datetime, time, timezone
-from typing import Any, Dict, Final, List, Optional, Union
+from datetime import UTC, date, datetime, time
+from typing import Any, Final
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
@@ -60,7 +60,7 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
     auto_now: bool
     auto_now_add: bool
     use_tz: bool
-    backend_options: Dict[str, Any]
+    backend_options: dict[str, Any]
 
     def __init__(
         self,
@@ -78,7 +78,7 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
             use_tz: Whether to use timezone-aware datetimes
             **options: Additional field options
         """
-        field_validators: List[Validator[Any]] = [TypeValidator(datetime)]
+        field_validators: list[Validator[Any]] = [TypeValidator(datetime)]
         super().__init__(validators=field_validators, **options)
 
         self.auto_now = auto_now
@@ -115,7 +115,7 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
                 value = datetime.combine(value, time())
 
             if self.use_tz and value.tzinfo is None:
-                value = value.replace(tzinfo=timezone.utc)
+                value = value.replace(tzinfo=UTC)
             elif not self.use_tz and value.tzinfo is not None:
                 value = value.replace(tzinfo=None)
 
@@ -123,9 +123,7 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
         except (TypeError, ValueError):
             return None
 
-    def before(
-        self, other: Union[datetime, date, str, int, float]
-    ) -> ComparisonOperator:
+    def before(self, other: datetime | date | str | int | float) -> ComparisonOperator:
         """Check if value is before other datetime.
 
         Args:
@@ -136,9 +134,7 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
         """
         return ComparisonOperator(self.name, "before", self._prepare_value(other))
 
-    def after(
-        self, other: Union[datetime, date, str, int, float]
-    ) -> ComparisonOperator:
+    def after(self, other: datetime | date | str | int | float) -> ComparisonOperator:
         """Check if value is after other datetime.
 
         Args:
@@ -151,8 +147,8 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
 
     def between(
         self,
-        start: Union[datetime, date, str, int, float],
-        end: Union[datetime, date, str, int, float],
+        start: datetime | date | str | int | float,
+        end: datetime | date | str | int | float,
     ) -> ComparisonOperator:
         """Check if value is between start and end dates.
 
@@ -171,8 +167,8 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
 
     def in_range(
         self,
-        start: Union[datetime, date, str, int, float],
-        end: Union[datetime, date, str, int, float],
+        start: datetime | date | str | int | float,
+        end: datetime | date | str | int | float,
     ) -> ComparisonOperator:
         """Alias for between().
 
@@ -185,9 +181,7 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
         """
         return self.between(start, end)
 
-    def same_day(
-        self, other: Union[datetime, date, str, int, float]
-    ) -> ComparisonOperator:
+    def same_day(self, other: datetime | date | str | int | float) -> ComparisonOperator:
         """Check if value is on the same day as other datetime.
 
         Args:
@@ -198,9 +192,7 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
         """
         return ComparisonOperator(self.name, "same_day", self._prepare_value(other))
 
-    def same_month(
-        self, other: Union[datetime, date, str, int, float]
-    ) -> ComparisonOperator:
+    def same_month(self, other: datetime | date | str | int | float) -> ComparisonOperator:
         """Check if value is in the same month as other datetime.
 
         Args:
@@ -211,9 +203,7 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
         """
         return ComparisonOperator(self.name, "same_month", self._prepare_value(other))
 
-    def same_year(
-        self, other: Union[datetime, date, str, int, float]
-    ) -> ComparisonOperator:
+    def same_year(self, other: datetime | date | str | int | float) -> ComparisonOperator:
         """Check if value is in the same year as other datetime.
 
         Args:
@@ -338,9 +328,7 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
         """
         return ComparisonOperator(self.name, "is_this_year", None)
 
-    def in_list(
-        self, values: List[Union[datetime, date, str, int, float]]
-    ) -> ComparisonOperator:
+    def in_list(self, values: list[datetime | date | str | int | float]) -> ComparisonOperator:
         """Check if value is in list of datetimes.
 
         Args:
@@ -352,9 +340,7 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
         prepared_values = [self._prepare_value(value) for value in values]
         return ComparisonOperator(self.name, "in", prepared_values)
 
-    def not_in_list(
-        self, values: List[Union[datetime, date, str, int, float]]
-    ) -> ComparisonOperator:
+    def not_in_list(self, values: list[datetime | date | str | int | float]) -> ComparisonOperator:
         """Check if value is not in list of datetimes.
 
         Args:
@@ -366,9 +352,7 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
         prepared_values = [self._prepare_value(value) for value in values]
         return ComparisonOperator(self.name, "not_in", prepared_values)
 
-    async def validate(
-        self, value: Any, context: Optional[Dict[str, Any]] = None
-    ) -> Any:
+    async def validate(self, value: Any, context: dict[str, Any] | None = None) -> Any:
         """Validate datetime value.
 
         This method validates:
@@ -403,7 +387,7 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
 
             # Handle timezone
             if self.use_tz and value.tzinfo is None:
-                value = value.replace(tzinfo=timezone.utc)
+                value = value.replace(tzinfo=UTC)
             elif not self.use_tz and value.tzinfo is not None:
                 value = value.replace(tzinfo=None)
 
@@ -411,13 +395,13 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
             if context and "operation" in context:
                 operation = context["operation"]
                 if operation == "create" and self.auto_now_add:
-                    value = datetime.now(timezone.utc if self.use_tz else None)
+                    value = datetime.now(UTC if self.use_tz else None)
                 elif operation in ("create", "write") and self.auto_now:
-                    value = datetime.now(timezone.utc if self.use_tz else None)
+                    value = datetime.now(UTC if self.use_tz else None)
 
         return value
 
-    async def convert(self, value: Any) -> Optional[datetime]:
+    async def convert(self, value: Any) -> datetime | None:
         """Convert value to datetime.
 
         Handles:
@@ -451,7 +435,7 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
             # Handle timezone
             if self.use_tz:
                 if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
+                    dt = dt.replace(tzinfo=UTC)
             else:
                 if dt.tzinfo is not None:
                     dt = dt.replace(tzinfo=None)
@@ -459,12 +443,12 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
             return dt
         except (TypeError, ValueError) as e:
             raise FieldValidationError(
-                message=f"Cannot convert {type(value).__name__} to datetime: {str(e)}",
+                message=f"Cannot convert {type(value).__name__} to datetime: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
 
-    async def to_db(self, value: Optional[datetime], backend: str) -> DatabaseValue:
+    async def to_db(self, value: datetime | None, backend: str) -> DatabaseValue:
         """Convert datetime to database format.
 
         Args:
@@ -475,7 +459,7 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
             Converted datetime value or None
         """
         # Handle auto_now and auto_now_add
-        now = datetime.now(timezone.utc if self.use_tz else None)
+        now = datetime.now(UTC if self.use_tz else None)
 
         if value is None:
             # For new records (create)
@@ -489,21 +473,43 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
         if value is None:
             return None
 
+        # Convert string to datetime if needed
+        if isinstance(value, str):
+            try:
+                # Use the convert method to parse the string
+                value = await self.convert(value)
+            except Exception as e:
+                from earnorm.exceptions import ValidationError
+                raise ValidationError(
+                    message=f"Cannot convert string '{value}' to datetime: {e!s}",
+                    field_name=self.name,
+                    code="conversion_error",
+                ) from e
+
         # Convert date to datetime if needed
         if type(value) is date and type(value) is not datetime:
             value = datetime.combine(value, time())
 
+        # Ensure we have a datetime object at this point
+        if not isinstance(value, datetime):
+            from earnorm.exceptions import ValidationError
+            raise ValidationError(
+                message=f"Expected datetime object, got {type(value).__name__}",
+                field_name=self.name,
+                code="type_error",
+            )
+
         # Handle timezone
         if self.use_tz:
             if value.tzinfo is None:
-                value = value.replace(tzinfo=timezone.utc)
+                value = value.replace(tzinfo=UTC)
         else:
             if value.tzinfo is not None:
                 value = value.replace(tzinfo=None)
 
         return value.isoformat()
 
-    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[datetime]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> datetime | None:
         """Convert database value to datetime.
 
         Args:
@@ -530,7 +536,7 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
             # Handle timezone
             if self.use_tz:
                 if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)  # type: ignore
+                    dt = dt.replace(tzinfo=UTC)  # type: ignore
             else:
                 if dt.tzinfo is not None:
                     dt = dt.replace(tzinfo=None)  # type: ignore
@@ -538,7 +544,7 @@ class DateTimeField(BaseField[datetime], FieldComparisonMixin):
             return dt
         except (TypeError, ValueError) as e:
             raise FieldValidationError(
-                message=f"Cannot convert database value to datetime: {str(e)}",
+                message=f"Cannot convert database value to datetime: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
@@ -562,8 +568,8 @@ class DateField(DateTimeField):
     def __init__(
         self,
         *,
-        min_value: Optional[date] = None,
-        max_value: Optional[date] = None,
+        min_value: date | None = None,
+        max_value: date | None = None,
         **options: Any,
     ) -> None:
         """Initialize date field.
@@ -587,7 +593,7 @@ class DateField(DateTimeField):
             "mysql": {"type": "DATE"},
         }
 
-    async def convert(self, value: Any) -> Optional[datetime]:
+    async def convert(self, value: Any) -> datetime | None:
         """Convert value to date.
 
         Handles:
@@ -610,9 +616,7 @@ class DateField(DateTimeField):
 
         try:
             if isinstance(value, datetime):
-                dt = value.replace(
-                    hour=0, minute=0, second=0, microsecond=0, tzinfo=None
-                )
+                dt = value.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
             elif isinstance(value, date):
                 dt = datetime.combine(value, time())
             elif isinstance(value, str):
@@ -623,7 +627,7 @@ class DateField(DateTimeField):
             return dt
         except (TypeError, ValueError) as e:
             raise FieldValidationError(
-                message=f"Cannot convert {type(value).__name__} to date: {str(e)}",
+                message=f"Cannot convert {type(value).__name__} to date: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
@@ -644,16 +648,16 @@ class TimeField(BaseField[time]):
         ...     end_time = TimeField(required=True)
     """
 
-    min_value: Optional[time]
-    max_value: Optional[time]
+    min_value: time | None
+    max_value: time | None
     format: str
     backend_options: dict[str, Any]
 
     def __init__(
         self,
         *,
-        min_value: Optional[time] = None,
-        max_value: Optional[time] = None,
+        min_value: time | None = None,
+        max_value: time | None = None,
         format: str = DEFAULT_TIME_FORMAT,  # pylint: disable=redefined-builtin
         **options: Any,
     ) -> None:
@@ -671,10 +675,7 @@ class TimeField(BaseField[time]):
                 RangeValidator(
                     min_value=min_value,
                     max_value=max_value,
-                    message=(
-                        f"Value must be between {min_value or '00:00:00'} "
-                        f"and {max_value or '23:59:59'}"
-                    ),
+                    message=(f"Value must be between {min_value or '00:00:00'} " f"and {max_value or '23:59:59'}"),
                 )
             )
 
@@ -691,9 +692,7 @@ class TimeField(BaseField[time]):
             "mysql": {"type": "TIME"},
         }
 
-    async def validate(
-        self, value: Any, context: Optional[Dict[str, Any]] = None
-    ) -> Any:
+    async def validate(self, value: Any, context: dict[str, Any] | None = None) -> Any:
         """Validate time value.
 
         This method validates:
@@ -742,7 +741,7 @@ class TimeField(BaseField[time]):
 
         return value
 
-    async def convert(self, value: Any) -> Optional[time]:
+    async def convert(self, value: Any) -> time | None:
         """Convert value to time.
 
         Handles:
@@ -775,14 +774,13 @@ class TimeField(BaseField[time]):
         except (TypeError, ValueError) as e:
             raise FieldValidationError(
                 message=(
-                    f"Cannot convert {type(value).__name__} to time: {str(e)}. "
-                    f"Expected format: {self.format}"
+                    f"Cannot convert {type(value).__name__} to time: {e!s}. " f"Expected format: {self.format}"
                 ),
                 field_name=self.name,
                 code="conversion_error",
             ) from e
 
-    async def to_db(self, value: Optional[time], backend: str) -> DatabaseValue:
+    async def to_db(self, value: time | None, backend: str) -> DatabaseValue:
         """Convert time to database format.
 
         Args:
@@ -796,7 +794,7 @@ class TimeField(BaseField[time]):
             return None
         return value.strftime(self.format)
 
-    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[time]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> time | None:
         """Convert database value to time.
 
         Args:

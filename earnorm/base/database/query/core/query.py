@@ -63,7 +63,7 @@ Examples:
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Generic, List, Optional, Type, TypeVar, Union
+from typing import Any, Generic, TypeVar
 
 from earnorm.base.database.query.interfaces.domain import DomainExpression, DomainItem
 from earnorm.base.database.query.interfaces.operations.aggregate import (
@@ -119,21 +119,21 @@ class BaseQuery(Generic[ModelT], QueryProtocol[ModelT], ABC):
         >>> results = await query.all()
     """
 
-    def __init__(self, model_type: Type[ModelT]) -> None:
+    def __init__(self, model_type: type[ModelT]) -> None:
         """Initialize query builder.
 
         Args:
             model_type: The model class to query
         """
         self._model = model_type
-        self._domain: Optional[Union[List[DomainItem], DomainExpression]] = None
-        self._fields: Optional[List[str]] = None
-        self._offset: Optional[int] = None
-        self._limit: Optional[int] = None
-        self._order_by: List[str] = []
-        self._joins: List[JoinProtocol[ModelT, Any]] = []
-        self._aggregates: List[AggregateProtocol[ModelT]] = []
-        self._windows: List[WindowProtocol[ModelT]] = []
+        self._domain: list[DomainItem] | DomainExpression | None = None
+        self._fields: list[str] | None = None
+        self._offset: int | None = None
+        self._limit: int | None = None
+        self._order_by: list[str] = []
+        self._joins: list[JoinProtocol[ModelT, Any]] = []
+        self._aggregates: list[AggregateProtocol[ModelT]] = []
+        self._windows: list[WindowProtocol[ModelT]] = []
 
     def select(self, *fields: str) -> "BaseQuery[ModelT]":
         """Select fields to return.
@@ -147,9 +147,7 @@ class BaseQuery(Generic[ModelT], QueryProtocol[ModelT], ABC):
         self._fields = list(fields)
         return self
 
-    def where(
-        self, domain: Union[List[DomainItem], DomainExpression]
-    ) -> "BaseQuery[ModelT]":
+    def where(self, domain: list[DomainItem] | DomainExpression) -> "BaseQuery[ModelT]":
         """Add where conditions.
 
         Args:
@@ -200,8 +198,8 @@ class BaseQuery(Generic[ModelT], QueryProtocol[ModelT], ABC):
     @abstractmethod
     def join(
         self,
-        model: Union[str, Type[JoinT]],
-        on: Optional[Dict[str, Any]] = None,
+        model: str | type[JoinT],
+        on: dict[str, Any] | None = None,
         join_type: str = "inner",
     ) -> JoinProtocol[ModelT, JoinT]:
         """Create join operation.
@@ -235,7 +233,7 @@ class BaseQuery(Generic[ModelT], QueryProtocol[ModelT], ABC):
         ...
 
     @abstractmethod
-    async def to_raw_data(self) -> List[Dict[str, Any]]:
+    async def to_raw_data(self) -> list[dict[str, Any]]:
         """Get raw data from query result.
 
         This method executes the query and returns raw data instead of model instances.
@@ -253,7 +251,7 @@ class BaseQuery(Generic[ModelT], QueryProtocol[ModelT], ABC):
         pass
 
     @abstractmethod
-    async def execute(self) -> List[ModelT]:
+    async def execute(self) -> list[ModelT]:
         """Execute query and return model instances.
 
         This method executes the query and returns model instances.
@@ -283,7 +281,7 @@ class BaseQuery(Generic[ModelT], QueryProtocol[ModelT], ABC):
             window.validate()
 
     @property
-    def model(self) -> Type[ModelT]:
+    def model(self) -> type[ModelT]:
         """Get model class.
 
         Returns:
@@ -292,7 +290,7 @@ class BaseQuery(Generic[ModelT], QueryProtocol[ModelT], ABC):
         return self._model
 
     @property
-    def domain(self) -> Optional[Union[List[DomainItem], DomainExpression]]:
+    def domain(self) -> list[DomainItem] | DomainExpression | None:
         """Get where conditions.
 
         Returns:
@@ -301,7 +299,7 @@ class BaseQuery(Generic[ModelT], QueryProtocol[ModelT], ABC):
         return self._domain
 
     @property
-    def fields(self) -> Optional[List[str]]:
+    def fields(self) -> list[str] | None:
         """Get selected fields.
 
         Returns:
@@ -310,7 +308,7 @@ class BaseQuery(Generic[ModelT], QueryProtocol[ModelT], ABC):
         return self._fields
 
     @property
-    def offset_value(self) -> Optional[int]:
+    def offset_value(self) -> int | None:
         """Get offset.
 
         Returns:
@@ -319,7 +317,7 @@ class BaseQuery(Generic[ModelT], QueryProtocol[ModelT], ABC):
         return self._offset
 
     @property
-    def limit_value(self) -> Optional[int]:
+    def limit_value(self) -> int | None:
         """Get limit.
 
         Returns:
@@ -328,7 +326,7 @@ class BaseQuery(Generic[ModelT], QueryProtocol[ModelT], ABC):
         return self._limit
 
     @property
-    def order_by_fields(self) -> List[str]:
+    def order_by_fields(self) -> list[str]:
         """Get order by fields.
 
         Returns:
@@ -337,7 +335,7 @@ class BaseQuery(Generic[ModelT], QueryProtocol[ModelT], ABC):
         return self._order_by
 
     @property
-    def joins(self) -> List[JoinProtocol[ModelT, Any]]:
+    def joins(self) -> list[JoinProtocol[ModelT, Any]]:
         """Get join operations.
 
         Returns:
@@ -346,7 +344,7 @@ class BaseQuery(Generic[ModelT], QueryProtocol[ModelT], ABC):
         return self._joins
 
     @property
-    def aggregates(self) -> List[AggregateProtocol[ModelT]]:
+    def aggregates(self) -> list[AggregateProtocol[ModelT]]:
         """Get aggregate operations.
 
         Returns:
@@ -355,7 +353,7 @@ class BaseQuery(Generic[ModelT], QueryProtocol[ModelT], ABC):
         return self._aggregates
 
     @property
-    def windows(self) -> List[WindowProtocol[ModelT]]:
+    def windows(self) -> list[WindowProtocol[ModelT]]:
         """Get window operations.
 
         Returns:

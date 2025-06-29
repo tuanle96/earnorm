@@ -41,9 +41,9 @@ from earnorm.database.type_mapping import get_field_options, get_field_type
 __all__ = [
     "DatabaseTypeMapper",
     "MongoDBTypeMapper",
-    "PostgresTypeMapper",
     "MySQLTypeMapper",
-    "get_mapper",
-    "get_field_type",
+    "PostgresTypeMapper",
     "get_field_options",
+    "get_field_type",
+    "get_mapper",
 ]

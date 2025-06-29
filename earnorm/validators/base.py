@@ -4,7 +4,8 @@ This module provides the base classes and exceptions for all validators in EarnO
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Coroutine, Optional, Union
+from collections.abc import Callable, Coroutine
+from typing import Any, Union
 
 # Type alias for validator functions
 ValidatorFunc = Callable[[Any], None]
@@ -51,7 +52,7 @@ class BaseValidator(ABC):
         ```
     """
 
-    def __init__(self, message: Optional[str] = None) -> None:
+    def __init__(self, message: str | None = None) -> None:
         """Initialize validator.
 
         Args:

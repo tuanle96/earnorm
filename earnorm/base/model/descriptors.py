@@ -80,7 +80,7 @@ See Also:
 """
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Optional, Type, TypeVar
+from typing import TYPE_CHECKING, Any, Optional, TypeVar
 
 from earnorm.fields.base import BaseField
 
@@ -112,7 +112,6 @@ class AsyncFieldDescriptor:
     Attributes:
         field: The wrapped field instance
         name: Field name (set by metaclass)
-        _cache: Per-instance value cache
 
     Examples:
         >>> class User(BaseModel):
@@ -133,11 +132,20 @@ class AsyncFieldDescriptor:
             field: Field instance to wrap
         """
         self.field = field
-        self.name = field.name if hasattr(field, "name") else None
+        self.name: str | None = None  # Will be set by metaclass
 
-    async def __get__(
-        self, instance: Optional["BaseModel"], owner: Type["BaseModel"]
-    ) -> Any:
+    def __set_name__(self, owner: type, name: str) -> None:
+        """Set field name when descriptor is assigned to class.
+
+        Args:
+            owner: Owner class
+            name: Attribute name
+        """
+        self.name = name
+        if hasattr(self.field, 'name') and not self.field.name:
+            self.field.name = name
+
+    async def __get__(self, instance: Optional["BaseModel"], owner: type["BaseModel"]) -> Any:
         """Async getter for field value.
 
         This method:
@@ -154,25 +162,58 @@ class AsyncFieldDescriptor:
             Field value
 
         Raises:
-            AttributeError: If accessed on class
+            AttributeError: If accessed on class or field not properly configured
             ValueError: If field value is invalid
         """
+        # Return field instance when accessed on class
         if instance is None:
             return self.field
 
+        # Validate field configuration
         if not self.field:
             raise AttributeError("Field not set")
 
-        try:
-            if not self.field.name:
-                raise AttributeError("Field name not set")
+        if not self.name:
+            raise AttributeError("Field name not set")
 
-            # Get value using __getattr__
-            value = await instance.__getattr__(self.field.name)
-            return value
-        except Exception as e:
-            logger.error(f"Failed to get field {self.field.name}: {str(e)}")
+        try:
+            # Check cache first
+            cached_value = instance._get_cache(self.name)
+            if cached_value is not None:
+                return cached_value
+
+            # Get field value directly from BaseModel's field access logic
+            # This avoids circular calls by using the model's internal field access
+            field_value = await self._get_field_value(instance)
+
+            # Cache the value
+            instance._set_cache(self.name, field_value)
+
+            return field_value
+
+        except AttributeError:
+            # Re-raise AttributeError as-is
             raise
+        except Exception as e:
+            logger.error(f"Failed to get field {self.name}: {e!s}")
+            raise ValueError(f"Error accessing field {self.name}: {e}") from e
+
+    async def _get_field_value(self, instance: "BaseModel") -> Any:
+        """Get field value from instance without circular calls.
+
+        Args:
+            instance: Model instance
+
+        Returns:
+            Field value
+
+        Raises:
+            ValueError: If field access fails
+        """
+        # Use BaseModel's internal field access mechanism
+        # This delegates to the model's __getattr__ implementation
+        # but ensures we don't create circular calls
+        return await instance._get_field_value_internal(self.name)
 
     async def __set__(self, instance: "BaseModel", value: Any) -> None:
         """Async setter for field value.
@@ -188,27 +229,60 @@ class AsyncFieldDescriptor:
             value: Value to set
 
         Raises:
+            AttributeError: If field not properly configured
             ValueError: If value is invalid
             TypeError: If value has wrong type
         """
         if not instance:
-            return
+            raise ValueError("Cannot set field on None instance")
+
+        if not self.name:
+            raise AttributeError("Field name not set")
 
         try:
-            if not self.name:
-                raise AttributeError("Field name not set")
-
-            # Validate value
+            # Validate value using field's validation
             await self.field.validate(value)
 
-            # Update cache
-            cache = object.__getattribute__(instance, "_cache")
-            if isinstance(cache, dict):
-                cache[self.name] = value
+            # Update cache with validated value
+            instance._set_cache(self.name, value)
+
+            # Mark field as modified for change tracking
+            if hasattr(instance, '_mark_field_modified'):
+                instance._mark_field_modified(self.name)
+
+        except (AttributeError, ValueError, TypeError):
+            # Re-raise validation and configuration errors as-is
+            raise
+        except Exception as e:
+            logger.error(f"Failed to set field {self.name}: {e!s}")
+            raise ValueError(f"Error setting field {self.name}: {e}") from e
+
+    def __delete__(self, instance: "BaseModel") -> None:
+        """Delete field value (clear from cache).
+
+        Args:
+            instance: Model instance
+
+        Raises:
+            AttributeError: If field not properly configured
+        """
+        if not instance:
+            raise ValueError("Cannot delete field from None instance")
+
+        if not self.name:
+            raise AttributeError("Field name not set")
+
+        try:
+            # Clear from cache
+            instance._clear_cache(self.name)
+
+            # Mark field as modified for change tracking
+            if hasattr(instance, '_mark_field_modified'):
+                instance._mark_field_modified(self.name)
 
         except Exception as e:
-            logger.error(f"Failed to set field {self.name}: {str(e)}")
-            raise
+            logger.error(f"Failed to delete field {self.name}: {e!s}")
+            raise AttributeError(f"Error deleting field {self.name}: {e}") from e
 
 
 class FieldsDescriptor:
@@ -220,9 +294,7 @@ class FieldsDescriptor:
     - Field access
     """
 
-    def __get__(
-        self, instance: Optional["BaseModel"], owner: Type["BaseModel"]
-    ) -> Dict[str, BaseField[Any]]:
+    def __get__(self, instance: Optional["BaseModel"], owner: type["BaseModel"]) -> dict[str, BaseField[Any]]:
         """Get fields dictionary.
 
         Args:

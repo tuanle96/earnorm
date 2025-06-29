@@ -22,7 +22,7 @@ Examples:
 """
 
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
-from typing import Any, Dict, Final, List, Optional, Union
+from typing import Any, Final
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
@@ -57,8 +57,8 @@ class DecimalField(BaseField[Decimal], FieldComparisonMixin):
 
     max_digits: int
     decimal_places: int
-    min_value: Optional[Decimal]
-    max_value: Optional[Decimal]
+    min_value: Decimal | None
+    max_value: Decimal | None
     rounding: str
     backend_options: dict[str, Any]
 
@@ -67,8 +67,8 @@ class DecimalField(BaseField[Decimal], FieldComparisonMixin):
         *,
         max_digits: int = DEFAULT_MAX_DIGITS,
         decimal_places: int = DEFAULT_DECIMAL_PLACES,
-        min_value: Optional[Union[Decimal, float, str, int]] = None,
-        max_value: Optional[Union[Decimal, float, str, int]] = None,
+        min_value: Decimal | float | str | int | None = None,
+        max_value: Decimal | float | str | int | None = None,
         rounding: str = DEFAULT_ROUNDING,
         **options: Any,
     ) -> None:
@@ -97,16 +97,9 @@ class DecimalField(BaseField[Decimal], FieldComparisonMixin):
         if min_value is not None or max_value is not None:
             field_validators.append(
                 RangeValidator(
-                    min_value=(
-                        Decimal(str(min_value)) if min_value is not None else None
-                    ),
-                    max_value=(
-                        Decimal(str(max_value)) if max_value is not None else None
-                    ),
-                    message=(
-                        f"Value must be between {min_value or '-∞'} "
-                        f"and {max_value or '∞'}"
-                    ),
+                    min_value=(Decimal(str(min_value)) if min_value is not None else None),
+                    max_value=(Decimal(str(max_value)) if max_value is not None else None),
+                    message=(f"Value must be between {min_value or '-∞'} " f"and {max_value or '∞'}"),
                 )
             )
 
@@ -125,9 +118,7 @@ class DecimalField(BaseField[Decimal], FieldComparisonMixin):
             "mysql": {"type": f"DECIMAL({max_digits}, {decimal_places})"},
         }
 
-    async def validate(
-        self, value: Any, context: Optional[Dict[str, Any]] = None
-    ) -> Any:
+    async def validate(self, value: Any, context: dict[str, Any] | None = None) -> Any:
         """Validate decimal value.
 
         This method validates:
@@ -179,27 +170,21 @@ class DecimalField(BaseField[Decimal], FieldComparisonMixin):
 
             if digits > self.max_digits:
                 raise FieldValidationError(
-                    message=(
-                        f"Value has {digits} digits, but only {self.max_digits} "
-                        "are allowed"
-                    ),
+                    message=(f"Value has {digits} digits, but only {self.max_digits} " "are allowed"),
                     field_name=self.name,
                     code="max_digits_exceeded",
                 )
 
             if decimals > self.decimal_places:
                 raise FieldValidationError(
-                    message=(
-                        f"Value has {decimals} decimal places, but only "
-                        f"{self.decimal_places} are allowed"
-                    ),
+                    message=(f"Value has {decimals} decimal places, but only " f"{self.decimal_places} are allowed"),
                     field_name=self.name,
                     code="decimal_places_exceeded",
                 )
 
         return value
 
-    async def convert(self, value: Any) -> Optional[Decimal]:
+    async def convert(self, value: Any) -> Decimal | None:
         """Convert value to decimal.
 
         Handles:
@@ -230,7 +215,7 @@ class DecimalField(BaseField[Decimal], FieldComparisonMixin):
                 raise TypeError(f"Cannot convert {type(value).__name__} to decimal")
         except (TypeError, ValueError, InvalidOperation) as e:
             raise FieldValidationError(
-                message=f"Cannot convert {value} to decimal: {str(e)}",
+                message=f"Cannot convert {value} to decimal: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
@@ -267,7 +252,7 @@ class DecimalField(BaseField[Decimal], FieldComparisonMixin):
         except (TypeError, ValueError, InvalidOperation):
             return None
 
-    def less_than(self, value: Union[Decimal, float, str, int]) -> ComparisonOperator:
+    def less_than(self, value: Decimal | float | str | int) -> ComparisonOperator:
         """Check if value is less than other value.
 
         Args:
@@ -278,9 +263,7 @@ class DecimalField(BaseField[Decimal], FieldComparisonMixin):
         """
         return ComparisonOperator(self.name, "lt", self._prepare_value(value))
 
-    def less_than_or_equal(
-        self, value: Union[Decimal, float, str, int]
-    ) -> ComparisonOperator:
+    def less_than_or_equal(self, value: Decimal | float | str | int) -> ComparisonOperator:
         """Check if value is less than or equal to other value.
 
         Args:
@@ -291,9 +274,7 @@ class DecimalField(BaseField[Decimal], FieldComparisonMixin):
         """
         return ComparisonOperator(self.name, "lte", self._prepare_value(value))
 
-    def greater_than(
-        self, value: Union[Decimal, float, str, int]
-    ) -> ComparisonOperator:
+    def greater_than(self, value: Decimal | float | str | int) -> ComparisonOperator:
         """Check if value is greater than other value.
 
         Args:
@@ -304,9 +285,7 @@ class DecimalField(BaseField[Decimal], FieldComparisonMixin):
         """
         return ComparisonOperator(self.name, "gt", self._prepare_value(value))
 
-    def greater_than_or_equal(
-        self, value: Union[Decimal, float, str, int]
-    ) -> ComparisonOperator:
+    def greater_than_or_equal(self, value: Decimal | float | str | int) -> ComparisonOperator:
         """Check if value is greater than or equal to other value.
 
         Args:
@@ -319,8 +298,8 @@ class DecimalField(BaseField[Decimal], FieldComparisonMixin):
 
     def between(
         self,
-        min_value: Union[Decimal, float, str, int],
-        max_value: Union[Decimal, float, str, int],
+        min_value: Decimal | float | str | int,
+        max_value: Decimal | float | str | int,
     ) -> ComparisonOperator:
         """Check if value is between min and max values.
 
@@ -339,8 +318,8 @@ class DecimalField(BaseField[Decimal], FieldComparisonMixin):
 
     def in_range(
         self,
-        min_value: Union[Decimal, float, str, int],
-        max_value: Union[Decimal, float, str, int],
+        min_value: Decimal | float | str | int,
+        max_value: Decimal | float | str | int,
     ) -> ComparisonOperator:
         """Alias for between().
 
@@ -353,9 +332,7 @@ class DecimalField(BaseField[Decimal], FieldComparisonMixin):
         """
         return self.between(min_value, max_value)
 
-    def in_list(
-        self, values: List[Union[Decimal, float, str, int]]
-    ) -> ComparisonOperator:
+    def in_list(self, values: list[Decimal | float | str | int]) -> ComparisonOperator:
         """Check if value is in list of values.
 
         Args:
@@ -367,9 +344,7 @@ class DecimalField(BaseField[Decimal], FieldComparisonMixin):
         prepared_values = [self._prepare_value(value) for value in values]
         return ComparisonOperator(self.name, "in", prepared_values)
 
-    def not_in_list(
-        self, values: List[Union[Decimal, float, str, int]]
-    ) -> ComparisonOperator:
+    def not_in_list(self, values: list[Decimal | float | str | int]) -> ComparisonOperator:
         """Check if value is not in list of values.
 
         Args:
@@ -413,7 +388,7 @@ class DecimalField(BaseField[Decimal], FieldComparisonMixin):
         """
         return ComparisonOperator(self.name, "is_zero", None)
 
-    async def to_db(self, value: Optional[Decimal], backend: str) -> DatabaseValue:
+    async def to_db(self, value: Decimal | None, backend: str) -> DatabaseValue:
         """Convert decimal to database format.
 
         Args:
@@ -435,7 +410,7 @@ class DecimalField(BaseField[Decimal], FieldComparisonMixin):
 
         return str(value)  # Convert to string for database storage
 
-    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[Decimal]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> Decimal | None:
         """Convert database value to decimal.
 
         Args:
@@ -460,7 +435,7 @@ class DecimalField(BaseField[Decimal], FieldComparisonMixin):
                 raise TypeError(f"Cannot convert {type(value).__name__} to decimal")
         except (TypeError, ValueError, InvalidOperation) as e:
             raise FieldValidationError(
-                message=f"Cannot convert database value to decimal: {str(e)}",
+                message=f"Cannot convert database value to decimal: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e

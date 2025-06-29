@@ -1,6 +1,6 @@
 # Database Configuration
 database_backend: mongodb
-database_uri: mongodb://localhost:27017/earnbase?retryWrites=true&retryReads=true
+database_uri: mongodb://localhost:27018/earnbase?retryWrites=true&retryReads=true
 database_name: earnbase
 database_username: # optional
 database_password: # optional

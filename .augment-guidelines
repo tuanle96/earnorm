@@ -1,0 +1,253 @@
+# EarnORM Project Development Guidelines
+
+## 🏗️ **PROJECT ARCHITECTURE AWARENESS RULES**
+
+### **Rule 1: EarnORM Project Structure Understanding**
+**CRITICAL**: Always understand EarnORM's specific async-first ORM architecture:
+
+1. **Repository Strategy**: Single repository with modular package structure
+   - **Primary Repository**: `/Users/tuan/Develop/personal/earnorm` - Main EarnORM development
+   - **Package Structure**: Modular async-first ORM with dependency injection
+   - **No Submodules**: Self-contained project with Poetry dependency management
+
+2. **Directory Organization**:
+   - **Source Directory**: `earnorm/` - Core ORM implementation
+   - **Examples Directory**: `examples/` - Usage examples and demos
+   - **Documentation**: README files in each module + root documentation
+   - **Configuration**: `pyproject.toml`, `setup.cfg` for build and quality tools
+
+### **Rule 2: Implementation Location Verification**
+**BEFORE ANY WORK**:
+```bash
+# ALWAYS verify location and structure first
+pwd  # Should be /Users/tuan/Develop/personal/earnorm
+ls -la  # Should show earnorm/, examples/, pyproject.toml, etc.
+poetry check  # Verify Poetry configuration
+```
+
+**CORRECT Paths**:
+- ✅ `earnorm/` - Core ORM implementation (base/, fields/, database/, etc.)
+- ✅ `examples/` - Usage examples and integration demos
+- ✅ `tests/` - Test suite (CRITICAL: Currently missing, needs implementation)
+- ❌ Any work outside the earnorm package structure
+- ❌ Direct modification of generated files (poetry.lock without poetry commands)
+
+## 📋 **EARNORM-SPECIFIC DEVELOPMENT WORKFLOW**
+
+### **Rule 3: Pre-Development Analysis**
+**MANDATORY steps before any EarnORM development**:
+
+1. **Read EarnORM documentation** (in order of importance):
+   - `codebase.md` - Project structure and architecture overview (TO BE CREATED)
+   - `implement.md` - Current implementation status and plans (TO BE CREATED)
+   - `README.md` - Project overview and features
+   - `earnorm/README.md` - Core architecture details
+   - `todo.md` - Planned features and current limitations
+   - `CONTRIBUTING.md` - Development workflow and standards
+   - Module-specific README files (base/, fields/, database/, etc.)
+
+2. **Understand current state**:
+   - Review async/await patterns throughout codebase
+   - Check MongoDB adapter implementation status
+   - Identify dependency injection container usage
+   - Verify type safety and validation patterns
+
+3. **Verify scope alignment**:
+   - Confirm work matches async-first ORM principles
+   - Check compatibility with MongoDB primary, PostgreSQL/MySQL planned
+   - Validate alignment with type-safe, validation-first approach
+
+### **Rule 4: EarnORM Development Approach**
+**STRUCTURED development process for ORM framework**:
+
+1. **Follow modular architecture**:
+   - `earnorm/base/` - Core model system, database abstraction, environment
+   - `earnorm/fields/` - Field types, validation, relationships
+   - `earnorm/database/` - Database adapters, query building, transactions
+   - `earnorm/di/` - Dependency injection container and lifecycle
+   - `earnorm/config/` - Configuration management (YAML, env vars)
+   - `earnorm/pool/` - Connection pooling with circuit breaker patterns
+
+2. **Each implementation must include**:
+   - **Async/Await Support**: All database operations must be async
+   - **Type Safety**: Full type hints with runtime validation
+   - **Error Handling**: Proper exception hierarchy usage
+   - **Documentation**: Comprehensive docstrings with examples
+   - **Validation**: Input validation using field system
+   - **Testing**: Unit and integration tests (CRITICAL: Currently missing)
+
+3. **Supporting documentation**:
+   - Update module README files for architectural changes
+   - Add examples in `examples/` for new features
+   - Update main README.md for user-facing changes
+
+### **Rule 5: Code Quality and Review Standards**
+**QUALITY assurance for EarnORM**:
+
+1. **Code quality checklist**:
+   - [ ] Follows async/await patterns consistently
+   - [ ] Uses proper type hints (Python 3.12+ features)
+   - [ ] Implements proper error handling with EarnORM exceptions
+   - [ ] Includes comprehensive docstrings with examples
+   - [ ] Follows dependency injection patterns
+   - [ ] Maintains backward compatibility
+
+2. **Technical review requirements**:
+   - Type safety validation with mypy
+   - Code formatting with Black (120 char limit)
+   - Import organization with isort
+   - Linting with pylint and ruff
+   - Performance impact assessment for ORM operations
+
+## 🔄 **EARNORM DOCUMENTATION MANAGEMENT**
+
+### **Rule 6: Documentation Organization**
+**SYSTEMATIC documentation for ORM framework**:
+
+1. **Master Documentation**: `README.md` - Project overview, features, examples
+2. **Architecture Documentation**: `codebase.md` - Detailed project structure (TO BE CREATED)
+3. **Implementation Documentation**: `implement.md` - Current status and plans (TO BE CREATED)
+4. **Module Documentation**: Each module has README.md with architecture details
+5. **API Documentation**: Comprehensive docstrings in all public APIs
+6. **Usage Examples**: `examples/` directory with working demonstrations
+7. **Development Guide**: `CONTRIBUTING.md` - Development workflow and standards
+
+### **Rule 7: Documentation Lifecycle**
+**CONTINUOUS documentation maintenance for ORM**:
+
+1. **Before development**: Review existing module documentation
+2. **During development**: Update docstrings and examples as you code
+3. **After completion**: Update README files and add usage examples
+4. **API changes**: Update all affected documentation immediately
+5. **New features**: Add examples in `examples/` directory
+6. **Architecture changes**: Update `codebase.md` with new structure details
+7. **Implementation progress**: Update `implement.md` with current status and next steps
+
+## 🚨 **EARNORM SAFETY AND VERIFICATION RULES**
+
+### **Rule 8: Development Environment Safety**
+**BEFORE executing any command**:
+
+```bash
+# ALWAYS verify EarnORM environment
+pwd  # Should be in earnorm project root
+poetry env info  # Verify virtual environment
+poetry check  # Verify configuration
+python -c "import earnorm; print('EarnORM import successful')"  # Test import
+```
+
+### **Rule 9: EarnORM Architecture Compliance**
+**RESPECT async-first ORM principles**:
+
+1. **Current Phase**: Alpha development with core features
+   - Focus: MongoDB support, async operations, type safety
+   - Constraints: No breaking API changes, maintain async patterns
+   - Technology: Python 3.12+, Motor, Pydantic, dependency-injector
+
+2. **Planned Features**: PostgreSQL/MySQL support, migration system, admin interface
+   - **DO NOT** implement planned features without proper planning and testing
+
+### **Rule 10: EarnORM Quality Gates**
+**Each implementation must meet**:
+
+1. **Architecture compliance**: Follows async-first, type-safe patterns
+2. **Performance compliance**: Non-blocking operations, efficient connection pooling
+3. **Type safety compliance**: Full type hints, runtime validation
+4. **Documentation compliance**: Comprehensive docstrings and examples
+5. **Testing compliance**: Unit and integration tests (CRITICAL PRIORITY)
+6. **Async compliance**: All database operations use async/await
+7. **Error handling compliance**: Uses EarnORM exception hierarchy
+
+## 📊 **EARNORM SUCCESS CRITERIA AND MONITORING**
+
+### **Rule 11: Implementation Validation**
+**MEASURABLE success criteria for ORM development**:
+
+1. **Functionality metrics**:
+   - All CRUD operations work asynchronously
+   - Type validation works at runtime
+   - Connection pooling operates efficiently
+   - Error handling provides clear feedback
+
+2. **Performance metrics**:
+   - Database operations complete within acceptable timeframes
+   - Memory usage remains stable during long-running operations
+   - Connection pool maintains healthy connections
+   - No memory leaks in async operations
+
+3. **Quality metrics**:
+   - Test coverage >90% (CRITICAL: Currently 0%, needs immediate attention)
+   - Type checking passes with mypy
+   - All linting checks pass
+   - Documentation completeness verified
+
+## 🧪 **EARNORM TESTING AND QUALITY ASSURANCE**
+
+### **Rule 12: Comprehensive Testing Strategy**
+**TESTING requirements for ORM framework** (CRITICAL PRIORITY):
+
+1. **Test Coverage Requirements**:
+   - **Unit Tests**: All model operations, field validation, type conversion
+   - **Integration Tests**: Database adapter operations, connection pooling
+   - **Performance Tests**: Async operation timing, connection pool efficiency
+   - **Error Handling Tests**: Exception scenarios, validation failures
+
+2. **Quality Thresholds**:
+   - **Test Pass Rate**: 100% for ORM core functionality
+   - **Performance Targets**: <10ms for simple queries, <100ms for complex
+   - **Memory Management**: No leaks in long-running async operations
+   - **Type Safety**: All operations properly typed and validated
+
+3. **Testing Infrastructure**:
+   - **Test Environment**: MongoDB test instance, isolated test database
+   - **Test Data Management**: Automated setup/cleanup for each test
+   - **Async Testing**: Proper async test patterns with pytest-asyncio
+   - **Mock Testing**: Database adapter mocking for unit tests
+
+### **Rule 13: EarnORM Performance Excellence**
+**PERFORMANCE requirements for ORM operations**:
+
+1. **Response Time Targets**:
+   - **Simple CRUD**: <10ms for basic create/read/update/delete
+   - **Complex Queries**: <100ms for searches with multiple conditions
+   - **Connection Setup**: <50ms for new database connections
+   - **Validation**: <1ms for field validation operations
+
+2. **Scalability Requirements**:
+   - **Concurrent Operations**: Support 100+ concurrent async operations
+   - **Connection Pool**: Efficient management of 5-20 connections
+   - **Memory Usage**: Stable memory usage under sustained load
+
+## 📋 **EARNORM QUICK REFERENCE CHECKLIST**
+
+### **Before Any Development**:
+- [ ] Verify location in earnorm project root
+- [ ] Review `codebase.md` for project structure (create if missing)
+- [ ] Review `implement.md` for current status (create if missing)
+- [ ] Review relevant module documentation
+- [ ] Understand async/await patterns in existing code
+- [ ] Check current MongoDB adapter implementation
+- [ ] Review dependency injection container usage
+
+### **During Development**:
+- [ ] Follow async-first patterns consistently
+- [ ] Use proper type hints and validation
+- [ ] Implement comprehensive error handling
+- [ ] Write tests for all new functionality (CRITICAL)
+- [ ] Update documentation and examples
+
+### **After Development**:
+- [ ] Run full test suite (when implemented)
+- [ ] Verify type checking with mypy
+- [ ] Run linting and formatting checks
+- [ ] Update module README if architecture changed
+- [ ] Add usage examples for new features
+- [ ] Validate performance meets targets
+
+---
+
+**Project**: EarnORM - Async-first ORM Framework
+**Version**: 0.1.4 (Alpha)
+**Technology Stack**: Python 3.12+, MongoDB (Motor), Pydantic, dependency-injector
+**Critical Priority**: Implement comprehensive test suite (currently missing)
+**Architecture**: Modular, async-first, type-safe ORM with dependency injection

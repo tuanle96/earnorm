@@ -383,8 +383,8 @@ async def test_bulk_operations():
 
         # Bulk DELETE
         logger.info("Deleting multiple users...")
-        await users.unlink()
-        logger.info("Deleted %d users", len(users))
+        deleted_count = await users.unlink()
+        logger.info("Deleted %d users", deleted_count)
 
     except Exception as e:
         logger.error("Error in bulk operations: %s", str(e))
@@ -470,16 +470,16 @@ async def main():
         # Initialize EarnORM
         logger.info("Initializing ORM...")
         await earnorm.init(
-            config_path="examples/simple/config.yaml",
+            config_path="config.yaml",
             cleanup_handlers=True,
             debug=True,
         )
         logger.info("ORM initialized successfully")
 
         # Run tests
-        # await test_single_operations()
-        # await test_bulk_operations()
-        # await test_search_operations()
+        await test_single_operations()
+        await test_bulk_operations()
+        await test_search_operations()
         await test_relationship_operations()
 
     except Exception as e:

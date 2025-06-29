@@ -7,7 +7,8 @@ This module provides validators for composite fields, including:
 - Dict schema validation
 """
 
-from typing import Any, Dict, Optional, Sequence, TypeVar, Union
+from collections.abc import Sequence
+from typing import Any, TypeVar
 
 from earnorm.types import ValidatorFunc
 from earnorm.validators.base import BaseValidator, ValidationError
@@ -32,9 +33,9 @@ class ListLengthValidator(BaseValidator):
 
     def __init__(
         self,
-        min_length: Optional[int] = None,
-        max_length: Optional[int] = None,
-        message: Optional[str] = None,
+        min_length: int | None = None,
+        max_length: int | None = None,
+        message: str | None = None,
     ) -> None:
         """Initialize validator.
 
@@ -47,7 +48,7 @@ class ListLengthValidator(BaseValidator):
         self.min_length = min_length
         self.max_length = max_length
 
-    def __call__(self, value: Union[Sequence[T], Any]) -> None:
+    def __call__(self, value: Sequence[T] | Any) -> None:
         """Validate list length.
 
         Args:
@@ -60,13 +61,9 @@ class ListLengthValidator(BaseValidator):
             raise ValidationError("Value must be a list or tuple")
 
         if self.min_length is not None and len(value) < self.min_length:
-            raise ValidationError(
-                self.message or f"List length must be at least {self.min_length}"
-            )
+            raise ValidationError(self.message or f"List length must be at least {self.min_length}")
         if self.max_length is not None and len(value) > self.max_length:
-            raise ValidationError(
-                self.message or f"List length must be at most {self.max_length}"
-            )
+            raise ValidationError(self.message or f"List length must be at most {self.max_length}")
 
 
 class ListItemValidator(BaseValidator):
@@ -86,7 +83,7 @@ class ListItemValidator(BaseValidator):
     def __init__(
         self,
         item_validator: ValidatorFunc,
-        message: Optional[str] = None,
+        message: str | None = None,
     ) -> None:
         """Initialize validator.
 
@@ -97,7 +94,7 @@ class ListItemValidator(BaseValidator):
         super().__init__(message)
         self.item_validator = item_validator
 
-    def __call__(self, value: Union[Sequence[Any], Any]) -> None:
+    def __call__(self, value: Sequence[Any] | Any) -> None:
         """Validate list items.
 
         Args:
@@ -113,9 +110,7 @@ class ListItemValidator(BaseValidator):
             try:
                 self.item_validator(item)
             except ValidationError as e:
-                raise ValidationError(
-                    self.message or f"Invalid item at index {i}: {e.message}"
-                )
+                raise ValidationError(self.message or f"Invalid item at index {i}: {e.message}")
 
 
 class DictSchemaValidator(BaseValidator):
@@ -138,8 +133,8 @@ class DictSchemaValidator(BaseValidator):
 
     def __init__(
         self,
-        schema: Dict[str, ValidatorFunc],
-        message: Optional[str] = None,
+        schema: dict[str, ValidatorFunc],
+        message: str | None = None,
     ) -> None:
         """Initialize validator.
 
@@ -164,21 +159,17 @@ class DictSchemaValidator(BaseValidator):
 
         for field, validator in self.schema.items():
             if field not in value:
-                raise ValidationError(
-                    self.message or f"Missing required field: {field}"
-                )
+                raise ValidationError(self.message or f"Missing required field: {field}")
             try:
                 validator(value[field])  # type: ignore
             except ValidationError as e:
-                raise ValidationError(
-                    self.message or f"Invalid value for field {field}: {e.message}"
-                )
+                raise ValidationError(self.message or f"Invalid value for field {field}: {e.message}")
 
 
 def validate_list_length(
-    min_length: Optional[int] = None,
-    max_length: Optional[int] = None,
-    message: Optional[str] = None,
+    min_length: int | None = None,
+    max_length: int | None = None,
+    message: str | None = None,
 ) -> ValidatorFunc:
     """Create list length validator.
 
@@ -206,7 +197,7 @@ def validate_list_length(
 
 def validate_list_items(
     item_validator: ValidatorFunc,
-    message: Optional[str] = None,
+    message: str | None = None,
 ) -> ValidatorFunc:
     """Create list item validator.
 
@@ -231,8 +222,8 @@ def validate_list_items(
 
 
 def validate_dict_schema(
-    schema: Dict[str, ValidatorFunc],
-    message: Optional[str] = None,
+    schema: dict[str, ValidatorFunc],
+    message: str | None = None,
 ) -> ValidatorFunc:
     """Create dict schema validator.
 

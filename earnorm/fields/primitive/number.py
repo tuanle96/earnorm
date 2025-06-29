@@ -17,7 +17,7 @@ Examples:
 """
 
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, Final, Generic, Optional, TypeVar, Union
+from typing import Any, Final, Generic, TypeVar
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
@@ -28,13 +28,13 @@ from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldCompari
 N = TypeVar("N", int, float, Decimal)  # Numeric type
 
 # Constants
-DEFAULT_MIN_VALUE: Final[Optional[Union[int, float, Decimal]]] = None
-DEFAULT_MAX_VALUE: Final[Optional[Union[int, float, Decimal]]] = None
-DEFAULT_STEP: Final[Optional[Union[int, float, Decimal]]] = None
-DEFAULT_UNIT: Final[Optional[str]] = None
-DEFAULT_PRECISION: Final[Optional[int]] = None
-DEFAULT_MAX_DIGITS: Final[Optional[int]] = None
-DEFAULT_DECIMAL_PLACES: Final[Optional[int]] = None
+DEFAULT_MIN_VALUE: Final[int | float | Decimal | None] = None
+DEFAULT_MAX_VALUE: Final[int | float | Decimal | None] = None
+DEFAULT_STEP: Final[int | float | Decimal | None] = None
+DEFAULT_UNIT: Final[str | None] = None
+DEFAULT_PRECISION: Final[int | None] = None
+DEFAULT_MAX_DIGITS: Final[int | None] = None
+DEFAULT_DECIMAL_PLACES: Final[int | None] = None
 
 
 class NumberField(Generic[N], BaseField[N], FieldComparisonMixin):
@@ -56,19 +56,19 @@ class NumberField(Generic[N], BaseField[N], FieldComparisonMixin):
         backend_options: Database backend options
     """
 
-    min_value: Optional[N]
-    max_value: Optional[N]
-    step: Optional[N]
-    unit: Optional[str]
+    min_value: N | None
+    max_value: N | None
+    step: N | None
+    unit: str | None
     backend_options: dict[str, Any]
 
     def __init__(
         self,
         *,
-        min_value: Optional[N] = None,
-        max_value: Optional[N] = None,
-        step: Optional[N] = None,
-        unit: Optional[str] = None,
+        min_value: N | None = None,
+        max_value: N | None = None,
+        step: N | None = None,
+        unit: str | None = None,
         **options: Any,
     ) -> None:
         """Initialize number field.
@@ -90,16 +90,11 @@ class NumberField(Generic[N], BaseField[N], FieldComparisonMixin):
                 RangeValidator(
                     min_value=min_value,
                     max_value=max_value,
-                    message=(
-                        f"Value must be between {min_value or '-∞'} "
-                        f"and {max_value or '∞'}"
-                    ),
+                    message=(f"Value must be between {min_value or '-∞'} " f"and {max_value or '∞'}"),
                 )
             )
 
-        options_without_validators = {
-            k: v for k, v in options.items() if k != "validators"
-        }
+        options_without_validators = {k: v for k, v in options.items() if k != "validators"}
         super().__init__(validators=field_validators, **options_without_validators)
 
         self.min_value = min_value
@@ -190,9 +185,7 @@ class NumberField(Generic[N], BaseField[N], FieldComparisonMixin):
         """
         return ComparisonOperator(self.name, "is_zero", None)
 
-    async def validate(
-        self, value: Any, context: Optional[Dict[str, Any]] = None
-    ) -> Any:
+    async def validate(self, value: Any, context: dict[str, Any] | None = None) -> Any:
         """Validate numeric value.
 
         This method validates:
@@ -264,10 +257,10 @@ class IntegerField(NumberField[int]):
     def __init__(
         self,
         *,
-        min_value: Optional[int] = DEFAULT_MIN_VALUE,  # type: ignore
-        max_value: Optional[int] = DEFAULT_MAX_VALUE,  # type: ignore
-        step: Optional[int] = DEFAULT_STEP,  # type: ignore
-        unit: Optional[str] = DEFAULT_UNIT,
+        min_value: int | None = DEFAULT_MIN_VALUE,  # type: ignore
+        max_value: int | None = DEFAULT_MAX_VALUE,  # type: ignore
+        step: int | None = DEFAULT_STEP,  # type: ignore
+        unit: str | None = DEFAULT_UNIT,
         **options: Any,
     ) -> None:
         """Initialize integer field.
@@ -283,9 +276,7 @@ class IntegerField(NumberField[int]):
             FieldValidationError: If validation fails
         """
         field_validators: list[Validator[Any]] = [TypeValidator(int)]
-        options_without_validators = {
-            k: v for k, v in options.items() if k != "validators"
-        }
+        options_without_validators = {k: v for k, v in options.items() if k != "validators"}
         super().__init__(
             min_value=min_value,
             max_value=max_value,
@@ -328,7 +319,7 @@ class IntegerField(NumberField[int]):
     #         instance.env.get_field_value(instance._name, instance.id, self.name)
     #     )
 
-    async def convert(self, value: Any) -> Optional[int]:
+    async def convert(self, value: Any) -> int | None:
         """_Convert value to integer.
 
         Handles:
@@ -359,12 +350,12 @@ class IntegerField(NumberField[int]):
             return int(value)
         except (TypeError, ValueError) as e:
             raise FieldValidationError(
-                message=f"Cannot convert {type(value).__name__} to integer: {str(e)}",
+                message=f"Cannot convert {type(value).__name__} to integer: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
 
-    async def to_db(self, value: Optional[int], backend: str) -> DatabaseValue:
+    async def to_db(self, value: int | None, backend: str) -> DatabaseValue:
         """Convert integer to database format.
 
         Args:
@@ -376,7 +367,7 @@ class IntegerField(NumberField[int]):
         """
         return value
 
-    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[int]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> int | None:
         """Convert database value to integer.
 
         Args:
@@ -400,7 +391,7 @@ class IntegerField(NumberField[int]):
             return int(float(str(value)))
         except (TypeError, ValueError) as e:
             raise FieldValidationError(
-                message=f"Cannot convert database value to integer: {str(e)}",
+                message=f"Cannot convert database value to integer: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
@@ -420,11 +411,11 @@ class FloatField(NumberField[float]):
     def __init__(
         self,
         *,
-        min_value: Optional[float] = DEFAULT_MIN_VALUE,  # type: ignore
-        max_value: Optional[float] = DEFAULT_MAX_VALUE,  # type: ignore
-        step: Optional[float] = DEFAULT_STEP,  # type: ignore
-        precision: Optional[int] = DEFAULT_PRECISION,
-        unit: Optional[str] = DEFAULT_UNIT,
+        min_value: float | None = DEFAULT_MIN_VALUE,  # type: ignore
+        max_value: float | None = DEFAULT_MAX_VALUE,  # type: ignore
+        step: float | None = DEFAULT_STEP,  # type: ignore
+        precision: int | None = DEFAULT_PRECISION,
+        unit: str | None = DEFAULT_UNIT,
         **options: Any,
     ) -> None:
         """Initialize float field.
@@ -441,9 +432,7 @@ class FloatField(NumberField[float]):
             FieldValidationError: If validation fails
         """
         field_validators: list[Validator[Any]] = [TypeValidator(float)]
-        options_without_validators = {
-            k: v for k, v in options.items() if k != "validators"
-        }
+        options_without_validators = {k: v for k, v in options.items() if k != "validators"}
         super().__init__(
             min_value=min_value,
             max_value=max_value,
@@ -462,7 +451,7 @@ class FloatField(NumberField[float]):
             "mysql": {"type": "DOUBLE"},
         }
 
-    async def convert(self, value: Any) -> Optional[float]:
+    async def convert(self, value: Any) -> float | None:
         """Convert value to float.
 
         Handles:
@@ -497,12 +486,12 @@ class FloatField(NumberField[float]):
             return value
         except (TypeError, ValueError, InvalidOperation) as e:
             raise FieldValidationError(
-                message=f"Cannot convert {type(value).__name__} to float: {str(e)}",
+                message=f"Cannot convert {type(value).__name__} to float: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
 
-    async def to_db(self, value: Optional[float], backend: str) -> DatabaseValue:
+    async def to_db(self, value: float | None, backend: str) -> DatabaseValue:
         """Convert float to database format.
 
         Args:
@@ -520,7 +509,7 @@ class FloatField(NumberField[float]):
 
         return value
 
-    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[float]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> float | None:
         """Convert database value to float.
 
         Args:
@@ -547,7 +536,7 @@ class FloatField(NumberField[float]):
             return value
         except (TypeError, ValueError) as e:
             raise FieldValidationError(
-                message=f"Cannot convert database value to float: {str(e)}",
+                message=f"Cannot convert database value to float: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
@@ -567,12 +556,12 @@ class DecimalField(NumberField[Decimal]):
     def __init__(
         self,
         *,
-        min_value: Optional[Union[Decimal, int, float, str]] = DEFAULT_MIN_VALUE,
-        max_value: Optional[Union[Decimal, int, float, str]] = DEFAULT_MAX_VALUE,
-        step: Optional[Union[Decimal, int, float, str]] = DEFAULT_STEP,
-        max_digits: Optional[int] = DEFAULT_MAX_DIGITS,
-        decimal_places: Optional[int] = DEFAULT_DECIMAL_PLACES,
-        unit: Optional[str] = DEFAULT_UNIT,
+        min_value: Decimal | int | float | str | None = DEFAULT_MIN_VALUE,
+        max_value: Decimal | int | float | str | None = DEFAULT_MAX_VALUE,
+        step: Decimal | int | float | str | None = DEFAULT_STEP,
+        max_digits: int | None = DEFAULT_MAX_DIGITS,
+        decimal_places: int | None = DEFAULT_DECIMAL_PLACES,
+        unit: str | None = DEFAULT_UNIT,
         **options: Any,
     ) -> None:
         """Initialize decimal field.
@@ -596,9 +585,7 @@ class DecimalField(NumberField[Decimal]):
         step_dec = Decimal(str(step)) if step is not None else None
 
         field_validators: list[Validator[Any]] = [TypeValidator(Decimal)]
-        options_without_validators = {
-            k: v for k, v in options.items() if k != "validators"
-        }
+        options_without_validators = {k: v for k, v in options.items() if k != "validators"}
         super().__init__(
             min_value=min_value_dec,
             max_value=max_value_dec,
@@ -630,9 +617,7 @@ class DecimalField(NumberField[Decimal]):
             },
         }
 
-    async def validate(
-        self, value: Any, context: Optional[Dict[str, Any]] = None
-    ) -> None:
+    async def validate(self, value: Any, context: dict[str, Any] | None = None) -> None:
         """Validate decimal value.
 
         This method validates:
@@ -674,10 +659,7 @@ class DecimalField(NumberField[Decimal]):
                     total_digits = len(integer_part.lstrip("-")) + len(decimal_part)
                     if total_digits > self.max_digits:
                         raise FieldValidationError(
-                            message=(
-                                f"Value has {total_digits} digits, "
-                                f"but only {self.max_digits} allowed"
-                            ),
+                            message=(f"Value has {total_digits} digits, " f"but only {self.max_digits} allowed"),
                             field_name=self.name,
                             code="max_digits",
                         )
@@ -693,7 +675,7 @@ class DecimalField(NumberField[Decimal]):
                             code="decimal_places",
                         )
 
-    async def convert(self, value: Any) -> Optional[Decimal]:
+    async def convert(self, value: Any) -> Decimal | None:
         """Convert value to decimal.
 
         Handles:
@@ -724,12 +706,12 @@ class DecimalField(NumberField[Decimal]):
             return Decimal(value)
         except (TypeError, ValueError, InvalidOperation) as e:
             raise FieldValidationError(
-                message=f"Cannot convert {type(value).__name__} to decimal: {str(e)}",
+                message=f"Cannot convert {type(value).__name__} to decimal: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
 
-    async def to_db(self, value: Optional[Decimal], backend: str) -> DatabaseValue:
+    async def to_db(self, value: Decimal | None, backend: str) -> DatabaseValue:
         """Convert decimal to database format.
 
         Args:
@@ -750,7 +732,7 @@ class DecimalField(NumberField[Decimal]):
 
         return str(value)
 
-    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[Decimal]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> Decimal | None:
         """Convert database value to decimal.
 
         Args:
@@ -774,13 +756,11 @@ class DecimalField(NumberField[Decimal]):
                 raise TypeError("Cannot convert complex types to decimal")
             decimal_value = Decimal(str(value))
             if self.decimal_places is not None:
-                decimal_value = decimal_value.quantize(
-                    Decimal(f"0.{'0' * self.decimal_places}")
-                )
+                decimal_value = decimal_value.quantize(Decimal(f"0.{'0' * self.decimal_places}"))
             return decimal_value
         except (TypeError, ValueError, InvalidOperation) as e:
             raise FieldValidationError(
-                message=f"Cannot convert database value to decimal: {str(e)}",
+                message=f"Cannot convert database value to decimal: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
@@ -789,7 +769,7 @@ class DecimalField(NumberField[Decimal]):
 class PositiveIntegerField(IntegerField):
     """Field for positive integer values."""
 
-    def __init__(self, *, min_value: Optional[int] = 0, **options: Any) -> None:
+    def __init__(self, *, min_value: int | None = 0, **options: Any) -> None:
         """Initialize positive integer field.
 
         Args:
@@ -805,7 +785,7 @@ class PositiveIntegerField(IntegerField):
 class NegativeIntegerField(IntegerField):
     """Field for negative integer values."""
 
-    def __init__(self, *, max_value: Optional[int] = 0, **options: Any) -> None:
+    def __init__(self, *, max_value: int | None = 0, **options: Any) -> None:
         """Initialize negative integer field.
 
         Args:

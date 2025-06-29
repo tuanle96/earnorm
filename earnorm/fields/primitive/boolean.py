@@ -21,7 +21,7 @@ Examples:
     ...     unverified = User.find(User.has_verified_email.negate())
 """
 
-from typing import Any, Dict, Final, Optional, Set, Union
+from typing import Any, Final
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
@@ -29,8 +29,8 @@ from earnorm.fields.validators.base import TypeValidator, Validator
 from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 
 # Constants
-TRUE_VALUES: Final[Set[str]] = {"true", "1", "yes", "on", "t", "y"}
-FALSE_VALUES: Final[Set[str]] = {"false", "0", "no", "off", "f", "n"}
+TRUE_VALUES: Final[set[str]] = {"true", "1", "yes", "on", "t", "y"}
+FALSE_VALUES: Final[set[str]] = {"false", "0", "no", "off", "f", "n"}
 
 
 class BooleanField(BaseField[bool], FieldComparisonMixin):
@@ -50,15 +50,15 @@ class BooleanField(BaseField[bool], FieldComparisonMixin):
         backend_options: Database backend options
     """
 
-    true_values: Set[str]
-    false_values: Set[str]
+    true_values: set[str]
+    false_values: set[str]
     backend_options: dict[str, Any]
 
     def __init__(
         self,
         *,
-        true_values: Optional[Set[str]] = None,
-        false_values: Optional[Set[str]] = None,
+        true_values: set[str] | None = None,
+        false_values: set[str] | None = None,
         **options: Any,
     ) -> None:
         """Initialize boolean field.
@@ -126,7 +126,7 @@ class BooleanField(BaseField[bool], FieldComparisonMixin):
         """
         return ComparisonOperator(self.name, "equals", False)
 
-    def equals(self, value: Union[bool, int, str]) -> ComparisonOperator:
+    def equals(self, value: bool | int | str) -> ComparisonOperator:
         """Check if value equals another value.
 
         Args:
@@ -152,9 +152,7 @@ class BooleanField(BaseField[bool], FieldComparisonMixin):
         """
         return ComparisonOperator(self.name, "negate", None)
 
-    async def validate(
-        self, value: Any, context: Optional[Dict[str, Any]] = None
-    ) -> Any:
+    async def validate(self, value: Any, context: dict[str, Any] | None = None) -> Any:
         """Validate boolean value.
 
         This method validates:
@@ -187,7 +185,7 @@ class BooleanField(BaseField[bool], FieldComparisonMixin):
 
         return value
 
-    async def convert(self, value: Any) -> Optional[bool]:
+    async def convert(self, value: Any) -> bool | None:
         """Convert value to boolean.
 
         Handles:
@@ -233,7 +231,7 @@ class BooleanField(BaseField[bool], FieldComparisonMixin):
             code="conversion_error",
         )
 
-    async def to_db(self, value: Optional[bool], backend: str) -> DatabaseValue:
+    async def to_db(self, value: bool | None, backend: str) -> DatabaseValue:
         """Convert boolean to database format.
 
         Args:
@@ -245,7 +243,7 @@ class BooleanField(BaseField[bool], FieldComparisonMixin):
         """
         return value
 
-    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[bool]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> bool | None:
         """Convert database value to boolean.
 
         Args:
@@ -265,7 +263,7 @@ class BooleanField(BaseField[bool], FieldComparisonMixin):
             return bool(value)
         except (TypeError, ValueError) as e:
             raise FieldValidationError(
-                message=f"Cannot convert database value to boolean: {str(e)}",
+                message=f"Cannot convert database value to boolean: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e

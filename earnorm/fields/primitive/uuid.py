@@ -21,7 +21,7 @@ Examples:
 """
 
 import uuid
-from typing import Any, Dict, Final, List, Literal, Optional, Union
+from typing import Any, Final, Literal
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
@@ -29,7 +29,7 @@ from earnorm.fields.validators.base import TypeValidator, Validator
 from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldComparisonMixin
 
 # Constants
-DEFAULT_VERSION: Final[Optional[Literal[1, 3, 4, 5]]] = 4
+DEFAULT_VERSION: Final[Literal[1, 3, 4, 5] | None] = 4
 DEFAULT_AUTO_GENERATE: Final[bool] = False
 
 
@@ -49,14 +49,14 @@ class UUIDField(BaseField[uuid.UUID], FieldComparisonMixin):
         backend_options: Database backend options
     """
 
-    version: Optional[Literal[1, 3, 4, 5]]
+    version: Literal[1, 3, 4, 5] | None
     auto_generate: bool
-    backend_options: Dict[str, Any]
+    backend_options: dict[str, Any]
 
     def __init__(
         self,
         *,
-        version: Optional[Literal[1, 3, 4, 5]] = DEFAULT_VERSION,
+        version: Literal[1, 3, 4, 5] | None = DEFAULT_VERSION,
         auto_generate: bool = DEFAULT_AUTO_GENERATE,
         **options: Any,
     ) -> None:
@@ -106,7 +106,7 @@ class UUIDField(BaseField[uuid.UUID], FieldComparisonMixin):
         except (TypeError, ValueError):
             return None
 
-    def in_list(self, values: List[Union[uuid.UUID, str, bytes]]) -> ComparisonOperator:
+    def in_list(self, values: list[uuid.UUID | str | bytes]) -> ComparisonOperator:
         """Check if value is in list of UUIDs.
 
         Args:
@@ -118,9 +118,7 @@ class UUIDField(BaseField[uuid.UUID], FieldComparisonMixin):
         prepared_values = [self._prepare_value(value) for value in values]
         return ComparisonOperator(self.name, "in", prepared_values)
 
-    def not_in_list(
-        self, values: List[Union[uuid.UUID, str, bytes]]
-    ) -> ComparisonOperator:
+    def not_in_list(self, values: list[uuid.UUID | str | bytes]) -> ComparisonOperator:
         """Check if value is not in list of UUIDs.
 
         Args:
@@ -143,7 +141,7 @@ class UUIDField(BaseField[uuid.UUID], FieldComparisonMixin):
         """
         return ComparisonOperator(self.name, "version", version)
 
-    def namespace(self, namespace: Union[uuid.UUID, str]) -> ComparisonOperator:
+    def namespace(self, namespace: uuid.UUID | str) -> ComparisonOperator:
         """Check if UUID was generated with specific namespace (v3/v5 only).
 
         Args:
@@ -152,9 +150,7 @@ class UUIDField(BaseField[uuid.UUID], FieldComparisonMixin):
         Returns:
             ComparisonOperator: Comparison operator with field name and namespace
         """
-        return ComparisonOperator(
-            self.name, "namespace", self._prepare_value(namespace)
-        )
+        return ComparisonOperator(self.name, "namespace", self._prepare_value(namespace))
 
     def node(self, node: bytes) -> ComparisonOperator:
         """Check if UUID was generated on specific node (v1 only).
@@ -178,9 +174,7 @@ class UUIDField(BaseField[uuid.UUID], FieldComparisonMixin):
         """
         return ComparisonOperator(self.name, "time", timestamp)
 
-    async def validate(
-        self, value: Any, context: Optional[Dict[str, Any]] = None
-    ) -> Any:
+    async def validate(self, value: Any, context: dict[str, Any] | None = None) -> Any:
         """Validate UUID value.
 
         This method validates:
@@ -221,7 +215,7 @@ class UUIDField(BaseField[uuid.UUID], FieldComparisonMixin):
 
         return value
 
-    async def convert(self, value: Any) -> Optional[uuid.UUID]:
+    async def convert(self, value: Any) -> uuid.UUID | None:
         """Convert value to UUID.
 
         Handles:
@@ -266,12 +260,12 @@ class UUIDField(BaseField[uuid.UUID], FieldComparisonMixin):
                 raise TypeError(f"Cannot convert {type(value).__name__} to UUID")
         except (TypeError, ValueError) as e:
             raise FieldValidationError(
-                message=f"Cannot convert {type(value).__name__} to UUID: {str(e)}",
+                message=f"Cannot convert {type(value).__name__} to UUID: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
 
-    async def to_db(self, value: Optional[uuid.UUID], backend: str) -> DatabaseValue:
+    async def to_db(self, value: uuid.UUID | None, backend: str) -> DatabaseValue:
         """Convert UUID to database format.
 
         Args:
@@ -287,7 +281,7 @@ class UUIDField(BaseField[uuid.UUID], FieldComparisonMixin):
         # Always convert to string for database storage
         return str(value)
 
-    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[uuid.UUID]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> uuid.UUID | None:
         """Convert database value to UUID.
 
         Args:
@@ -312,7 +306,7 @@ class UUIDField(BaseField[uuid.UUID], FieldComparisonMixin):
                 raise TypeError(f"Cannot convert {type(value).__name__} to UUID")
         except (TypeError, ValueError) as e:
             raise FieldValidationError(
-                message=f"Cannot convert database value to UUID: {str(e)}",
+                message=f"Cannot convert database value to UUID: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e

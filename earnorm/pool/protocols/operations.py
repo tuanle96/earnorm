@@ -11,11 +11,7 @@ from enum import Enum
 from typing import (
     Any,
     AsyncContextManager,
-    Dict,
-    List,
-    Optional,
     Protocol,
-    Set,
     TypeVar,
     Union,
 )
@@ -23,24 +19,24 @@ from typing import (
 from earnorm.exceptions import DatabaseError
 
 __all__ = [
-    "TransactionProtocol",
-    "SessionProtocol",
     "BulkOperationsProtocol",
-    "DatabaseOperationsProtocol",
     "DatabaseError",  # Used in docstrings
-    "MongoOperation",
-    "RedisOperation",
+    "DatabaseOperationsProtocol",
     "MongoDocument",
     "MongoFilter",
-    "MongoUpdate",
+    "MongoOperation",
     "MongoProjection",
     "MongoSort",
-    "RedisKey",
-    "RedisValue",
+    "MongoUpdate",
     "RedisHash",
+    "RedisKey",
     "RedisList",
+    "RedisOperation",
     "RedisSet",
+    "RedisValue",
     "RedisZSet",
+    "SessionProtocol",
+    "TransactionProtocol",
 ]
 
 T = TypeVar("T")
@@ -138,18 +134,18 @@ class RedisOperation(str, Enum):
 
 
 # Type aliases for operation parameters
-MongoDocument = Dict[str, Any]
-MongoFilter = Dict[str, Any]
-MongoUpdate = Dict[str, Any]
-MongoProjection = Dict[str, Union[int, bool]]
-MongoSort = List[tuple[str, int]]
+MongoDocument = dict[str, Any]
+MongoFilter = dict[str, Any]
+MongoUpdate = dict[str, Any]
+MongoProjection = dict[str, int | bool]
+MongoSort = list[tuple[str, int]]
 
 RedisKey = str
 RedisValue = Union[str, int, float, bytes]
-RedisHash = Dict[str, RedisValue]
-RedisList = List[RedisValue]
-RedisSet = Set[RedisValue]
-RedisZSet = Dict[RedisValue, float]
+RedisHash = dict[str, RedisValue]
+RedisList = list[RedisValue]
+RedisSet = set[RedisValue]
+RedisZSet = dict[RedisValue, float]
 
 
 class TransactionProtocol(Protocol):
@@ -208,9 +204,9 @@ class BulkOperationsProtocol(Protocol):
 
     async def bulk_write(
         self,
-        operations: List[Dict[str, Any]],
+        operations: list[dict[str, Any]],
         ordered: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Execute multiple write operations.
 
         Args:
@@ -227,9 +223,9 @@ class BulkOperationsProtocol(Protocol):
 
     async def bulk_read(
         self,
-        operations: List[Dict[str, Any]],
+        operations: list[dict[str, Any]],
         ordered: bool = True,
-    ) -> List[Any]:
+    ) -> list[Any]:
         """Execute multiple read operations.
 
         Args:
@@ -250,8 +246,8 @@ class DatabaseOperationsProtocol(Protocol):
 
     async def insert_one(
         self,
-        document: Dict[str, Any],
-        session: Optional[Any] = None,
+        document: dict[str, Any],
+        session: Any | None = None,
     ) -> str:
         """Insert a single document.
 
@@ -269,10 +265,10 @@ class DatabaseOperationsProtocol(Protocol):
 
     async def insert_many(
         self,
-        documents: List[Dict[str, Any]],
+        documents: list[dict[str, Any]],
         ordered: bool = True,
-        session: Optional[Any] = None,
-    ) -> List[str]:
+        session: Any | None = None,
+    ) -> list[str]:
         """Insert multiple documents.
 
         Args:
@@ -290,10 +286,10 @@ class DatabaseOperationsProtocol(Protocol):
 
     async def find_one(
         self,
-        filter: Dict[str, Any],
-        projection: Optional[Dict[str, Any]] = None,
-        session: Optional[Any] = None,
-    ) -> Optional[Dict[str, Any]]:
+        filter: dict[str, Any],
+        projection: dict[str, Any] | None = None,
+        session: Any | None = None,
+    ) -> dict[str, Any] | None:
         """Find a single document.
 
         Args:
@@ -311,13 +307,13 @@ class DatabaseOperationsProtocol(Protocol):
 
     async def find_many(
         self,
-        filter: Dict[str, Any],
-        projection: Optional[Dict[str, Any]] = None,
-        sort: Optional[List[tuple[str, int]]] = None,
+        filter: dict[str, Any],
+        projection: dict[str, Any] | None = None,
+        sort: list[tuple[str, int]] | None = None,
         skip: int = 0,
-        limit: Optional[int] = None,
-        session: Optional[Any] = None,
-    ) -> List[Dict[str, Any]]:
+        limit: int | None = None,
+        session: Any | None = None,
+    ) -> list[dict[str, Any]]:
         """Find multiple documents.
 
         Args:
@@ -338,11 +334,11 @@ class DatabaseOperationsProtocol(Protocol):
 
     async def update_one(
         self,
-        filter: Dict[str, Any],
-        update: Dict[str, Any],
+        filter: dict[str, Any],
+        update: dict[str, Any],
         upsert: bool = False,
-        session: Optional[Any] = None,
-    ) -> Dict[str, Any]:
+        session: Any | None = None,
+    ) -> dict[str, Any]:
         """Update a single document.
 
         Args:
@@ -361,11 +357,11 @@ class DatabaseOperationsProtocol(Protocol):
 
     async def update_many(
         self,
-        filter: Dict[str, Any],
-        update: Dict[str, Any],
+        filter: dict[str, Any],
+        update: dict[str, Any],
         upsert: bool = False,
-        session: Optional[Any] = None,
-    ) -> Dict[str, Any]:
+        session: Any | None = None,
+    ) -> dict[str, Any]:
         """Update multiple documents.
 
         Args:
@@ -384,9 +380,9 @@ class DatabaseOperationsProtocol(Protocol):
 
     async def delete_one(
         self,
-        filter: Dict[str, Any],
-        session: Optional[Any] = None,
-    ) -> Dict[str, Any]:
+        filter: dict[str, Any],
+        session: Any | None = None,
+    ) -> dict[str, Any]:
         """Delete a single document.
 
         Args:
@@ -403,9 +399,9 @@ class DatabaseOperationsProtocol(Protocol):
 
     async def delete_many(
         self,
-        filter: Dict[str, Any],
-        session: Optional[Any] = None,
-    ) -> Dict[str, Any]:
+        filter: dict[str, Any],
+        session: Any | None = None,
+    ) -> dict[str, Any]:
         """Delete multiple documents.
 
         Args:
@@ -422,8 +418,8 @@ class DatabaseOperationsProtocol(Protocol):
 
     async def count_documents(
         self,
-        filter: Dict[str, Any],
-        session: Optional[Any] = None,
+        filter: dict[str, Any],
+        session: Any | None = None,
     ) -> int:
         """Count documents matching filter.
 
@@ -441,9 +437,9 @@ class DatabaseOperationsProtocol(Protocol):
 
     async def aggregate(
         self,
-        pipeline: List[Dict[str, Any]],
-        session: Optional[Any] = None,
-    ) -> List[Dict[str, Any]]:
+        pipeline: list[dict[str, Any]],
+        session: Any | None = None,
+    ) -> list[dict[str, Any]]:
         """Execute an aggregation pipeline.
 
         Args:

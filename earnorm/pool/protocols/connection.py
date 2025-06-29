@@ -82,9 +82,7 @@ class AsyncOperations(Protocol[DBType, CollType]):
         ...
 
 
-class AsyncConnectionProtocol(
-    AsyncLifecycle, AsyncOperations[DBType, CollType], Protocol
-):
+class AsyncConnectionProtocol(AsyncLifecycle, AsyncOperations[DBType, CollType], Protocol):
     """Protocol for async database connections.
 
     This protocol defines the interface that all async database connections must implement.

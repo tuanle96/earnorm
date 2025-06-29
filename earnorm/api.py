@@ -8,14 +8,11 @@ This module provides decorators to define method behaviors:
 
 import functools
 import logging
+from collections.abc import Awaitable, Callable
 from typing import (
     TYPE_CHECKING,
     Any,
-    Awaitable,
-    Callable,
-    Dict,
     ParamSpec,
-    Type,
     TypeVar,
     cast,
     overload,
@@ -33,15 +30,13 @@ P = ParamSpec("P")
 
 
 @overload
-def model(
-    method: Callable[[Type[ModelT]], Awaitable[ModelT]]
-) -> Callable[[Type[ModelT]], Awaitable[ModelT]]: ...
+def model(method: Callable[[type[ModelT]], Awaitable[ModelT]]) -> Callable[[type[ModelT]], Awaitable[ModelT]]: ...
 
 
 @overload
 def model(
-    method: Callable[[Type[ModelT], Dict[str, Any]], Awaitable[ModelT]]
-) -> Callable[[Type[ModelT], Dict[str, Any]], Awaitable[ModelT]]: ...
+    method: Callable[[type[ModelT], dict[str, Any]], Awaitable[ModelT]],
+) -> Callable[[type[ModelT], dict[str, Any]], Awaitable[ModelT]]: ...
 
 
 @overload
@@ -70,12 +65,10 @@ def model(method: F) -> F:
     """
 
     @functools.wraps(method)
-    async def wrapper(cls: Type["BaseModel"], *args: Any, **kwargs: Any) -> Any:
+    async def wrapper(cls: type["BaseModel"], *args: Any, **kwargs: Any) -> Any:
         try:
             # Log method call
-            logger.debug(
-                f"Calling {cls.__name__}.{method.__name__} with args={args}, kwargs={kwargs}"
-            )
+            logger.debug(f"Calling {cls.__name__}.{method.__name__} with args={args}, kwargs={kwargs}")
 
             # Execute method with all args and kwargs
             result = await method(cls, *args, **kwargs)
@@ -88,7 +81,7 @@ def model(method: F) -> F:
         except Exception as e:
             # Log error with more details
             logger.error(
-                f"Error in {cls.__name__}.{method.__name__}: {str(e)}",
+                f"Error in {cls.__name__}.{method.__name__}: {e!s}",
                 exc_info=True,
                 extra={
                     "args": args,
@@ -128,9 +121,7 @@ def multi(method: F) -> F:
         try:
             # Check if recordset
             if not hasattr(self, "_ids"):
-                raise ValueError(
-                    f"Method {method.__name__} must be called on recordset"
-                )
+                raise ValueError(f"Method {method.__name__} must be called on recordset")
 
             # Get record IDs safely
             record_ids = getattr(self, "_ids", [])
@@ -144,16 +135,14 @@ def multi(method: F) -> F:
             result = await method(self, *args, **kwargs)
 
             # Log result
-            logger.debug(
-                f"Method {self.__class__.__name__}.{method.__name__} returned: {result}"
-            )
+            logger.debug(f"Method {self.__class__.__name__}.{method.__name__} returned: {result}")
 
             return result
 
         except Exception as e:
             # Log error
             logger.error(
-                f"Error in {self.__class__.__name__}.{method.__name__}: {str(e)}",
+                f"Error in {self.__class__.__name__}.{method.__name__}: {e!s}",
                 exc_info=True,
             )
             raise
@@ -190,9 +179,7 @@ def one(method: F) -> F:
 
             # Ensure single record
             if not record_ids or len(record_ids) != 1:
-                raise ValueError(
-                    f"Method {method.__name__} must be called on single record"
-                )
+                raise ValueError(f"Method {method.__name__} must be called on single record")
 
             # Log method call
             logger.debug(
@@ -203,16 +190,14 @@ def one(method: F) -> F:
             result = await method(self, *args, **kwargs)
 
             # Log result
-            logger.debug(
-                f"Method {self.__class__.__name__}.{method.__name__} returned: {result}"
-            )
+            logger.debug(f"Method {self.__class__.__name__}.{method.__name__} returned: {result}")
 
             return result
 
         except Exception as e:
             # Log error
             logger.error(
-                f"Error in {self.__class__.__name__}.{method.__name__}: {str(e)}",
+                f"Error in {self.__class__.__name__}.{method.__name__}: {e!s}",
                 exc_info=True,
             )
             raise

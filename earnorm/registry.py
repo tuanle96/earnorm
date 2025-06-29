@@ -101,9 +101,7 @@ async def register_database_services(config: SystemConfig) -> None:
 
     # Register MongoDB adapter if not exists
     if not container.has("mongodb_adapter"):
-        adapter = MongoAdapter[
-            ModelProtocol
-        ]()  # Use ModelProtocol instead of DatabaseModel
+        adapter = MongoAdapter[ModelProtocol]()  # Use ModelProtocol instead of DatabaseModel
         await adapter.init()
         container.register("mongodb_adapter", adapter)
         # Also register as default database adapter

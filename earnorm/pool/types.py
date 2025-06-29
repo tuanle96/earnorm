@@ -3,11 +3,10 @@
 This module contains all type hints used in the pool module.
 """
 
-from typing import Any, Dict, List, Set, TypeVar, Union
+from typing import Any, TypeAlias, TypeVar
 
 from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
 from redis.asyncio import Redis  # pylint: disable=import-error,no-name-in-module
-from typing_extensions import TypeAlias
 
 # Generic types
 T = TypeVar("T")
@@ -15,8 +14,8 @@ DB = TypeVar("DB")
 COLL = TypeVar("COLL")
 
 # Type aliases for MongoDB
-MongoDBType = AsyncIOMotorDatabase[Dict[str, Any]]  # type: ignore
-MongoCollectionType = AsyncIOMotorCollection[Dict[str, Any]]  # type: ignore
+MongoDBType = AsyncIOMotorDatabase[dict[str, Any]]  # type: ignore
+MongoCollectionType = AsyncIOMotorCollection[dict[str, Any]]  # type: ignore
 
 # Type alias for Redis
 RedisType = Redis  # type: ignore
@@ -26,37 +25,37 @@ DBType = TypeVar("DBType")
 CollType = TypeVar("CollType")
 
 # MongoDB types
-MongoDocument: TypeAlias = Dict[str, Any]
-MongoFilter: TypeAlias = Dict[str, Any]
-MongoUpdate: TypeAlias = Dict[str, Any]
-MongoProjection: TypeAlias = Dict[str, Union[int, bool]]
-MongoSort: TypeAlias = List[tuple[str, int]]
-MongoOptions: TypeAlias = Dict[str, Any]
-MongoResult: TypeAlias = Dict[str, Any]
+MongoDocument: TypeAlias = dict[str, Any]
+MongoFilter: TypeAlias = dict[str, Any]
+MongoUpdate: TypeAlias = dict[str, Any]
+MongoProjection: TypeAlias = dict[str, int | bool]
+MongoSort: TypeAlias = list[tuple[str, int]]
+MongoOptions: TypeAlias = dict[str, Any]
+MongoResult: TypeAlias = dict[str, Any]
 MongoSession: TypeAlias = Any  # Will be replaced with proper type
 
 # Redis types
 RedisKey: TypeAlias = str
-RedisValue: TypeAlias = Union[str, int, float, bytes]
-RedisHash: TypeAlias = Dict[str, RedisValue]
-RedisList: TypeAlias = List[RedisValue]
-RedisSet: TypeAlias = Set[RedisValue]
-RedisZSet: TypeAlias = Dict[RedisValue, float]
-RedisOptions: TypeAlias = Dict[str, Any]
-RedisResult: TypeAlias = Union[str, int, float, bytes, List[Any], Dict[str, Any], None]
+RedisValue: TypeAlias = str | int | float | bytes
+RedisHash: TypeAlias = dict[str, RedisValue]
+RedisList: TypeAlias = list[RedisValue]
+RedisSet: TypeAlias = set[RedisValue]
+RedisZSet: TypeAlias = dict[RedisValue, float]
+RedisOptions: TypeAlias = dict[str, Any]
+RedisResult: TypeAlias = str | int | float | bytes | list[Any] | dict[str, Any] | None
 RedisSession: TypeAlias = Any  # Will be replaced with proper type
 
 # Pool types
-PoolConfig: TypeAlias = Dict[str, Any]
-PoolStats: TypeAlias = Dict[str, Any]
-PoolMetrics: TypeAlias = Dict[str, Any]
-ConnectionStats: TypeAlias = Dict[str, Any]
-ConnectionMetrics: TypeAlias = Dict[str, Any]
+PoolConfig: TypeAlias = dict[str, Any]
+PoolStats: TypeAlias = dict[str, Any]
+PoolMetrics: TypeAlias = dict[str, Any]
+ConnectionStats: TypeAlias = dict[str, Any]
+ConnectionMetrics: TypeAlias = dict[str, Any]
 
 # Operation types
-OperationResult: TypeAlias = Union[MongoResult, RedisResult]
-OperationOptions: TypeAlias = Union[MongoOptions, RedisOptions]
-OperationSession: TypeAlias = Union[MongoSession, RedisSession]
+OperationResult: TypeAlias = MongoResult | RedisResult
+OperationOptions: TypeAlias = MongoOptions | RedisOptions
+OperationSession: TypeAlias = MongoSession | RedisSession
 
 # Callback types
 ErrorCallback: TypeAlias = Any  # Will be replaced with proper type

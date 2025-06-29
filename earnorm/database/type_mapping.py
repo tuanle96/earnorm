@@ -26,7 +26,7 @@ Examples:
     >>> print(mysql_opts)  # {"index": False, "unique": False, ...}
 """
 
-from typing import Any, Dict
+from typing import Any
 
 # MongoDB type mapping
 MONGODB_TYPE_MAPPING = {
@@ -145,7 +145,7 @@ def get_field_type(field_type: str, backend: str) -> str:
     return mapping[backend][field_type]
 
 
-def get_field_options(backend: str) -> Dict[str, Any]:
+def get_field_options(backend: str) -> dict[str, Any]:
     """Get default field options for backend.
 
     This function returns the default field options for the specified database backend.

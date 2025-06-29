@@ -19,9 +19,6 @@ Examples:
 
 from typing import (
     Any,
-    Dict,
-    List,
-    Optional,
     Protocol,
     TypeVar,
     Union,
@@ -31,10 +28,10 @@ from typing import (
 from earnorm.types.fields import DatabaseValue
 
 # Type for field values (None or actual value)
-FieldValue = Union[None, bool, int, float, str, Dict[str, Any], List[Any], Any]
+FieldValue = Union[None, bool, int, float, str, dict[str, Any], list[Any], Any]
 
 # Database backend types
-BackendOptions = Dict[str, Any]
+BackendOptions = dict[str, Any]
 
 # Type variable for field types
 T = TypeVar("T")
@@ -68,9 +65,9 @@ class FieldProtocol(Protocol[T]):
     store: bool
     index: bool
     help: str
-    compute: Optional[str]
+    compute: str | None
     depends: list[str]
-    backend_options: Dict[str, Dict[str, Any]]
+    backend_options: dict[str, dict[str, Any]]
     env: EnvironmentProtocol
 
     def setup(self, name: str, model_name: str) -> None:
@@ -99,7 +96,7 @@ class FieldProtocol(Protocol[T]):
         """
         ...
 
-    async def convert(self, value: Any) -> Optional[T]:
+    async def convert(self, value: Any) -> T | None:
         """Convert value to field type.
 
         This method converts value to field's Python type.
@@ -113,7 +110,7 @@ class FieldProtocol(Protocol[T]):
         """
         ...
 
-    async def to_db(self, value: Optional[T], backend: str) -> DatabaseValue:
+    async def to_db(self, value: T | None, backend: str) -> DatabaseValue:
         """Convert Python value to database format.
 
         This method uses the environment's database adapter to convert the value.
@@ -132,7 +129,7 @@ class FieldProtocol(Protocol[T]):
         """
         ...
 
-    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[T]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> T | None:
         """Convert database value to Python format.
 
         This method uses the environment's database adapter to convert the value.
@@ -204,16 +201,16 @@ class ModelInterface(Protocol):
     """
 
     _name: str
-    _fields: Dict[str, FieldProtocol[Any]]
+    _fields: dict[str, FieldProtocol[Any]]
 
     def validate(self) -> None:
         """Validate model."""
         ...
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert model to dictionary."""
         ...
 
 
 # Type for field options
-FieldOptions = Dict[str, Any]
+FieldOptions = dict[str, Any]

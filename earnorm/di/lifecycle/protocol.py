@@ -43,7 +43,7 @@ Example:
     ...         }
 """
 
-from typing import Dict, Optional, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -109,7 +109,7 @@ class LifecycleAware(Protocol):
         ...
 
     @property
-    def id(self) -> Optional[str]:
+    def id(self) -> str | None:
         """Get object identifier.
 
         This property should return a unique identifier for the object.
@@ -125,7 +125,7 @@ class LifecycleAware(Protocol):
         ...
 
     @property
-    def data(self) -> Dict[str, str]:
+    def data(self) -> dict[str, str]:
         """Get object data.
 
         This property should return a dictionary containing:

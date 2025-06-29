@@ -74,6 +74,6 @@ from earnorm.di.lifecycle.protocol import LifecycleAware
 
 __all__ = [
     "LifecycleAware",  # Protocol for lifecycle-aware objects
-    "LifecycleManager",  # Manager for lifecycle operations
     "LifecycleEvents",  # Event system for lifecycle management
+    "LifecycleManager",  # Manager for lifecycle operations
 ]

@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Any, AsyncContextManager, Dict, List, Optional, Set, TypeVar, cast
+from typing import Any, AsyncContextManager, TypeVar, cast
 from urllib.parse import urlparse
 
 from motor.motor_asyncio import (
@@ -46,7 +46,7 @@ class _ConnectionManager(AsyncContextManager[AsyncConnectionProtocol[DB, COLL]])
             pool: Pool instance
         """
         self._pool = pool
-        self._conn: Optional[AsyncConnectionProtocol[DB, COLL]] = None
+        self._conn: AsyncConnectionProtocol[DB, COLL] | None = None
 
     async def __aenter__(self) -> AsyncConnectionProtocol[DB, COLL]:
         """Enter context.
@@ -72,8 +72,8 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
         database: str,
         min_size: int = 1,
         max_size: int = 10,
-        retry_policy: Optional[RetryPolicy] = None,
-        circuit_breaker: Optional[CircuitBreaker] = None,
+        retry_policy: RetryPolicy | None = None,
+        circuit_breaker: CircuitBreaker | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize pool.
@@ -130,9 +130,7 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
                     if not 1 <= port <= 65535:
                         raise ValueError(f"Invalid port number: {port}")
                 except ValueError as e:
-                    raise ValueError(
-                        f"Invalid port in MongoDB URI: {host_parts[1]}"
-                    ) from e
+                    raise ValueError(f"Invalid port in MongoDB URI: {host_parts[1]}") from e
 
             # Validate path (database name)
             if parsed.path and parsed.path != "/":
@@ -149,7 +147,7 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
         except Exception as e:
             logger.error("MongoDB URI validation failed: %s", str(e))
             raise ValueError(
-                f"Invalid MongoDB URI format: {str(e)}. Expected format: mongodb://host[:port]/[database][?options]"
+                f"Invalid MongoDB URI format: {e!s}. Expected format: mongodb://host[:port]/[database][?options]"
             ) from e
 
         self._uri = uri
@@ -160,12 +158,12 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
         self._circuit_breaker = circuit_breaker
         self._kwargs = kwargs
 
-        self._client: Optional[AsyncIOMotorClient[dict[str, Any]]] = None
-        self._available: Set[AsyncConnectionProtocol[DB, COLL]] = set()
-        self._in_use: Set[AsyncConnectionProtocol[DB, COLL]] = set()
+        self._client: AsyncIOMotorClient[dict[str, Any]] | None = None
+        self._available: set[AsyncConnectionProtocol[DB, COLL]] = set()
+        self._in_use: set[AsyncConnectionProtocol[DB, COLL]] = set()
         self._lock = asyncio.Lock()
 
-    def _map_options(self, options: Dict[str, Any]) -> Dict[str, Any]:
+    def _map_options(self, options: dict[str, Any]) -> dict[str, Any]:
         """Map configuration options to PyMongo client options.
 
         Args:
@@ -184,17 +182,15 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
             "j": "journal",
         }
 
-        client_options: Dict[str, Any] = {}
+        client_options: dict[str, Any] = {}
         for key, value in options.items():
             if key in option_mapping:
                 client_options[option_mapping[key]] = value
-                logger.debug(
-                    "Mapped option %s -> %s: %s", key, option_mapping[key], value
-                )
+                logger.debug("Mapped option %s -> %s: %s", key, option_mapping[key], value)
 
         return client_options
 
-    def map_client_options(self, options: Dict[str, Any]) -> Dict[str, Any]:
+    def map_client_options(self, options: dict[str, Any]) -> dict[str, Any]:
         """Map configuration options to PyMongo client options.
 
         Args:
@@ -293,7 +289,7 @@ class MongoPool(AsyncPoolProtocol[DB, COLL]):
                         retry_delay *= 2  # Exponential backoff
 
                 # Create initial connections
-                connection_errors: List[str] = []
+                connection_errors: list[str] = []
                 for i in range(self._min_size):
                     try:
                         conn = self._create_connection()

@@ -31,7 +31,6 @@ Example:
 """
 
 import logging
-from typing import Dict, List, Optional, Set
 
 from earnorm.config.model import SystemConfig
 from earnorm.di.lifecycle import LifecycleAware
@@ -73,9 +72,9 @@ class DependencyResolver(LifecycleAware):
         2. Resolved set for tracking resolved dependencies
         3. Configuration storage
         """
-        self._dependencies: Dict[str, List[str]] = {}
-        self._resolved: Set[str] = set()
-        self._config: Optional[SystemConfig] = None
+        self._dependencies: dict[str, list[str]] = {}
+        self._resolved: set[str] = set()
+        self._config: SystemConfig | None = None
 
     async def init(self) -> None:
         """Initialize dependency resolver.
@@ -103,7 +102,7 @@ class DependencyResolver(LifecycleAware):
         self.clear()
 
     @property
-    def id(self) -> Optional[str]:
+    def id(self) -> str | None:
         """Get dependency resolver ID.
 
         Returns:
@@ -112,7 +111,7 @@ class DependencyResolver(LifecycleAware):
         return "dependency_resolver"
 
     @property
-    def data(self) -> Dict[str, str]:
+    def data(self) -> dict[str, str]:
         """Get dependency resolver data.
 
         Returns:
@@ -142,7 +141,7 @@ class DependencyResolver(LifecycleAware):
         self._config = config
         await self.init()
 
-    def add_dependency(self, name: str, dependencies: List[str]) -> None:
+    def add_dependency(self, name: str, dependencies: list[str]) -> None:
         """Add dependencies for a service.
 
         This method registers the dependencies that a service requires.
@@ -158,7 +157,7 @@ class DependencyResolver(LifecycleAware):
         """
         self._dependencies[name] = dependencies
 
-    def resolve(self, name: str) -> List[str]:
+    def resolve(self, name: str) -> list[str]:
         """Resolve dependencies for a service.
 
         This method determines the order in which services should be initialized
@@ -181,8 +180,8 @@ class DependencyResolver(LifecycleAware):
             >>> order = resolver.resolve("service")
             >>> assert order == ["config", "database", "cache", "service"]
         """
-        resolved: List[str] = []
-        visited: Set[str] = set()
+        resolved: list[str] = []
+        visited: set[str] = set()
 
         def visit(n: str) -> None:
             """Visit node in dependency graph.
@@ -225,7 +224,7 @@ class DependencyResolver(LifecycleAware):
         self._dependencies.clear()
         self._resolved.clear()
 
-    def get_dependencies(self, service: str) -> List[str]:
+    def get_dependencies(self, service: str) -> list[str]:
         """Get dependencies for a service.
 
         Args:
@@ -254,8 +253,8 @@ class DependencyResolver(LifecycleAware):
         Example:
             >>> resolver.check_circular()  # Raises if circular deps found
         """
-        visited: Set[str] = set()
-        path: Set[str] = set()
+        visited: set[str] = set()
+        path: set[str] = set()
 
         def visit(service: str) -> None:
             """Visit service in dependency graph.
@@ -270,9 +269,7 @@ class DependencyResolver(LifecycleAware):
                 CircularDependencyError: If circular dependency is detected
             """
             if service in path:
-                raise CircularDependencyError(
-                    f"Circular dependency detected: {service}"
-                )
+                raise CircularDependencyError(f"Circular dependency detected: {service}")
 
             if service in visited:
                 return

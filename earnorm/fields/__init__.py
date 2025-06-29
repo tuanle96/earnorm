@@ -73,10 +73,11 @@ from earnorm.fields.composite import (
 )
 
 # Primitive fields
-from earnorm.fields.primitive import BooleanField, DateField
-from earnorm.fields.primitive import DateTimeField
-from earnorm.fields.primitive import DateTimeField as DatetimeField
 from earnorm.fields.primitive import (
+    BooleanField,
+    DateField,
+    DateTimeField,
+    DateTimeField as DatetimeField,
     DecimalField,
     EnumField,
     FileField,

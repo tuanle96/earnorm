@@ -12,7 +12,7 @@ Examples:
     >>> query.window().over(partition_by=[User.age]).row_number()
 """
 
-from typing import Any, Dict, List, Optional, TypeVar
+from typing import Any, TypeVar
 
 from earnorm.base.database.query.core.operations.window import BaseWindow
 from earnorm.base.database.query.interfaces.operations.window import WindowProtocol
@@ -34,14 +34,14 @@ class MongoWindow(BaseWindow[ModelT], WindowProtocol[ModelT]):
     def __init__(self) -> None:
         """Initialize MongoDB window."""
         super().__init__()
-        self._partition_by: Optional[List[str]] = None
-        self._order_by: Optional[List[str]] = None
-        self._window_functions: List[Dict[str, Any]] = []
+        self._partition_by: list[str] | None = None
+        self._order_by: list[str] | None = None
+        self._window_functions: list[dict[str, Any]] = []
 
     def over(
         self,
-        partition_by: Optional[List[str]] = None,
-        order_by: Optional[List[str]] = None,
+        partition_by: list[str] | None = None,
+        order_by: list[str] | None = None,
     ) -> "MongoWindow[ModelT]":
         """Set window frame.
 
@@ -131,7 +131,7 @@ class MongoWindow(BaseWindow[ModelT], WindowProtocol[ModelT]):
         if not self._window_functions:
             raise ValueError("No window functions specified")
 
-    def get_pipeline_stages(self) -> List[JsonDict]:
+    def get_pipeline_stages(self) -> list[JsonDict]:
         """Get MongoDB aggregation pipeline stages for this window function.
 
         Returns:
@@ -140,19 +140,13 @@ class MongoWindow(BaseWindow[ModelT], WindowProtocol[ModelT]):
         if not self._window_functions:
             return []
 
-        stages: List[JsonDict] = []
+        stages: list[JsonDict] = []
 
         # Build $setWindowFields stage
         window_stage: JsonDict = {
             "$setWindowFields": {
-                "partitionBy": (
-                    {field: f"${field}" for field in self._partition_by}
-                    if self._partition_by
-                    else None
-                ),
-                "sortBy": (
-                    {field: 1 for field in self._order_by} if self._order_by else None
-                ),
+                "partitionBy": ({field: f"${field}" for field in self._partition_by} if self._partition_by else None),
+                "sortBy": (dict.fromkeys(self._order_by, 1) if self._order_by else None),
                 "output": {},
             }
         }
@@ -165,7 +159,7 @@ class MongoWindow(BaseWindow[ModelT], WindowProtocol[ModelT]):
 
         return stages
 
-    def to_pipeline(self) -> List[JsonDict]:
+    def to_pipeline(self) -> list[JsonDict]:
         """Convert window operation to MongoDB pipeline.
 
         Returns:
@@ -180,14 +174,8 @@ class MongoWindow(BaseWindow[ModelT], WindowProtocol[ModelT]):
         # Build window stage
         window_stage = {
             "$setWindowFields": {
-                "partitionBy": (
-                    {field: f"${field}" for field in self._partition_by}
-                    if self._partition_by
-                    else None
-                ),
-                "sortBy": (
-                    {field: 1 for field in self._order_by} if self._order_by else None
-                ),
+                "partitionBy": ({field: f"${field}" for field in self._partition_by} if self._partition_by else None),
+                "sortBy": (dict.fromkeys(self._order_by, 1) if self._order_by else None),
                 "output": {
                     self._alias
                     or "window_result": {

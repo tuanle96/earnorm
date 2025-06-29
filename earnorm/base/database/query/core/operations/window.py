@@ -55,7 +55,7 @@ Examples:
     ... ).execute()
 """
 
-from typing import Any, List, Optional, TypeVar
+from typing import Any, TypeVar
 
 from earnorm.base.database.query.core.operations.base import BaseOperation
 from earnorm.base.database.query.interfaces.operations.window import WindowProtocol
@@ -77,15 +77,15 @@ class BaseWindow(BaseOperation[ModelT], WindowProtocol[ModelT]):
     def __init__(self) -> None:
         """Initialize window operation."""
         super().__init__()
-        self._partition_by: List[str] = []
-        self._order_by: List[str] = []
-        self._window_expr: Optional[JsonDict] = None
-        self._alias: Optional[str] = None
+        self._partition_by: list[str] = []
+        self._order_by: list[str] = []
+        self._window_expr: JsonDict | None = None
+        self._alias: str | None = None
 
     def over(
         self,
-        partition_by: Optional[List[str]] = None,
-        order_by: Optional[List[str]] = None,
+        partition_by: list[str] | None = None,
+        order_by: list[str] | None = None,
     ) -> "BaseWindow[ModelT]":
         """Set window clause.
 
@@ -171,9 +171,7 @@ class BaseWindow(BaseOperation[ModelT], WindowProtocol[ModelT]):
         }
         return self
 
-    def lag(
-        self, field: str, offset: int = 1, default: Any = None
-    ) -> "BaseWindow[ModelT]":
+    def lag(self, field: str, offset: int = 1, default: Any = None) -> "BaseWindow[ModelT]":
         """LAG() window function.
 
         Args:
@@ -193,9 +191,7 @@ class BaseWindow(BaseOperation[ModelT], WindowProtocol[ModelT]):
         }
         return self
 
-    def lead(
-        self, field: str, offset: int = 1, default: Any = None
-    ) -> "BaseWindow[ModelT]":
+    def lead(self, field: str, offset: int = 1, default: Any = None) -> "BaseWindow[ModelT]":
         """LEAD() window function.
 
         Args:
@@ -225,7 +221,7 @@ class BaseWindow(BaseOperation[ModelT], WindowProtocol[ModelT]):
             raise ValueError("Window function not specified")
 
     @property
-    def partition_by(self) -> List[str]:
+    def partition_by(self) -> list[str]:
         """Get partition by fields.
 
         Returns:
@@ -234,7 +230,7 @@ class BaseWindow(BaseOperation[ModelT], WindowProtocol[ModelT]):
         return self._partition_by
 
     @property
-    def order_by(self) -> List[str]:
+    def order_by(self) -> list[str]:
         """Get order by fields.
 
         Returns:
@@ -243,7 +239,7 @@ class BaseWindow(BaseOperation[ModelT], WindowProtocol[ModelT]):
         return self._order_by
 
     @property
-    def window_expr(self) -> Optional[JsonDict]:
+    def window_expr(self) -> JsonDict | None:
         """Get window expression.
 
         Returns:
@@ -252,7 +248,7 @@ class BaseWindow(BaseOperation[ModelT], WindowProtocol[ModelT]):
         return self._window_expr
 
     @property
-    def alias(self) -> Optional[str]:
+    def alias(self) -> str | None:
         """Get alias.
 
         Returns:

@@ -33,7 +33,7 @@ Example:
 """
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 from earnorm.config.model import SystemConfig
 from earnorm.di.lifecycle import LifecycleAware
@@ -75,8 +75,8 @@ class FactoryManager(LifecycleAware):
         1. Factory registry for storing factory functions
         2. Configuration storage
         """
-        self._factories: Dict[str, Any] = {}
-        self._config: Optional[SystemConfig] = None
+        self._factories: dict[str, Any] = {}
+        self._config: SystemConfig | None = None
 
     async def init(self) -> None:
         """Initialize factory manager.
@@ -104,7 +104,7 @@ class FactoryManager(LifecycleAware):
         self._factories.clear()
 
     @property
-    def id(self) -> Optional[str]:
+    def id(self) -> str | None:
         """Get factory manager ID.
 
         Returns:
@@ -113,7 +113,7 @@ class FactoryManager(LifecycleAware):
         return "factory_manager"
 
     @property
-    def data(self) -> Dict[str, str]:
+    def data(self) -> dict[str, str]:
         """Get factory manager data.
 
         Returns:
@@ -179,7 +179,7 @@ class FactoryManager(LifecycleAware):
         """
         return name in self._factories
 
-    async def get(self, name: str) -> Optional[Any]:
+    async def get(self, name: str) -> Any | None:
         """Create an instance using a registered factory.
 
         This method:
@@ -209,6 +209,12 @@ class FactoryManager(LifecycleAware):
             if hasattr(instance, "init"):
                 await instance.init()
             return instance
+        elif callable(factory):
+            # Call factory function to get the actual service
+            result = factory()
+            if hasattr(result, "init"):
+                await result.init()
+            return result
         return factory
 
     def unregister(self, name: str) -> None:

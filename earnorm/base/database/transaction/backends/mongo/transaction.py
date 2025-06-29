@@ -12,7 +12,7 @@ Examples:
 """
 
 from types import TracebackType
-from typing import Any, Dict, List, Optional, Type, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 from bson import ObjectId
 from motor.motor_asyncio import (
@@ -46,7 +46,7 @@ class MongoTransaction(Transaction[ModelT]):
 
     def __init__(
         self,
-        collection: AsyncIOMotorCollection[Dict[str, Any]],
+        collection: AsyncIOMotorCollection[dict[str, Any]],
         session: AsyncIOMotorClientSession,
     ) -> None:
         """Initialize transaction.
@@ -57,7 +57,7 @@ class MongoTransaction(Transaction[ModelT]):
         """
         self._collection = collection
         self._session = session
-        self._inserted_ids: List[ObjectId] = []
+        self._inserted_ids: list[ObjectId] = []
 
     async def __aenter__(self) -> "MongoTransaction[ModelT]":
         """Enter transaction context.
@@ -69,9 +69,9 @@ class MongoTransaction(Transaction[ModelT]):
 
     async def __aexit__(
         self,
-        exc_type: Optional[Type[BaseException]],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[TracebackType],
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
     ) -> None:
         """Exit transaction context.
 
@@ -109,7 +109,7 @@ class MongoTransaction(Transaction[ModelT]):
         except PyMongoError as e:
             raise MongoTransactionError(f"Failed to insert model: {e}") from e
 
-    async def insert_many(self, models: List[ModelT]) -> List[ModelT]:
+    async def insert_many(self, models: list[ModelT]) -> list[ModelT]:
         """Insert multiple models into database.
 
         Args:
@@ -124,7 +124,7 @@ class MongoTransaction(Transaction[ModelT]):
         try:
             values = [cast(JsonDict, model.to_dict()) for model in models]
             result = await self._collection.insert_many(values, session=self._session)
-            for model, id_ in zip(models, result.inserted_ids):
+            for model, id_ in zip(models, result.inserted_ids, strict=False):
                 model.id = id_
                 self._inserted_ids.append(cast(ObjectId, id_))
             return models
@@ -148,14 +148,12 @@ class MongoTransaction(Transaction[ModelT]):
             raise ValueError("Model has no ID")
         try:
             values = await model.to_dict()
-            await self._collection.update_one(
-                {"_id": model.id}, {"$set": values}, session=self._session
-            )
+            await self._collection.update_one({"_id": model.id}, {"$set": values}, session=self._session)
             return model
         except PyMongoError as e:
             raise MongoTransactionError(f"Failed to update model: {e}") from e
 
-    async def update_many(self, models: List[ModelT]) -> List[ModelT]:
+    async def update_many(self, models: list[ModelT]) -> list[ModelT]:
         """Update multiple models in database.
 
         Args:
@@ -173,9 +171,7 @@ class MongoTransaction(Transaction[ModelT]):
                 if not model.id:
                     raise ValueError("Model has no ID")
                 values = await model.to_dict()
-                await self._collection.update_one(
-                    {"_id": model.id}, {"$set": values}, session=self._session
-                )
+                await self._collection.update_one({"_id": model.id}, {"$set": values}, session=self._session)
             return models
         except PyMongoError as e:
             raise MongoTransactionError(f"Failed to update models: {e}") from e
@@ -197,7 +193,7 @@ class MongoTransaction(Transaction[ModelT]):
         except PyMongoError as e:
             raise MongoTransactionError(f"Failed to delete model: {e}") from e
 
-    async def delete_many(self, models: List[ModelT]) -> None:
+    async def delete_many(self, models: list[ModelT]) -> None:
         """Delete multiple models from database.
 
         Args:
@@ -208,14 +204,12 @@ class MongoTransaction(Transaction[ModelT]):
             MongoTransactionError: If models cannot be deleted
         """
         try:
-            ids: List[ObjectId] = []
+            ids: list[ObjectId] = []
             for model in models:
                 if not model.id:
                     raise ValueError("Model has no ID")
                 ids.append(cast(ObjectId, model.id))
-            await self._collection.delete_many(
-                {"_id": {"$in": ids}}, session=self._session
-            )
+            await self._collection.delete_many({"_id": {"$in": ids}}, session=self._session)
         except PyMongoError as e:
             raise MongoTransactionError(f"Failed to delete models: {e}") from e
 
@@ -245,7 +239,7 @@ class MongoTransaction(Transaction[ModelT]):
 class MongoTransactionManager(TransactionManager[ModelT]):
     """MongoDB transaction manager."""
 
-    def __init__(self, db: AsyncIOMotorDatabase[Dict[str, Any]]) -> None:
+    def __init__(self, db: AsyncIOMotorDatabase[dict[str, Any]]) -> None:
         """Initialize transaction manager.
 
         Args:
@@ -253,9 +247,9 @@ class MongoTransactionManager(TransactionManager[ModelT]):
         """
         super().__init__()
         self._db = db
-        self._model_type: Optional[Type[ModelT]] = None
+        self._model_type: type[ModelT] | None = None
 
-    def set_model_type(self, model_type: Type[ModelT]) -> None:
+    def set_model_type(self, model_type: type[ModelT]) -> None:
         """Set model type for transaction.
 
         Args:

@@ -37,7 +37,8 @@ Examples:
 
 import functools
 import logging
-from typing import Any, Awaitable, Callable, Optional, TypeVar, Union, overload
+from collections.abc import Awaitable, Callable
+from typing import Any, TypeVar, overload
 
 from earnorm.exceptions import CircuitBreakerError, RetryError
 
@@ -84,13 +85,9 @@ def validate_retry_policy(policy: RetryPolicy) -> None:
         InvalidConfigurationError: If policy configuration is invalid
     """
     if policy.max_retries < 0:
-        raise InvalidConfigurationError(
-            "max_retries must be >= 0", {"max_retries": policy.max_retries}
-        )
+        raise InvalidConfigurationError("max_retries must be >= 0", {"max_retries": policy.max_retries})
     if policy.base_delay < 0:
-        raise InvalidConfigurationError(
-            "base_delay must be >= 0", {"base_delay": policy.base_delay}
-        )
+        raise InvalidConfigurationError("base_delay must be >= 0", {"base_delay": policy.base_delay})
     if policy.max_delay < policy.base_delay:
         raise InvalidConfigurationError(
             "max_delay must be >= base_delay",
@@ -120,9 +117,7 @@ def validate_circuit_breaker(breaker: CircuitBreaker) -> None:
             {"failure_threshold": config["failure_threshold"]},
         )
     if config["reset_timeout"] < 0:
-        raise InvalidConfigurationError(
-            "reset_timeout must be >= 0", {"reset_timeout": config["reset_timeout"]}
-        )
+        raise InvalidConfigurationError("reset_timeout must be >= 0", {"reset_timeout": config["reset_timeout"]})
     if config["half_open_timeout"] < 0:
         raise InvalidConfigurationError(
             "half_open_timeout must be >= 0",
@@ -139,19 +134,19 @@ def with_resilience(
 @overload
 def with_resilience(
     *,
-    retry_policy: Optional[RetryPolicy] = None,
-    circuit_breaker: Optional[CircuitBreaker] = None,
+    retry_policy: RetryPolicy | None = None,
+    circuit_breaker: CircuitBreaker | None = None,
     backend: str = "unknown",
 ) -> Callable[[AsyncFunc[T]], AsyncFunc[T]]: ...
 
 
 def with_resilience(
-    func: Optional[AsyncFunc[T]] = None,
+    func: AsyncFunc[T] | None = None,
     *,
-    retry_policy: Optional[RetryPolicy] = None,
-    circuit_breaker: Optional[CircuitBreaker] = None,
+    retry_policy: RetryPolicy | None = None,
+    circuit_breaker: CircuitBreaker | None = None,
     backend: str = "unknown",
-) -> Union[AsyncFunc[T], Callable[[AsyncFunc[T]], AsyncFunc[T]]]:
+) -> AsyncFunc[T] | Callable[[AsyncFunc[T]], AsyncFunc[T]]:
     """Decorator to add retry and circuit breaker functionality to async database operations.
 
     This decorator can:
@@ -188,8 +183,8 @@ def with_resilience(
 
 def _with_resilience(
     func: AsyncFunc[T],
-    retry_policy: Optional[RetryPolicy] = None,
-    circuit_breaker: Optional[CircuitBreaker] = None,
+    retry_policy: RetryPolicy | None = None,
+    circuit_breaker: CircuitBreaker | None = None,
     backend: str = "unknown",
 ) -> AsyncFunc[T]:
     """Internal implementation of with_resilience decorator."""
@@ -206,9 +201,7 @@ def _with_resilience(
         )
 
         # Create retry context if policy provided
-        retry_ctx = (
-            RetryContext(retry_policy, backend=backend) if retry_policy else None
-        )
+        retry_ctx = RetryContext(retry_policy, backend=backend) if retry_policy else None
 
         # Create circuit breaker context if provided
         circuit_ctx = circuit_breaker if circuit_breaker else None

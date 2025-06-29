@@ -11,11 +11,11 @@ from .pool import AsyncPoolProtocol
 
 __all__ = [
     "AsyncConnectionProtocol",
+    "AsyncDatabaseProtocol",
     "AsyncLifecycle",
     "AsyncOperations",
-    "AsyncDatabaseProtocol",
+    "AsyncPoolProtocol",
     "DatabaseAware",
     "MongoOperation",
     "RedisOperation",
-    "AsyncPoolProtocol",
 ]

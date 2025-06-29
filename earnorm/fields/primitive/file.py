@@ -29,10 +29,11 @@ Examples:
 import io
 import mimetypes
 import os
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Any, BinaryIO, Dict, Optional, Sequence, Union, cast
+from typing import Any, BinaryIO, Union, cast
 
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorGridFSBucket
@@ -65,11 +66,11 @@ class FileInfo:
     def __init__(
         self,
         filename: str,
-        path: Union[str, ObjectId],
-        content_type: Optional[str] = None,
-        size: Optional[int] = None,
-        created_at: Optional[datetime] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        path: str | ObjectId,
+        content_type: str | None = None,
+        size: int | None = None,
+        created_at: datetime | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         self.filename = filename
         self.path = path
@@ -105,15 +106,15 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
     upload_to: str
     backend_options: dict[str, Any]
     storage: StorageType
-    _value: Optional[Union[Path, str, ObjectId]]
-    _fs: Optional[AsyncIOMotorGridFSBucket]
+    _value: Path | str | ObjectId | None
+    _fs: AsyncIOMotorGridFSBucket | None
 
     def __init__(
         self,
         *,
-        storage: Union[str, StorageType] = StorageType.LOCAL,
+        storage: str | StorageType = StorageType.LOCAL,
         max_size: int = 100 * 1024 * 1024,  # 100MB
-        allowed_types: Optional[Sequence[str]] = None,
+        allowed_types: Sequence[str] | None = None,
         upload_to: str = "uploads",
         **options: Any,
     ) -> None:
@@ -171,15 +172,12 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
         for allowed_type in self.allowed_types:
             allowed_category, allowed_subtype = allowed_type.split("/", 1)
             if allowed_category == "*" or (
-                allowed_category == mime_category
-                and (allowed_subtype == "*" or allowed_subtype == mime_subtype)
+                allowed_category == mime_category and (allowed_subtype == "*" or allowed_subtype == mime_subtype)
             ):
                 return True
         return False
 
-    async def validate(
-        self, value: Any, context: Optional[Dict[str, Any]] = None
-    ) -> Any:
+    async def validate(self, value: Any, context: dict[str, Any] | None = None) -> Any:
         """Validate file value.
 
         This method validates:
@@ -225,10 +223,7 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
             file_size = value.stat().st_size
             if file_size > self.max_size:
                 raise FieldValidationError(
-                    message=(
-                        f"File size {file_size} bytes exceeds maximum "
-                        f"size of {self.max_size} bytes"
-                    ),
+                    message=(f"File size {file_size} bytes exceeds maximum " f"size of {self.max_size} bytes"),
                     field_name=self.name,
                     code="file_too_large",
                 )
@@ -244,17 +239,14 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
 
             if not self._is_mime_type_allowed(mime_type):
                 raise FieldValidationError(
-                    message=(
-                        f"File type {mime_type} is not allowed. "
-                        f"Allowed types: {self.allowed_types}"
-                    ),
+                    message=(f"File type {mime_type} is not allowed. " f"Allowed types: {self.allowed_types}"),
                     field_name=self.name,
                     code="invalid_mime_type",
                 )
 
         return value
 
-    async def convert(self, value: Any) -> Optional[Path]:
+    async def convert(self, value: Any) -> Path | None:
         """Convert value to Path.
 
         Handles:
@@ -283,14 +275,12 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
                 raise TypeError(f"Cannot convert {type(value).__name__} to Path")
         except (TypeError, ValueError) as e:
             raise FieldValidationError(
-                message=f"Cannot convert value to Path: {str(e)}",
+                message=f"Cannot convert value to Path: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
 
-    async def to_db(
-        self, value: Optional[Union[Path, str, ObjectId]], backend: str
-    ) -> DatabaseValue:
+    async def to_db(self, value: Path | str | ObjectId | None, backend: str) -> DatabaseValue:
         """Convert file path to database format.
 
         Args:
@@ -313,9 +303,7 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
         except ValueError:
             return str(value)
 
-    async def from_db(
-        self, value: DatabaseValue, backend: str
-    ) -> Optional[Union[Path, str, ObjectId]]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> Path | str | ObjectId | None:
         """Convert database value to file path/ID.
 
         Args:
@@ -343,18 +331,18 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
                 raise TypeError(f"Cannot convert {type(value).__name__} to Path/ID")
         except (TypeError, ValueError) as e:
             raise FieldValidationError(
-                message=f"Cannot convert database value to Path/ID: {str(e)}",
+                message=f"Cannot convert database value to Path/ID: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
 
     async def save(
         self,
-        file: Union[BinaryIO, bytes, str, Path],
-        filename: Optional[str] = None,
-        content_type: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[str, ObjectId]:
+        file: BinaryIO | bytes | str | Path,
+        filename: str | None = None,
+        content_type: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> str | ObjectId:
         """Save file to storage.
 
         Args:
@@ -387,12 +375,7 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
 
         # Validate content type
         allowed = self.allowed_types
-        if (
-            content_type
-            and allowed
-            and content_type
-            not in allowed  # pylint: disable=unsupported-membership-test
-        ):
+        if content_type and allowed and content_type not in allowed:  # pylint: disable=unsupported-membership-test
             raise FieldValidationError(
                 message=f"Content type {content_type} not allowed. Allowed \
                 types: {', '.join(sorted(allowed))}",
@@ -422,12 +405,12 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
                 return file_id
         except Exception as e:
             raise FieldValidationError(
-                message=f"Storage error: {str(e)}",
+                message=f"Storage error: {e!s}",
                 field_name=self.name,
                 code="storage_error",
             ) from e
 
-    async def read(self) -> Optional[bytes]:
+    async def read(self) -> bytes | None:
         """Read file from storage.
 
         Returns:
@@ -446,13 +429,11 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
             else:
                 fs = await self._get_fs()
                 buffer = io.BytesIO()
-                await fs.download_to_stream(
-                    cast(Union[str, ObjectId, bytes], self._value), buffer
-                )
+                await fs.download_to_stream(cast(str | ObjectId | bytes, self._value), buffer)
                 return buffer.getvalue()
         except Exception as e:
             raise FieldValidationError(
-                message=f"Storage error: {str(e)}",
+                message=f"Storage error: {e!s}",
                 field_name=self.name,
                 code="storage_error",
             ) from e
@@ -471,15 +452,15 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
                 os.unlink(str(self._value))
             else:
                 fs = await self._get_fs()
-                await fs.delete(cast(Union[str, ObjectId, bytes], self._value))
+                await fs.delete(cast(str | ObjectId | bytes, self._value))
         except Exception as e:
             raise FieldValidationError(
-                message=f"Storage error: {str(e)}",
+                message=f"Storage error: {e!s}",
                 field_name=self.name,
                 code="storage_error",
             ) from e
 
-    async def get_info(self) -> Optional[FileInfo]:
+    async def get_info(self) -> FileInfo | None:
         """Get file information.
 
         Returns:
@@ -504,9 +485,7 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
                 )
             else:
                 fs = await self._get_fs()
-                grid_out = await fs.open_download_stream(
-                    cast(Union[str, ObjectId, bytes], self._value)
-                )
+                grid_out = await fs.open_download_stream(cast(str | ObjectId | bytes, self._value))
                 if grid_out.filename is None:
                     raise FieldValidationError(
                         message="File has no filename",
@@ -524,7 +503,7 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
                 )
         except Exception as e:
             raise FieldValidationError(
-                message=f"Storage error: {str(e)}",
+                message=f"Storage error: {e!s}",
                 field_name=self.name,
                 code="storage_error",
             ) from e
@@ -538,7 +517,7 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
             self._fs = AsyncIOMotorGridFSBucket(db)
         return self._fs
 
-    async def _read_file(self, file: Union[BinaryIO, bytes, str, Path]) -> bytes:
+    async def _read_file(self, file: BinaryIO | bytes | str | Path) -> bytes:
         """Read file content to bytes."""
         if isinstance(file, (str, Path)):
             path = Path(file)
@@ -555,7 +534,7 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
         else:
             return file.read()
 
-    def _get_filename(self, file: Union[BinaryIO, bytes, str, Path]) -> str:
+    def _get_filename(self, file: BinaryIO | bytes | str | Path) -> str:
         """Get original filename from file object."""
         if isinstance(file, (str, Path)):
             return Path(file).name
@@ -567,7 +546,7 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
                 return Path(name).name
         return "unnamed"
 
-    def _guess_content_type(self, filename: str) -> Optional[str]:
+    def _guess_content_type(self, filename: str) -> str | None:
         """Guess MIME type from filename.
 
         Args:
@@ -689,9 +668,7 @@ class FileField(BaseField[Union[Path, str, ObjectId]], FieldComparisonMixin):
         Returns:
             ComparisonOperator: Comparison operator with field name and values
         """
-        return ComparisonOperator(
-            self.name, "created_between", [start.isoformat(), end.isoformat()]
-        )
+        return ComparisonOperator(self.name, "created_between", [start.isoformat(), end.isoformat()])
 
     def created_days_ago(self, days: int) -> ComparisonOperator:
         """Check if file was created within last N days.

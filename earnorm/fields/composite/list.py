@@ -27,16 +27,12 @@ Examples:
 """
 
 import json
+from collections.abc import Sequence
 from typing import (
     Any,
-    Dict,
     Generic,
-    List,
-    Optional,
     Protocol,
-    Sequence,
     TypeVar,
-    Union,
     cast,
 )
 
@@ -56,7 +52,7 @@ class Comparable(Protocol):
 T = TypeVar("T", bound=Comparable)
 
 
-class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
+class ListField(BaseField[list[T]], FieldComparisonMixin, Generic[T]):
     """Field for list values.
 
     This field type handles sequences of values, with support for:
@@ -76,17 +72,17 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
     """
 
     _element_field: BaseField[T]
-    min_length: Optional[int]
-    max_length: Optional[int]
+    min_length: int | None
+    max_length: int | None
     unique: bool
-    backend_options: Dict[str, Any]
+    backend_options: dict[str, Any]
 
     def __init__(
         self,
         element_field: BaseField[T],
         *,
-        min_length: Optional[int] = None,
-        max_length: Optional[int] = None,
+        min_length: int | None = None,
+        max_length: int | None = None,
         unique: bool = False,
         **options: Any,
     ) -> None:
@@ -131,9 +127,7 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
         await super().setup(name, model_name)
         await self.element_field.setup(f"{name}[]", model_name)
 
-    async def validate(
-        self, value: Any, context: Optional[Dict[str, Any]] = None
-    ) -> Optional[List[T]]:
+    async def validate(self, value: Any, context: dict[str, Any] | None = None) -> list[T] | None:
         """Validate list value.
 
         This method validates:
@@ -166,13 +160,13 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
                     value = list(value)
             except (TypeError, ValueError) as e:
                 raise FieldValidationError(
-                    message=f"Cannot convert to list: {str(e)}",
+                    message=f"Cannot convert to list: {e!s}",
                     field_name=self.name,
                     code="invalid_type",
                     context=context,
                 )
 
-            value_list: List[Any] = cast(List[Any], value)
+            value_list: list[Any] = cast(list[Any], value)
 
             # Validate length
             if self.min_length is not None and len(value_list) < self.min_length:
@@ -195,26 +189,20 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
                 **(context or {}),
                 "parent_field": self,
                 "parent_value": value_list,
-                "validation_path": (
-                    f"{context.get('validation_path', '')}.{self.name}"
-                    if context
-                    else self.name
-                ),
+                "validation_path": (f"{context.get('validation_path', '')}.{self.name}" if context else self.name),
             }
 
             # Validate elements
-            validated_elements: List[T] = []
+            validated_elements: list[T] = []
             for i, element in enumerate(value_list):
                 try:
                     element_context["index"] = i
-                    validated = await self.element_field.validate(
-                        element, element_context
-                    )
+                    validated = await self.element_field.validate(element, element_context)
                     if validated is not None:
                         validated_elements.append(validated)
                 except FieldValidationError as e:
                     raise FieldValidationError(
-                        message=f"Invalid element at index {i}: {str(e)}",
+                        message=f"Invalid element at index {i}: {e!s}",
                         field_name=self.name,
                         code="invalid_element",
                         context=element_context,
@@ -223,7 +211,7 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
             # Validate uniqueness
             if self.unique and validated_elements:
                 seen: set[T] = set()
-                duplicates: List[int] = []
+                duplicates: list[int] = []
                 for i, element in enumerate(validated_elements):
                     if element in seen:
                         duplicates.append(i)
@@ -242,7 +230,7 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
 
         return None
 
-    async def convert(self, value: Any) -> Optional[List[T]]:
+    async def convert(self, value: Any) -> list[T] | None:
         """Convert value to list.
 
         Args:
@@ -270,7 +258,7 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
                         )
                 except json.JSONDecodeError as e:
                     raise FieldValidationError(
-                        message=f"Invalid JSON array: {str(e)}",
+                        message=f"Invalid JSON array: {e!s}",
                         field_name=self.name,
                         code="invalid_json",
                     ) from e
@@ -280,7 +268,7 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
                 value = list(cast(Sequence[Any], value))
             except (TypeError, ValueError) as e:
                 raise FieldValidationError(
-                    message=f"Cannot convert to list: {str(e)}",
+                    message=f"Cannot convert to list: {e!s}",
                     field_name=self.name,
                     code="conversion_error",
                 ) from e
@@ -300,7 +288,7 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
                 )
 
             # Convert elements
-            result: List[T] = []
+            result: list[T] = []
             for i, element in enumerate(value):
                 try:
                     converted = await self.element_field.convert(element)
@@ -308,7 +296,7 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
                         result.append(converted)
                 except FieldValidationError as e:
                     raise FieldValidationError(
-                        message=f"Cannot convert element at index {i}: {str(e)}",
+                        message=f"Cannot convert element at index {i}: {e!s}",
                         field_name=self.name,
                         code="conversion_error",
                     ) from e
@@ -316,7 +304,7 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
             # Validate uniqueness
             if self.unique and result:
                 seen: set[T] = set()
-                duplicates: List[int] = []
+                duplicates: list[int] = []
                 for i, element in enumerate(result):
                     if element in seen:
                         duplicates.append(i)
@@ -334,12 +322,12 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
 
         except Exception as e:
             raise FieldValidationError(
-                message=f"Cannot convert to list: {str(e)}",
+                message=f"Cannot convert to list: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
 
-    async def to_db(self, value: Optional[List[T]], backend: str) -> DatabaseValue:
+    async def to_db(self, value: list[T] | None, backend: str) -> DatabaseValue:
         """Convert list to database format.
 
         Args:
@@ -356,19 +344,19 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
             return None
 
         try:
-            result: List[DatabaseValue] = []
+            result: list[DatabaseValue] = []
             for element in value:
                 db_value = await self.element_field.to_db(element, backend)
                 result.append(db_value)
             return result
         except Exception as e:
             raise FieldValidationError(
-                message=f"Cannot convert list to database format: {str(e)}",
+                message=f"Cannot convert list to database format: {e!s}",
                 field_name=self.name,
                 code="db_conversion_error",
             ) from e
 
-    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[List[T]]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> list[T] | None:
         """Convert database value to list.
 
         Args:
@@ -392,7 +380,7 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
             )
 
         try:
-            result: List[T] = []
+            result: list[T] = []
             for i, element in enumerate(value):
                 try:
                     converted = await self.element_field.from_db(element, backend)
@@ -400,7 +388,7 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
                         result.append(converted)
                 except Exception as e:
                     raise FieldValidationError(
-                        message=f"Cannot convert database value at index {i}: {str(e)}",
+                        message=f"Cannot convert database value at index {i}: {e!s}",
                         field_name=self.name,
                         code="db_conversion_error",
                     ) from e
@@ -408,7 +396,7 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
             return result
         except Exception as e:
             raise FieldValidationError(
-                message=f"Cannot convert database value to list: {str(e)}",
+                message=f"Cannot convert database value to list: {e!s}",
                 field_name=self.name,
                 code="db_conversion_error",
             ) from e
@@ -427,11 +415,8 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
 
         try:
             if isinstance(value, (list, tuple)):
-                return [
-                    getattr(self.element_field, "_prepare_value")(x)
-                    for x in cast(Sequence[T], value)
-                ]
-            return [getattr(self.element_field, "_prepare_value")(value)]
+                return [self.element_field._prepare_value(x) for x in cast(Sequence[T], value)]
+            return [self.element_field._prepare_value(value)]
         except (TypeError, ValueError, AttributeError):
             return None
 
@@ -457,7 +442,7 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
         """
         return ComparisonOperator(self.name, "not_contains", self._prepare_value(value))
 
-    def contains_all(self, values: Union[List[T], Sequence[T]]) -> ComparisonOperator:
+    def contains_all(self, values: list[T] | Sequence[T]) -> ComparisonOperator:
         """Check if list contains all values.
 
         Args:
@@ -466,11 +451,9 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
         Returns:
             ComparisonOperator: Comparison operator with field name and values
         """
-        return ComparisonOperator(
-            self.name, "contains_all", self._prepare_value(values)
-        )
+        return ComparisonOperator(self.name, "contains_all", self._prepare_value(values))
 
-    def contains_any(self, values: Union[List[T], Sequence[T]]) -> ComparisonOperator:
+    def contains_any(self, values: list[T] | Sequence[T]) -> ComparisonOperator:
         """Check if list contains any value.
 
         Args:
@@ -479,9 +462,7 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
         Returns:
             ComparisonOperator: Comparison operator with field name and values
         """
-        return ComparisonOperator(
-            self.name, "contains_any", self._prepare_value(values)
-        )
+        return ComparisonOperator(self.name, "contains_any", self._prepare_value(values))
 
     def length_equals(self, length: int) -> ComparisonOperator:
         """Check if list length equals value.
@@ -532,7 +513,7 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
         """
         return ComparisonOperator(self.name, "is_not_empty", None)
 
-    def sum_equals(self, value: Union[int, float]) -> ComparisonOperator:
+    def sum_equals(self, value: int | float) -> ComparisonOperator:
         """Check if sum of list elements equals value.
 
         Args:
@@ -543,7 +524,7 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
         """
         return ComparisonOperator(self.name, "sum_equals", value)
 
-    def sum_greater_than(self, value: Union[int, float]) -> ComparisonOperator:
+    def sum_greater_than(self, value: int | float) -> ComparisonOperator:
         """Check if sum of list elements is greater than value.
 
         Args:
@@ -554,7 +535,7 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
         """
         return ComparisonOperator(self.name, "sum_greater_than", value)
 
-    def sum_less_than(self, value: Union[int, float]) -> ComparisonOperator:
+    def sum_less_than(self, value: int | float) -> ComparisonOperator:
         """Check if sum of list elements is less than value.
 
         Args:
@@ -565,7 +546,7 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
         """
         return ComparisonOperator(self.name, "sum_less_than", value)
 
-    def average_equals(self, value: Union[int, float]) -> ComparisonOperator:
+    def average_equals(self, value: int | float) -> ComparisonOperator:
         """Check if average of list elements equals value.
 
         Args:
@@ -576,7 +557,7 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
         """
         return ComparisonOperator(self.name, "average_equals", value)
 
-    def average_greater_than(self, value: Union[int, float]) -> ComparisonOperator:
+    def average_greater_than(self, value: int | float) -> ComparisonOperator:
         """Check if average of list elements is greater than value.
 
         Args:
@@ -587,7 +568,7 @@ class ListField(BaseField[List[T]], FieldComparisonMixin, Generic[T]):
         """
         return ComparisonOperator(self.name, "average_greater_than", value)
 
-    def average_less_than(self, value: Union[int, float]) -> ComparisonOperator:
+    def average_less_than(self, value: int | float) -> ComparisonOperator:
         """Check if average of list elements is less than value.
 
         Args:

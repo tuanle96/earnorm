@@ -69,7 +69,7 @@ See Also:
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional, Self, TypeVar, Union, cast
+from typing import Any, Self, TypeVar, cast
 from urllib.parse import parse_qs, urlparse
 
 import yaml
@@ -88,13 +88,13 @@ logger = logging.getLogger(__name__)
 CONFIG_PREFIXES = ("MONGO_", "REDIS_", "CACHE_", "EVENT_")
 
 # Type for config data
-ConfigData = Dict[str, Union[str, int, bool]]
+ConfigData = dict[str, str | int | bool]
 
 # Type variable for SystemConfigData
 T = TypeVar("T", bound="SystemConfigData")
 
 
-def validate_pool_sizes(min_size: Optional[int], max_size: Optional[int]) -> None:
+def validate_pool_sizes(min_size: int | None, max_size: int | None) -> None:
     """Validate pool size configuration.
 
     This function validates that:
@@ -114,8 +114,7 @@ def validate_pool_sizes(min_size: Optional[int], max_size: Optional[int]) -> Non
 
     if min_size > max_size:
         raise ConfigValidationError(
-            f"Minimum pool size ({min_size}) cannot be greater than "
-            f"maximum pool size ({max_size})"
+            f"Minimum pool size ({min_size}) cannot be greater than " f"maximum pool size ({max_size})"
         )
 
 
@@ -213,15 +212,9 @@ class SystemConfigData:
     )
 
     # Redis Configuration
-    redis_host = StringField(
-        required=True, min_length=1, max_length=255, description="Redis server host"
-    )
-    redis_port = IntegerField(
-        default=6379, min_value=1, max_value=65535, description="Redis server port"
-    )
-    redis_db = IntegerField(
-        default=0, min_value=0, max_value=15, description="Redis database number"
-    )
+    redis_host = StringField(required=True, min_length=1, max_length=255, description="Redis server host")
+    redis_port = IntegerField(default=6379, min_value=1, max_value=65535, description="Redis server port")
+    redis_db = IntegerField(default=0, min_value=0, max_value=15, description="Redis database number")
     redis_min_pool_size = IntegerField(
         default=5,
         min_value=1,
@@ -259,7 +252,7 @@ class SystemConfigData:
         description="Event batch size",
     )
 
-    def __init__(self, data: Optional[ConfigData] = None) -> None:
+    def __init__(self, data: ConfigData | None = None) -> None:
         """Initialize configuration data.
 
         Args:
@@ -269,17 +262,13 @@ class SystemConfigData:
         self._fields = self._get_fields()
 
     @classmethod
-    def _get_fields(cls) -> Dict[str, BaseField[Any]]:
+    def _get_fields(cls) -> dict[str, BaseField[Any]]:
         """Get all field definitions.
 
         Returns:
             Dictionary mapping field names to field instances
         """
-        return {
-            name: field
-            for name, field in cls.__dict__.items()
-            if isinstance(field, BaseField)
-        }
+        return {name: field for name, field in cls.__dict__.items() if isinstance(field, BaseField)}
 
     def validate(self) -> None:
         """Validate all configuration settings.
@@ -305,7 +294,7 @@ class SystemConfigData:
             logger.debug("Cache config validation passed")
 
         except ConfigValidationError as e:
-            logger.error(f"Config validation failed: {str(e)}")
+            logger.error(f"Config validation failed: {e!s}")
             raise
 
     def _validate_database_config(self) -> None:
@@ -327,15 +316,13 @@ class SystemConfigData:
             raise ConfigValidationError("Database name is required")
 
         # Validate pool sizes
-        min_size = cast(Optional[int], self._data.get("database_min_pool_size"))
-        max_size = cast(Optional[int], self._data.get("database_max_pool_size"))
+        min_size = cast(int | None, self._data.get("database_min_pool_size"))
+        max_size = cast(int | None, self._data.get("database_max_pool_size"))
         validate_pool_sizes(min_size, max_size)
 
         # Validate MongoDB URI format
         if not self.validate_mongodb_uri(str(self._data.get("database_uri"))):
-            raise ConfigValidationError(
-                f"Invalid MongoDB URI format: {self._data.get('database_uri')}"
-            )
+            raise ConfigValidationError(f"Invalid MongoDB URI format: {self._data.get('database_uri')}")
 
         # Validate database options
         self._validate_database_options()
@@ -348,8 +335,8 @@ class SystemConfigData:
         """
         logger.debug("Validating Redis config")
 
-        min_size = cast(Optional[int], self._data.get("redis_min_pool_size"))
-        max_size = cast(Optional[int], self._data.get("redis_max_pool_size"))
+        min_size = cast(int | None, self._data.get("redis_min_pool_size"))
+        max_size = cast(int | None, self._data.get("redis_max_pool_size"))
         validate_pool_sizes(min_size, max_size)
 
     def _validate_cache_config(self) -> None:
@@ -363,9 +350,7 @@ class SystemConfigData:
         backend = self._data.get("cache_backend")
         if backend == "redis":
             if not self._data.get("redis_host"):
-                raise ConfigValidationError(
-                    "Redis host is required when using Redis cache backend"
-                )
+                raise ConfigValidationError("Redis host is required when using Redis cache backend")
 
     @staticmethod
     def validate_mongodb_uri(uri: str) -> bool:
@@ -405,14 +390,10 @@ class SystemConfigData:
 
             # Check for recommended params
             recommended_params = ["retryWrites", "retryReads"]
-            missing_params = [
-                param for param in recommended_params if param not in params
-            ]
+            missing_params = [param for param in recommended_params if param not in params]
 
             if missing_params:
-                logger.warning(
-                    "Missing recommended MongoDB URI parameters: %s", missing_params
-                )
+                logger.warning("Missing recommended MongoDB URI parameters: %s", missing_params)
 
             return True
 
@@ -421,7 +402,7 @@ class SystemConfigData:
             return False
 
     @classmethod
-    async def load_yaml(cls, yaml_file: Union[str, Path]) -> Self:
+    async def load_yaml(cls, yaml_file: str | Path) -> Self:
         """Load configuration from YAML file.
 
         Args:
@@ -437,15 +418,13 @@ class SystemConfigData:
             logger.debug(f"Loading config from YAML file: {yaml_file}")
 
             # Read YAML file
-            with open(yaml_file, "r", encoding="utf-8") as f:
+            with open(yaml_file, encoding="utf-8") as f:
                 config_data = yaml.safe_load(f)
 
             logger.debug(f"Loaded raw config data: {config_data}")
             logger.debug(f"Database URI type: {type(config_data.get('database_uri'))}")
             logger.debug(f"Database URI value: '{config_data.get('database_uri')}'")
-            logger.debug(
-                f"Database URI length: {len(str(config_data.get('database_uri')))}"
-            )
+            logger.debug(f"Database URI length: {len(str(config_data.get('database_uri')))}")
 
             # Create config instance
             instance = cls(config_data)
@@ -454,11 +433,11 @@ class SystemConfigData:
             return instance
 
         except Exception as e:
-            logger.error(f"Failed to load config from YAML: {str(e)}")
+            logger.error(f"Failed to load config from YAML: {e!s}")
             raise ConfigError(f"Failed to load config from YAML: {e}") from e
 
     @classmethod
-    async def load_env(cls, path: Optional[Union[str, Path]] = None) -> Self:
+    async def load_env(cls, path: str | Path | None = None) -> Self:
         """Load configuration from environment variables.
 
         Args:
@@ -522,7 +501,7 @@ class SystemConfigData:
             raise AttributeError(f"Configuration has no attribute '{name}'")
 
     @property
-    def database_options(self) -> Dict[str, Any]:
+    def database_options(self) -> dict[str, Any]:
         """Get database connection options.
 
         Returns:
@@ -559,22 +538,16 @@ class SystemConfigData:
         for field in timeout_fields:
             value = options.get(field)
             if value is not None and not isinstance(value, int):
-                raise ConfigValidationError(
-                    f"Invalid {field} value: {value}. Must be an integer"
-                )
+                raise ConfigValidationError(f"Invalid {field} value: {value}. Must be an integer")
 
         # Validate boolean flags
         bool_fields = ["retry_writes", "retry_reads", "j"]
         for field in bool_fields:
             value = options.get(field)
             if value is not None and not isinstance(value, bool):
-                raise ConfigValidationError(
-                    f"Invalid {field} value: {value}. Must be a boolean"
-                )
+                raise ConfigValidationError(f"Invalid {field} value: {value}. Must be a boolean")
 
         # Validate write concern
         w = options.get("w")
         if w is not None and not isinstance(w, (int, str)):
-            raise ConfigValidationError(
-                f"Invalid write concern (w) value: {w}. Must be an integer or string"
-            )
+            raise ConfigValidationError(f"Invalid write concern (w) value: {w}. Must be an integer or string")

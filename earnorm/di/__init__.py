@@ -116,7 +116,7 @@ async def init_container(config: "SystemConfig") -> None:
         logger.debug("Lifecycle manager retrieved successfully")
 
     except Exception as e:
-        logger.error(f"Failed to initialize DI container: {str(e)}")
+        logger.error(f"Failed to initialize DI container: {e!s}")
         raise
 
 

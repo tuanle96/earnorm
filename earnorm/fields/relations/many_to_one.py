@@ -34,7 +34,7 @@ Examples:
     >>> posts = await user.posts
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Generic, Optional, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from earnorm.fields.relations.base import ModelType, RelationField
 from earnorm.types.models import ModelProtocol
@@ -93,14 +93,14 @@ class ManyToOneField(RelationField[T], Generic[T]):
         self,
         model: ModelType[T],
         *,
-        related_name: Optional[str] = None,
+        related_name: str | None = None,
         on_delete: str = "CASCADE",
         required: bool = False,
-        help: Optional[str] = None,
-        **options: Dict[str, Any],
+        help: str | None = None,
+        **options: dict[str, Any],
     ) -> None:
         field_options = cast(
-            Dict[str, Any],
+            dict[str, Any],
             {
                 **options,
                 "index": True,
@@ -117,7 +117,7 @@ class ManyToOneField(RelationField[T], Generic[T]):
             **field_options,
         )
 
-    def __set__(self, instance: Any, value: Optional[T]) -> None:
+    def __set__(self, instance: Any, value: T | None) -> None:
         """Set related record.
 
         Args:

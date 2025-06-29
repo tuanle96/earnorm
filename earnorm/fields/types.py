@@ -3,9 +3,8 @@
 This module provides type definitions for field validation.
 """
 
-from dataclasses import dataclass
-from dataclasses import field as dataclass_field
-from typing import Any, Dict, Optional, Protocol
+from dataclasses import dataclass, field as dataclass_field
+from typing import Any, Protocol
 
 
 class EnvironmentProtocol(Protocol):
@@ -40,8 +39,8 @@ class ValidationContext:
     """
 
     field: FieldProtocol
-    value: Optional[Any] = None
-    model: Optional[ModelProtocol] = None
-    env: Optional[EnvironmentProtocol] = None
-    operation: Optional[str] = None
-    values: Dict[str, Any] = dataclass_field(default_factory=dict)
+    value: Any | None = None
+    model: ModelProtocol | None = None
+    env: EnvironmentProtocol | None = None
+    operation: str | None = None
+    values: dict[str, Any] = dataclass_field(default_factory=dict)

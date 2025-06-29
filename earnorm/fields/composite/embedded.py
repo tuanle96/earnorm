@@ -33,13 +33,9 @@ Examples:
 
 from typing import (
     Any,
-    Dict,
     Generic,
-    Optional,
     Protocol,
-    Type,
     TypeVar,
-    Union,
     runtime_checkable,
 )
 
@@ -48,7 +44,7 @@ from earnorm.exceptions import FieldValidationError, ModelResolutionError
 from earnorm.fields.base import BaseField
 from earnorm.types.fields import ComparisonOperator, FieldComparisonMixin
 
-JsonDict = Dict[str, Any]
+JsonDict = dict[str, Any]
 
 
 @runtime_checkable
@@ -63,7 +59,7 @@ class ModelProtocol(Protocol):
         """Load model from dictionary."""
         ...
 
-    async def validate(self, context: Optional[JsonDict] = None) -> None:
+    async def validate(self, context: JsonDict | None = None) -> None:
         """Validate model instance."""
         ...
 
@@ -76,7 +72,7 @@ class ModelProtocol(Protocol):
 class Environment(Protocol):
     """Protocol for environment interface."""
 
-    async def get_model(self, name: str) -> Type[ModelProtocol]:
+    async def get_model(self, name: str) -> type[ModelProtocol]:
         """Get model class by name."""
         ...
 
@@ -89,7 +85,7 @@ class Container(Protocol):
         """Get service by key."""
         ...
 
-    async def get_environment(self) -> Optional[Environment]:
+    async def get_environment(self) -> Environment | None:
         """Get environment instance."""
         ...
 
@@ -115,14 +111,14 @@ class EmbeddedField(BaseField[T], FieldComparisonMixin, Generic[T]):
         backend_options: Database backend options
     """
 
-    model_type: Union[str, Type[T]]
+    model_type: str | type[T]
     lazy: bool
-    _model_class: Optional[Type[T]]
-    backend_options: Dict[str, Any]
+    _model_class: type[T] | None
+    backend_options: dict[str, Any]
 
     def __init__(
         self,
-        model_type: Union[str, Type[T]],
+        model_type: str | type[T],
         *,
         lazy: bool = False,
         **options: Any,
@@ -155,7 +151,7 @@ class EmbeddedField(BaseField[T], FieldComparisonMixin, Generic[T]):
                 **mapper.get_field_options(self),
             }
 
-    async def get_model_class(self) -> Type[T]:
+    async def get_model_class(self) -> type[T]:
         """Get model class instance.
 
         This method handles lazy loading of model classes.
@@ -186,13 +182,13 @@ class EmbeddedField(BaseField[T], FieldComparisonMixin, Generic[T]):
 
             except Exception as e:
                 raise ModelResolutionError(
-                    message=f"Cannot resolve model class {self.model_type}: {str(e)}",
+                    message=f"Cannot resolve model class {self.model_type}: {e!s}",
                     field_name=self.name,
                 ) from e
 
         return self.model_type
 
-    async def prepare_value(self, value: Optional[Union[T, JsonDict]]) -> Optional[T]:
+    async def prepare_value(self, value: T | JsonDict | None) -> T | None:
         """Prepare value for validation.
 
         This method handles conversion from dictionary to model instance.
@@ -219,10 +215,7 @@ class EmbeddedField(BaseField[T], FieldComparisonMixin, Generic[T]):
                 return value
             else:
                 raise FieldValidationError(
-                    message=(
-                        f"Expected {model_class.__name__} or dict, "
-                        f"got {type(value).__name__}"
-                    ),
+                    message=(f"Expected {model_class.__name__} or dict, " f"got {type(value).__name__}"),
                     field_name=self.name,
                     code="invalid_type",
                 )
@@ -236,8 +229,8 @@ class EmbeddedField(BaseField[T], FieldComparisonMixin, Generic[T]):
 
     async def validate_value(
         self,
-        value: Optional[T],
-        context: Optional[JsonDict] = None,
+        value: T | None,
+        context: JsonDict | None = None,
     ) -> None:
         """Validate value.
 
@@ -262,7 +255,7 @@ class EmbeddedField(BaseField[T], FieldComparisonMixin, Generic[T]):
                 code="validation_error",
             ) from e
 
-    def prepare_for_comparison(self, value: Any) -> Optional[JsonDict]:
+    def prepare_for_comparison(self, value: Any) -> JsonDict | None:
         """Prepare model instance for comparison.
 
         Args:
@@ -294,7 +287,7 @@ class EmbeddedField(BaseField[T], FieldComparisonMixin, Generic[T]):
         """
         return ComparisonOperator(self.name, "has_field", field_name)
 
-    def matches(self, query: Dict[str, Any]) -> ComparisonOperator:
+    def matches(self, query: dict[str, Any]) -> ComparisonOperator:
         """Check if model matches query.
 
         Args:

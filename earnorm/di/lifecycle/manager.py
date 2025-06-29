@@ -38,7 +38,7 @@ Example:
 """
 
 import logging
-from typing import Dict, List, Optional, Type, TypeVar
+from typing import TypeVar
 
 from earnorm.di.lifecycle.events import LifecycleEvents
 from earnorm.di.lifecycle.protocol import LifecycleAware
@@ -94,10 +94,10 @@ class LifecycleManager:
         2. Event system for lifecycle events
         3. Error handling configuration
         """
-        self._objects: Dict[str, LifecycleAware] = {}
+        self._objects: dict[str, LifecycleAware] = {}
         self._events = LifecycleEvents()
 
-    async def init(self, obj: T, name: Optional[str] = None) -> T:
+    async def init(self, obj: T, name: str | None = None) -> T:
         """Initialize an object.
 
         This method:
@@ -209,7 +209,7 @@ class LifecycleManager:
         for name in list(self._objects.keys()):
             await self.destroy(name)
 
-    def get(self, name: str) -> Optional[LifecycleAware]:
+    def get(self, name: str) -> LifecycleAware | None:
         """Get a managed object by name.
 
         Args:
@@ -225,7 +225,7 @@ class LifecycleManager:
         """
         return self._objects.get(name)
 
-    def get_all(self) -> List[LifecycleAware]:
+    def get_all(self) -> list[LifecycleAware]:
         """Get all managed objects.
 
         Returns:
@@ -238,7 +238,7 @@ class LifecycleManager:
         """
         return list(self._objects.values())
 
-    def get_by_type(self, type_: Type[T]) -> List[T]:
+    def get_by_type(self, type_: type[T]) -> list[T]:
         """Get all objects of a specific type.
 
         Args:

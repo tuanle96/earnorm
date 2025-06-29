@@ -19,7 +19,7 @@ Examples:
 """
 
 from datetime import datetime, timedelta
-from typing import Any, Dict, Final, Optional, Union
+from typing import Any, Final
 
 from bson import ObjectId, errors
 
@@ -73,9 +73,7 @@ class ObjectIdField(BaseField[ObjectId], FieldComparisonMixin):
             "mysql": {"type": "CHAR(24)"},
         }
 
-    async def validate(
-        self, value: Any, context: Optional[Dict[str, Any]] = None
-    ) -> Any:
+    async def validate(self, value: Any, context: dict[str, Any] | None = None) -> Any:
         """Validate ObjectId value.
 
         This method validates:
@@ -114,14 +112,14 @@ class ObjectIdField(BaseField[ObjectId], FieldComparisonMixin):
                     raise ValueError("Invalid ObjectId format")
             except (TypeError, ValueError) as e:
                 raise FieldValidationError(
-                    message=f"Invalid ObjectId value: {str(e)}",
+                    message=f"Invalid ObjectId value: {e!s}",
                     field_name=self.name,
                     code="invalid_format",
                 ) from e
 
         return value
 
-    async def convert(self, value: Any) -> Optional[ObjectId]:
+    async def convert(self, value: Any) -> ObjectId | None:
         """Convert value to ObjectId.
 
         Handles:
@@ -150,12 +148,12 @@ class ObjectIdField(BaseField[ObjectId], FieldComparisonMixin):
                 raise TypeError(f"Cannot convert {type(value).__name__} to ObjectId")
         except (TypeError, errors.InvalidId) as e:
             raise FieldValidationError(
-                message=f"Cannot convert value to ObjectId: {str(e)}",
+                message=f"Cannot convert value to ObjectId: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
 
-    async def to_db(self, value: Optional[ObjectId], backend: str) -> DatabaseValue:
+    async def to_db(self, value: ObjectId | None, backend: str) -> DatabaseValue:
         """Convert ObjectId to database format.
 
         Args:
@@ -172,7 +170,7 @@ class ObjectIdField(BaseField[ObjectId], FieldComparisonMixin):
             return value  # type: ignore
         return str(value)
 
-    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[ObjectId]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> ObjectId | None:
         """Convert database value to ObjectId.
 
         Args:
@@ -197,7 +195,7 @@ class ObjectIdField(BaseField[ObjectId], FieldComparisonMixin):
                 raise TypeError(f"Cannot convert {type(value).__name__} to ObjectId")
         except (TypeError, errors.InvalidId) as e:
             raise FieldValidationError(
-                message=f"Cannot convert database value to ObjectId: {str(e)}",
+                message=f"Cannot convert database value to ObjectId: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
@@ -225,7 +223,7 @@ class ObjectIdField(BaseField[ObjectId], FieldComparisonMixin):
         except (TypeError, ValueError):
             return None
 
-    def equals(self, value: Union[ObjectId, str]) -> ComparisonOperator:
+    def equals(self, value: ObjectId | str) -> ComparisonOperator:
         """Check if value equals another ObjectId.
 
         Args:
@@ -236,7 +234,7 @@ class ObjectIdField(BaseField[ObjectId], FieldComparisonMixin):
         """
         return ComparisonOperator(self.name, "eq", self._prepare_value(value))
 
-    def not_equals(self, value: Union[ObjectId, str]) -> ComparisonOperator:
+    def not_equals(self, value: ObjectId | str) -> ComparisonOperator:
         """Check if value does not equal another ObjectId.
 
         Args:
@@ -247,7 +245,7 @@ class ObjectIdField(BaseField[ObjectId], FieldComparisonMixin):
         """
         return ComparisonOperator(self.name, "ne", self._prepare_value(value))
 
-    def in_list(self, values: list[Union[ObjectId, str]]) -> ComparisonOperator:
+    def in_list(self, values: list[ObjectId | str]) -> ComparisonOperator:
         """Check if value is in list of ObjectIds.
 
         Args:
@@ -259,7 +257,7 @@ class ObjectIdField(BaseField[ObjectId], FieldComparisonMixin):
         prepared_values = [self._prepare_value(value) for value in values]
         return ComparisonOperator(self.name, "in", prepared_values)
 
-    def not_in_list(self, values: list[Union[ObjectId, str]]) -> ComparisonOperator:
+    def not_in_list(self, values: list[ObjectId | str]) -> ComparisonOperator:
         """Check if value is not in list of ObjectIds.
 
         Args:
@@ -303,9 +301,7 @@ class ObjectIdField(BaseField[ObjectId], FieldComparisonMixin):
         Returns:
             ComparisonOperator: Comparison operator with field name and values
         """
-        return ComparisonOperator(
-            self.name, "created_between", [start.isoformat(), end.isoformat()]
-        )
+        return ComparisonOperator(self.name, "created_between", [start.isoformat(), end.isoformat()])
 
     def created_days_ago(self, days: int) -> ComparisonOperator:
         """Check if ObjectId was created within last N days.

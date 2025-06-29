@@ -10,18 +10,13 @@ It handles:
 """
 
 import logging
+from collections.abc import Callable, Coroutine
+from re import Pattern
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
-    Coroutine,
-    Dict,
     Generic,
-    List,
-    Optional,
-    Pattern,
     Protocol,
-    Type,
     TypeVar,
     Union,
     cast,
@@ -47,15 +42,11 @@ logger = logging.getLogger(__name__)
 class DatabaseAdapterProtocol(Protocol):
     """Protocol for database adapter interface."""
 
-    async def convert_value(
-        self, value: Any, field_type: str, target_type: Type[Any]
-    ) -> Any:
+    async def convert_value(self, value: Any, field_type: str, target_type: type[Any]) -> Any:
         """Convert value between database and Python types."""
         ...
 
-    async def setup_relations(
-        self, model: Type["BaseModel"], relations: Dict[str, "RelationOptions"]
-    ) -> None:
+    async def setup_relations(self, model: type["BaseModel"], relations: dict[str, "RelationOptions"]) -> None:
         """Set up database relations."""
         ...
 
@@ -65,7 +56,7 @@ class DatabaseAdapterProtocol(Protocol):
         field_name: str,
         relation_type: "RelationType",
         options: "RelationOptions",
-    ) -> Union[Optional[Any], List[Any]]:
+    ) -> Any | None | list[Any]:
         """Get related records."""
         ...
 
@@ -73,7 +64,7 @@ class DatabaseAdapterProtocol(Protocol):
         self,
         instance: Any,
         field_name: str,
-        value: Union[Optional[Any], List[Any]],
+        value: Any | None | list[Any],
         relation_type: "RelationType",
         options: "RelationOptions",
     ) -> None:
@@ -99,7 +90,7 @@ class EnvironmentProtocol(Protocol):
         """Get database adapter."""
         ...
 
-    async def get_model(self, name: str) -> Type["BaseModel"]:
+    async def get_model(self, name: str) -> type["BaseModel"]:
         """Get model by name."""
         ...
 
@@ -196,7 +187,7 @@ class FieldComparison:
         """
         return ComparisonOperator(self.field_name, "<=", other)
 
-    def in_(self, values: List[Any]) -> ComparisonOperator:
+    def in_(self, values: list[Any]) -> ComparisonOperator:
         """Check if field value is in list.
 
         Args:
@@ -207,7 +198,7 @@ class FieldComparison:
         """
         return ComparisonOperator(self.field_name, "in", values)
 
-    def not_in(self, values: List[Any]) -> ComparisonOperator:
+    def not_in(self, values: list[Any]) -> ComparisonOperator:
         """Check if field value is not in list.
 
         Args:
@@ -244,7 +235,7 @@ class FieldComparison:
         """
         return ComparisonOperator(self.field_name, "ilike", pattern)
 
-    def regex(self, pattern: Union[str, Pattern[str]]) -> ComparisonOperator:
+    def regex(self, pattern: str | Pattern[str]) -> ComparisonOperator:
         """Case-sensitive regular expression matching.
 
         Args:
@@ -255,7 +246,7 @@ class FieldComparison:
         """
         return ComparisonOperator(self.field_name, "regex", pattern)
 
-    def iregex(self, pattern: Union[str, Pattern[str]]) -> ComparisonOperator:
+    def iregex(self, pattern: str | Pattern[str]) -> ComparisonOperator:
         """Case-insensitive regular expression matching.
 
         Args:
@@ -329,7 +320,7 @@ class FieldComparison:
         """
         return ComparisonOperator(self.field_name, "not_contains", value)
 
-    def all(self, values: List[Any]) -> ComparisonOperator:
+    def all(self, values: list[Any]) -> ComparisonOperator:
         """Check if array field contains all values.
 
         Args:
@@ -340,7 +331,7 @@ class FieldComparison:
         """
         return ComparisonOperator(self.field_name, "all", values)
 
-    def any(self, values: List[Any]) -> ComparisonOperator:
+    def any(self, values: list[Any]) -> ComparisonOperator:
         """Check if array field contains any of the values.
 
         Args:
@@ -363,9 +354,7 @@ class FieldComparison:
         return ComparisonOperator(self.field_name, "size", size)
 
     # String operations
-    def starts_with(
-        self, prefix: str, case_sensitive: bool = True
-    ) -> ComparisonOperator:
+    def starts_with(self, prefix: str, case_sensitive: bool = True) -> ComparisonOperator:
         """Check if string field starts with prefix.
 
         Args:
@@ -425,7 +414,7 @@ class FieldComparison:
         """
         return ComparisonOperator(self.field_name, "not_exists", field)
 
-    def matches(self, query: Dict[str, Any]) -> ComparisonOperator:
+    def matches(self, query: dict[str, Any]) -> ComparisonOperator:
         """Check if document field matches query.
 
         Args:
@@ -475,16 +464,16 @@ class BaseField(Generic[T]):
 
     name: str
     model_name: str
-    _value: Optional[T]
-    _options: Dict[str, Any]
+    _value: T | None
+    _options: dict[str, Any]
     required: bool
     readonly: bool
     store: bool
     index: bool
     help: str
-    compute: Optional[Callable[..., Coroutine[Any, Any, T]]]
-    depends: List[str]
-    validators: List[Callable[[Any, ValidationContext], Coroutine[Any, Any, None]]]
+    compute: Callable[..., Coroutine[Any, Any, T]] | None
+    depends: list[str]
+    validators: list[Callable[[Any, ValidationContext], Coroutine[Any, Any, None]]]
     env: EnvironmentProtocol
 
     # System field metadata
@@ -496,7 +485,7 @@ class BaseField(Generic[T]):
 
     # Field type information
     field_type: str = ""  # Database field type (e.g. "string", "integer", etc.)
-    python_type: Type[T] = cast(Type[T], Any)  # Python type for the field
+    python_type: type[T] = cast(type[T], Any)  # Python type for the field
 
     def __init__(self, **kwargs: Any) -> None:
         """Initialize field with options.
@@ -547,9 +536,7 @@ class BaseField(Generic[T]):
                 from earnorm.fields.primitive import DateTimeField
 
                 if not isinstance(self, DateTimeField):
-                    raise ValueError(
-                        "auto_now/auto_now_add can only be used with DateTimeField"
-                    )
+                    raise ValueError("auto_now/auto_now_add can only be used with DateTimeField")
 
             # Immutable fields are readonly
             if self.immutable:
@@ -565,7 +552,7 @@ class BaseField(Generic[T]):
         return FieldComparison(self.name)
 
     @property
-    def default(self) -> Optional[Any]:
+    def default(self) -> Any | None:
         """Get field default value.
 
         Returns:
@@ -583,13 +570,9 @@ class BaseField(Generic[T]):
         logger.info(f"Setting up field {name} for model {model_name}")
         self.name = name
         self.model_name = model_name
-        logger.info(
-            f"Field setup completed: name={self.name}, model_name={self.model_name}"
-        )
+        logger.info(f"Field setup completed: name={self.name}, model_name={self.model_name}")
 
-    async def validate(
-        self, value: Any, context: Optional[Dict[str, Any]] = None
-    ) -> Any:
+    async def validate(self, value: Any, context: dict[str, Any] | None = None) -> Any:
         """Validate field value.
 
         Args:
@@ -620,19 +603,11 @@ class BaseField(Generic[T]):
         # Validate system field constraints
         if self.system:
             # Check immutable constraint
-            if (
-                self.immutable
-                and context.get("operation") == "write"
-                and value is not None
-            ):
+            if self.immutable and context.get("operation") == "write" and value is not None:
                 raise ValueError(f"Field {self.name} is immutable")
 
             # Check internal field access
-            if (
-                self.internal
-                and context.get("operation") in ("create", "write")
-                and not context.get("internal", False)
-            ):
+            if self.internal and context.get("operation") in ("create", "write") and not context.get("internal", False):
                 raise ValueError(f"Field {self.name} is internal")
 
         # Run validators
@@ -641,9 +616,7 @@ class BaseField(Generic[T]):
 
         return value
 
-    async def __get__(
-        self, instance: Any, owner: Optional[Type[Any]] = None
-    ) -> Union["BaseField[T]", Optional[T]]:
+    async def __get__(self, instance: Any, owner: type[Any] | None = None) -> Union["BaseField[T]", T | None]:
         """Get field value from instance.
 
         This implements the descriptor protocol for attribute access.
@@ -684,7 +657,7 @@ class BaseField(Generic[T]):
         except Exception as e:
             # Log error
             logger.error(
-                f"Failed to get field value: {str(e)}",
+                f"Failed to get field value: {e!s}",
                 extra={
                     "model": instance._name,
                     "record_id": instance.id,
@@ -694,12 +667,12 @@ class BaseField(Generic[T]):
             # Re-raise as database error
             if not isinstance(e, DatabaseError):
                 raise DatabaseError(
-                    message=f"Failed to get field value: {str(e)}",
+                    message=f"Failed to get field value: {e!s}",
                     backend="unknown",
                 ) from e
             raise
 
-    def __set__(self, instance: Any, value: Optional[T]) -> None:
+    def __set__(self, instance: Any, value: T | None) -> None:
         """Set field value on instance.
 
         This implements the descriptor protocol for attribute assignment.
@@ -728,7 +701,7 @@ class BaseField(Generic[T]):
 
         except Exception as e:
             logger.error(
-                f"Failed to set field value: {str(e)}",
+                f"Failed to set field value: {e!s}",
                 extra={
                     "model": instance._name,
                     "record_id": instance.id,
@@ -738,7 +711,7 @@ class BaseField(Generic[T]):
             )
             raise
 
-    async def _load_field_value(self, instance: Any) -> Optional[T]:
+    async def _load_field_value(self, instance: Any) -> T | None:
         """Load field value from database.
 
         Args:
@@ -754,6 +727,11 @@ class BaseField(Generic[T]):
         # Get database adapter
         adapter = instance.env.adapter
 
+        # Check if field name is set
+        if not self.name or not self.name.strip():
+            raise ValueError(f"Field name is empty or not set for field {self.__class__.__name__}. "
+                           f"This usually happens when a field is added dynamically without calling __set_name__.")
+
         # Load record from database
         record = await adapter.read(type(instance), instance.id, fields=[self.name])
 
@@ -766,7 +744,7 @@ class BaseField(Generic[T]):
 
         return None
 
-    async def convert(self, value: Any) -> Optional[T]:
+    async def convert(self, value: Any) -> T | None:
         """Convert value to field type.
 
         This method should be overridden by subclasses to implement
@@ -778,9 +756,9 @@ class BaseField(Generic[T]):
         Returns:
             Optional[T]: Converted value
         """
-        return cast(Optional[T], value)
+        return cast(T | None, value)
 
-    async def to_db(self, value: Optional[T], backend: str) -> DatabaseValue:
+    async def to_db(self, value: T | None, backend: str) -> DatabaseValue:
         """Convert Python value to database format.
 
         Args:
@@ -797,13 +775,11 @@ class BaseField(Generic[T]):
             if not hasattr(self, "env"):
                 raise ValueError("Field has no environment")
 
-            return await self.env.adapter.convert_value(
-                value, self.field_type, self.python_type
-            )
+            return await self.env.adapter.convert_value(value, self.field_type, self.python_type)
         except Exception as e:
             raise DatabaseError(message=str(e), backend=backend) from e
 
-    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[T]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> T | None:
         """Convert database value to Python format.
 
         Args:
@@ -820,13 +796,11 @@ class BaseField(Generic[T]):
             if not hasattr(self, "env"):
                 raise ValueError("Field has no environment")
 
-            return await self.env.adapter.convert_value(
-                value, self.field_type, self.python_type
-            )
+            return await self.env.adapter.convert_value(value, self.field_type, self.python_type)
         except Exception as e:
             raise DatabaseError(message=str(e), backend=backend) from e
 
-    def get_backend_options(self, backend: str) -> Dict[str, Any]:
+    def get_backend_options(self, backend: str) -> dict[str, Any]:
         """Get database-specific options.
 
         Args:

@@ -5,7 +5,7 @@ This module contains all custom exceptions used in EarnORM.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 
 class EarnORMError(Exception):
@@ -105,9 +105,9 @@ class ValidationError(BaseException):
     message: str
     field_name: str
     code: str
-    context: Optional[Dict[str, Any]] = None
+    context: dict[str, Any] | None = None
     parent: Optional["ValidationError"] = None
-    children: List["ValidationError"] = field(default_factory=list)
+    children: list["ValidationError"] = field(default_factory=list)
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
     def add_child(self, error: "ValidationError") -> None:
@@ -119,7 +119,7 @@ class ValidationError(BaseException):
         self.children.append(error)
         error.parent = self
 
-    def get_error_tree(self) -> Dict[str, Any]:
+    def get_error_tree(self) -> dict[str, Any]:
         """Get hierarchical error structure.
 
         Returns:
@@ -155,8 +155,8 @@ class FieldValidationError(Exception):
         message: str,
         field_name: str,
         code: str,
-        context: Optional[Dict[str, Any]] = None,
-        parent: Optional[ValidationError] = None,
+        context: dict[str, Any] | None = None,
+        parent: ValidationError | None = None,
     ) -> None:
         """Initialize validation error.
 
@@ -184,7 +184,7 @@ class FieldValidationError(Exception):
         """
         self.error.add_child(error)
 
-    def get_error_tree(self) -> Dict[str, Any]:
+    def get_error_tree(self) -> dict[str, Any]:
         """Get hierarchical error structure.
 
         Returns:
@@ -213,7 +213,7 @@ class UniqueConstraintError(ValidationError):
         *,
         field_name: str,
         value: Any,
-        code: Optional[str] = None,
+        code: str | None = None,
     ) -> None:
         """Initialize unique constraint error.
 
@@ -247,7 +247,7 @@ class FieldError(EarnORMError):
         message: str,
         *,
         field_name: str,
-        code: Optional[str] = None,
+        code: str | None = None,
     ) -> None:
         """Initialize field error.
 
@@ -311,9 +311,7 @@ class RelationModelResolutionError(FieldError):
             message: Error message
             field_name: Field name
         """
-        super().__init__(
-            message, field_name=field_name, code="relation_model_resolution_error"
-        )
+        super().__init__(message, field_name=field_name, code="relation_model_resolution_error")
 
 
 class RelationBackReferenceError(FieldError):
@@ -330,9 +328,7 @@ class RelationBackReferenceError(FieldError):
             message: Error message
             field_name: Field name
         """
-        super().__init__(
-            message, field_name=field_name, code="relation_back_reference_error"
-        )
+        super().__init__(message, field_name=field_name, code="relation_back_reference_error")
 
 
 class RelationLoadError(FieldError):
@@ -367,9 +363,7 @@ class RelationConstraintError(FieldError):
             message: Error message
             field_name: Field name
         """
-        super().__init__(
-            message, field_name=field_name, code="relation_constraint_error"
-        )
+        super().__init__(message, field_name=field_name, code="relation_constraint_error")
 
 
 # Database-related exceptions
@@ -459,9 +453,7 @@ class QueryError(DatabaseError):
 class PoolError(DatabaseError):
     """Base class for pool-related errors."""
 
-    def __init__(
-        self, message: str, *, backend: str, context: Optional[Dict[str, Any]] = None
-    ) -> None:
+    def __init__(self, message: str, *, backend: str, context: dict[str, Any] | None = None) -> None:
         """Initialize pool error.
 
         Args:
@@ -541,7 +533,7 @@ class RetryError(PoolError):
         backend: str,
         attempts: int,
         elapsed: float,
-        last_error: Optional[Exception] = None,
+        last_error: Exception | None = None,
     ) -> None:
         """Initialize retry error.
 
@@ -731,9 +723,7 @@ class InitializationError(EarnORMError):
 class SerializationError(EarnORMError):
     """Error raised when serialization fails."""
 
-    def __init__(
-        self, message: str, *, backend: str, original_error: Optional[Exception] = None
-    ) -> None:
+    def __init__(self, message: str, *, backend: str, original_error: Exception | None = None) -> None:
         """Initialize serialization error.
 
         Args:

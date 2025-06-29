@@ -7,12 +7,8 @@ from typing import (
     Any,
     AsyncContextManager,
     ClassVar,
-    Dict,
-    List,
-    Optional,
     Protocol,
     Self,
-    Union,
     runtime_checkable,
 )
 
@@ -41,22 +37,22 @@ class ModelProtocol(Protocol):
     _name: ClassVar[str]
     """Technical name of the model."""
 
-    _description: ClassVar[Optional[str]]
+    _description: ClassVar[str | None]
     """User-friendly description."""
 
-    _table: ClassVar[Optional[str]]
+    _table: ClassVar[str | None]
     """Database table name."""
 
-    _sequence: ClassVar[Optional[str]]
+    _sequence: ClassVar[str | None]
     """ID sequence name."""
 
-    __fields__: ClassVar[Dict[str, BaseField]]
+    __fields__: ClassVar[dict[str, BaseField]]
     """Model fields dictionary."""
 
     id: str
     """Record ID."""
 
-    async def to_dict(self) -> Dict[str, Any]:
+    async def to_dict(self) -> dict[str, Any]:
         """Convert model to dictionary.
 
         Returns:
@@ -64,7 +60,7 @@ class ModelProtocol(Protocol):
         """
         ...
 
-    def from_dict(self, data: Dict[str, Any]) -> None:
+    def from_dict(self, data: dict[str, Any]) -> None:
         """Update model from dictionary.
 
         Args:
@@ -73,7 +69,7 @@ class ModelProtocol(Protocol):
         ...
 
     @classmethod
-    async def browse(cls, ids: Union[str, List[str]]) -> Self:
+    async def browse(cls, ids: str | list[str]) -> Self:
         """Browse records by IDs.
 
         Args:
@@ -85,7 +81,7 @@ class ModelProtocol(Protocol):
         ...
 
     @classmethod
-    async def create(cls, values: Dict[str, Any]) -> Self:
+    async def create(cls, values: dict[str, Any]) -> Self:
         """Create a new record.
 
         Args:
@@ -105,7 +101,7 @@ class ModelProtocol(Protocol):
         """
         ...
 
-    async def write(self, values: Dict[str, Any]) -> Self:
+    async def write(self, values: dict[str, Any]) -> Self:
         """Update record with values.
 
         Args:
@@ -138,4 +134,4 @@ class ModelProtocol(Protocol):
 # Type aliases
 DatabaseModel = ModelProtocol  # Type alias for database-backed models
 
-__all__ = ["ModelProtocol", "ModelName", "FieldName", "RecordID", "DatabaseModel"]
+__all__ = ["DatabaseModel", "FieldName", "ModelName", "ModelProtocol", "RecordID"]

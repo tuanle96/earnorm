@@ -26,17 +26,17 @@ from earnorm.fields.primitive.string import StringField
 from earnorm.fields.primitive.uuid import UUIDField
 
 __all__ = [
-    "StringField",
-    "IntegerField",
-    "FloatField",
     "BooleanField",
-    "DateTimeField",
     "DateField",
-    "TimeField",
+    "DateTimeField",
     "DecimalField",
-    "UUIDField",
-    "JSONField",
-    "FileField",
     "EnumField",
+    "FileField",
+    "FloatField",
+    "IntegerField",
+    "JSONField",
     "ObjectIdField",
+    "StringField",
+    "TimeField",
+    "UUIDField",
 ]

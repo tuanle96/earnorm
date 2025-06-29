@@ -95,7 +95,7 @@ See Also:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Optional, Type
+from typing import TYPE_CHECKING, Any
 
 from earnorm.base.database.adapter import DatabaseAdapter
 from earnorm.di import container
@@ -110,9 +110,9 @@ logger = logging.getLogger(__name__)
 class Environment:
     """Application environment singleton."""
 
-    _instance: Optional[Environment] = None
+    _instance: Environment | None = None
     _initialized: bool = False
-    _adapter: Optional[DatabaseAdapter[DatabaseModel]] = None
+    _adapter: DatabaseAdapter[DatabaseModel] | None = None
     logger = logging.getLogger(__name__)
 
     def __init__(self) -> None:
@@ -140,7 +140,7 @@ class Environment:
             cls._instance = cls()
         return cls._instance
 
-    async def init(self, config: "SystemConfigData") -> None:
+    async def init(self, config: SystemConfigData) -> None:
         """Initialize environment.
 
         This method:
@@ -174,6 +174,15 @@ class Environment:
 
         self._initialized = True
         self.logger.info("Environment initialized successfully")
+
+        # Register any deferred models now that environment is ready
+        try:
+            self.logger.info("Attempting to register deferred models...")
+            from earnorm.base.model.meta import ModelMeta
+            ModelMeta.register_deferred_models()
+            self.logger.info("Deferred model registration completed")
+        except Exception as e:
+            self.logger.warning(f"Failed to register deferred models: {e}")
 
     async def destroy(self) -> None:
         """Cleanup environment resources.
@@ -252,7 +261,7 @@ class Environment:
 
         return self._adapter
 
-    async def get_model(self, name: str) -> Type[ModelProtocol]:
+    async def get_model(self, name: str) -> type[ModelProtocol]:
         """Get model class by name.
 
         This method retrieves model classes from the registry.

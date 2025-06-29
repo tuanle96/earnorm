@@ -31,10 +31,10 @@ from earnorm.fields.relations.one_to_one import OneToOneField
 from earnorm.types.relations import RelationType
 
 __all__ = [
-    "RelationField",
-    "OneToOneField",
+    "ManyToManyField",
     "ManyToOneField",
     "OneToManyField",
-    "ManyToManyField",
+    "OneToOneField",
+    "RelationField",
     "RelationType",
 ]

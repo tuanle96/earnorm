@@ -11,14 +11,9 @@ from decimal import Decimal
 from enum import Enum
 from typing import (
     Any,
-    Dict,
-    List,
     Literal,
-    Optional,
     Protocol,
-    Type,
     TypeVar,
-    Union,
     cast,
     overload,
 )
@@ -107,12 +102,8 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         """
         super().__init__()
         self._pool_name = pool_name
-        self._pool: Optional[
-            MongoPool[
-                AsyncIOMotorDatabase[Dict[str, Any]], AsyncIOMotorCollection[JsonDict]
-            ]
-        ] = None
-        self._sync_db: Optional[AsyncIOMotorDatabase[Dict[str, Any]]] = None
+        self._pool: MongoPool[AsyncIOMotorDatabase[dict[str, Any]], AsyncIOMotorCollection[JsonDict]] | None = None
+        self._sync_db: AsyncIOMotorDatabase[dict[str, Any]] | None = None
 
     async def init(self) -> None:
         """Initialize the adapter.
@@ -132,9 +123,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
 
     async def get_connection(
         self,
-    ) -> AsyncConnectionProtocol[
-        AsyncIOMotorDatabase[Dict[str, Any]], AsyncIOMotorCollection[JsonDict]
-    ]:
+    ) -> AsyncConnectionProtocol[AsyncIOMotorDatabase[dict[str, Any]], AsyncIOMotorCollection[JsonDict]]:
         """Get a connection from the adapter.
 
         Returns:
@@ -177,15 +166,13 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             mapped_options = self._pool.map_client_options(client_options)
 
             # Create client with mapped options
-            client = AsyncIOMotorClient[Dict[str, Any]](
-                getattr(self._pool, "_uri"),
+            client = AsyncIOMotorClient[dict[str, Any]](
+                self._pool._uri,
                 **mapped_options,
             )
 
             # Get sync database for transactions
-            self._sync_db = AsyncIOMotorDatabase(
-                client, getattr(self._pool, "_database")
-            )
+            self._sync_db = AsyncIOMotorDatabase(client, self._pool._database)
 
             self.logger.info(
                 "Successfully connected to MongoDB with pool: %s",
@@ -231,7 +218,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             # Release connection back to pool
             await self._pool.release(conn)
 
-    def _get_collection_name(self, model_type: Type[ModelT]) -> str:
+    def _get_collection_name(self, model_type: type[ModelT]) -> str:
         """Get collection name for model type.
 
         Args:
@@ -250,9 +237,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             raise ValueError(f"Model {model_type} has no table or name")
         return str(table) if table else str(name)
 
-    def _get_collection(
-        self, model_type: Union[Type[ModelT], str]
-    ) -> AsyncIOMotorCollection[Dict[str, Any]]:
+    def _get_collection(self, model_type: type[ModelT] | str) -> AsyncIOMotorCollection[dict[str, Any]]:
         """Get collection for model.
 
         Args:
@@ -269,7 +254,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
 
         return self._sync_db[collection_name]  # type: ignore
 
-    def _to_object_id(self, str_id: Optional[str]) -> Optional[ObjectId]:
+    def _to_object_id(self, str_id: str | None) -> ObjectId | None:
         """Convert string ID to MongoDB ObjectId.
 
         Args:
@@ -290,7 +275,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             self.logger.warning(f"Failed to convert string ID to ObjectId: {e}")
             return None
 
-    def _to_string_id(self, object_id: Any) -> Optional[str]:
+    def _to_string_id(self, object_id: Any) -> str | None:
         """Convert MongoDB ObjectId to string ID.
 
         Args:
@@ -311,7 +296,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             self.logger.warning(f"Failed to convert ObjectId to string: {e}")
             return None
 
-    async def _convert_document(self, doc: Dict[str, Any]) -> Dict[str, Any]:
+    async def _convert_document(self, doc: dict[str, Any]) -> dict[str, Any]:
         """Convert MongoDB document to internal format.
 
         This method handles the conversion of MongoDB specific types to Python types,
@@ -359,25 +344,19 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             return converted_doc
 
     @overload
-    async def query(
-        self, model_type: Type[ModelT], query_type: Literal["base"] = "base"
-    ) -> BaseQuery[ModelT]: ...
+    async def query(self, model_type: type[ModelT], query_type: Literal["base"] = "base") -> BaseQuery[ModelT]: ...
 
     @overload
-    async def query(
-        self, model_type: Type[ModelT], query_type: Literal["aggregate"]
-    ) -> AggregateQuery[ModelT]: ...
+    async def query(self, model_type: type[ModelT], query_type: Literal["aggregate"]) -> AggregateQuery[ModelT]: ...
 
     @overload
-    async def query(
-        self, model_type: Type[ModelT], query_type: Literal["join"]
-    ) -> JoinQuery[ModelT, Any]: ...
+    async def query(self, model_type: type[ModelT], query_type: Literal["join"]) -> JoinQuery[ModelT, Any]: ...
 
     async def query(
         self,
-        model_type: Type[ModelT],
+        model_type: type[ModelT],
         query_type: Literal["base", "aggregate", "join"] = "base",
-    ) -> Union[BaseQuery[ModelT], AggregateQuery[ModelT], JoinQuery[ModelT, Any]]:
+    ) -> BaseQuery[ModelT] | AggregateQuery[ModelT] | JoinQuery[ModelT, Any]:
         """Create query builder of specified type."""
         collection = self._get_collection(self._get_collection_name(model_type))
 
@@ -392,9 +371,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         else:
             raise ValueError(f"Unsupported query type: {query_type}")
 
-    async def transaction(
-        self, model_type: Type[ModelT]
-    ) -> MongoTransactionManager[ModelT]:
+    async def transaction(self, model_type: type[ModelT]) -> MongoTransactionManager[ModelT]:
         """Create new transaction.
 
         Args:
@@ -407,25 +384,21 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             raise RuntimeError("Not connected to MongoDB")
 
         # Create transaction manager with type hints
-        manager: MongoTransactionManager[ModelT] = MongoTransactionManager(
-            db=self._sync_db
-        )
+        manager: MongoTransactionManager[ModelT] = MongoTransactionManager(db=self._sync_db)
         manager.set_model_type(model_type)
         return manager
 
     @overload
-    async def create(self, model_type: Type[ModelT], values: Dict[str, Any]) -> str: ...
+    async def create(self, model_type: type[ModelT], values: dict[str, Any]) -> str: ...
 
     @overload
-    async def create(
-        self, model_type: Type[ModelT], values: List[Dict[str, Any]]
-    ) -> List[str]: ...
+    async def create(self, model_type: type[ModelT], values: list[dict[str, Any]]) -> list[str]: ...
 
     async def create(
         self,
-        model_type: Type[ModelT],
-        values: Union[Dict[str, Any], List[Dict[str, Any]]],
-    ) -> Union[str, List[str]]:
+        model_type: type[ModelT],
+        values: dict[str, Any] | list[dict[str, Any]],
+    ) -> str | list[str]:
         """Create one or multiple records."""
         try:
             collection = self._get_collection(model_type)
@@ -441,9 +414,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
 
         except Exception as e:
             self.logger.error(f"Failed to create records: {e}")
-            raise DatabaseError(
-                message=f"Failed to create records: {e}", backend="mongodb"
-            ) from e
+            raise DatabaseError(message=f"Failed to create records: {e}", backend="mongodb") from e
 
     @property
     def backend_type(self) -> str:
@@ -460,26 +431,24 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
     @overload
     async def update(
         self,
-        model: Type[ModelT],
-        filter_or_ops: Union[Dict[str, Any], DomainExpression],
-        values: Dict[str, Any],
+        model: type[ModelT],
+        filter_or_ops: dict[str, Any] | DomainExpression,
+        values: dict[str, Any],
     ) -> int: ...
 
     @overload
     async def update(
         self,
-        model: Type[ModelT],
-        filter_or_ops: List[Dict[str, Any]],
-    ) -> Dict[str, int]: ...
+        model: type[ModelT],
+        filter_or_ops: list[dict[str, Any]],
+    ) -> dict[str, int]: ...
 
     async def update(
         self,
-        model: Union[ModelT, Type[ModelT]],
-        filter_or_ops: Optional[
-            Union[Dict[str, Any], DomainExpression, List[Dict[str, Any]]]
-        ] = None,
-        values: Optional[Dict[str, Any]] = None,
-    ) -> Union[ModelT, int, Dict[str, int]]:
+        model: ModelT | type[ModelT],
+        filter_or_ops: dict[str, Any] | DomainExpression | list[dict[str, Any]] | None = None,
+        values: dict[str, Any] | None = None,
+    ) -> ModelT | int | dict[str, int]:
         """Update one or multiple records."""
         try:
             # Case 1: Update single model instance
@@ -502,10 +471,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             # Case 2: Update multiple records by filter
             if (
                 self.is_model_class(model)
-                and (
-                    isinstance(filter_or_ops, dict)
-                    or isinstance(filter_or_ops, DomainExpression)
-                )
+                and (isinstance(filter_or_ops, dict) or isinstance(filter_or_ops, DomainExpression))
                 and values
             ):
                 collection = self._get_collection(model)
@@ -523,17 +489,13 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             # Case 3: Bulk operations
             if self.is_model_class(model) and isinstance(filter_or_ops, list):
                 collection = self._get_collection(model)
-                operations: List[
-                    Union[UpdateOne, InsertOne[Dict[str, Any]], DeleteOne]
-                ] = []
+                operations: list[UpdateOne | InsertOne[dict[str, Any]] | DeleteOne] = []
                 stats = {"updated": 0, "inserted": 0, "deleted": 0}
 
                 for op in filter_or_ops:
                     operation_type = op.get("operation")
                     if operation_type == "update":
-                        operations.append(
-                            UpdateOne(op["filter"], {"$set": op["values"]})
-                        )
+                        operations.append(UpdateOne(op["filter"], {"$set": op["values"]}))
                         stats["updated"] += 1
                     elif operation_type == "insert":
                         operations.append(InsertOne(op["values"]))
@@ -550,21 +512,19 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
 
         except Exception as e:
             self.logger.error(f"Failed to update records: {e}")
-            raise DatabaseError(
-                message=f"Failed to update records: {e}", backend="mongodb"
-            ) from e
+            raise DatabaseError(message=f"Failed to update records: {e}", backend="mongodb") from e
 
     @overload
     async def delete(self, model: ModelT) -> None: ...
 
     @overload
-    async def delete(self, model: Type[ModelT], filter: Dict[str, Any]) -> int: ...
+    async def delete(self, model: type[ModelT], filter: dict[str, Any]) -> int: ...
 
     async def delete(
         self,
-        model: Union[ModelT, Type[ModelT]],
-        filter: Optional[Dict[str, Any]] = None,
-    ) -> Optional[int]:
+        model: ModelT | type[ModelT],
+        filter: dict[str, Any] | None = None,
+    ) -> int | None:
         """Delete one or multiple records."""
         try:
             # Case 1: Delete single model instance
@@ -590,16 +550,14 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
 
         except Exception as e:
             self.logger.error(f"Failed to delete records: {e}")
-            raise DatabaseError(
-                message=f"Failed to delete records: {e}", backend="mongodb"
-            ) from e
+            raise DatabaseError(message=f"Failed to delete records: {e}", backend="mongodb") from e
 
     @overload
     async def convert_value(
         self,
         value: Any,
         field_type: Literal["string"],
-        target_type: Type[str] = str,
+        target_type: type[str] = str,
     ) -> str: ...
 
     @overload
@@ -607,7 +565,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         self,
         value: Any,
         field_type: Literal["integer"],
-        target_type: Type[int] = int,
+        target_type: type[int] = int,
     ) -> int: ...
 
     @overload
@@ -615,7 +573,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         self,
         value: Any,
         field_type: Literal["float"],
-        target_type: Type[float] = float,
+        target_type: type[float] = float,
     ) -> float: ...
 
     @overload
@@ -623,7 +581,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         self,
         value: Any,
         field_type: Literal["decimal"],
-        target_type: Type[Decimal] = Decimal,
+        target_type: type[Decimal] = Decimal,
     ) -> Decimal: ...
 
     @overload
@@ -631,7 +589,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         self,
         value: Any,
         field_type: Literal["boolean"],
-        target_type: Type[bool] = bool,
+        target_type: type[bool] = bool,
     ) -> bool: ...
 
     @overload
@@ -639,7 +597,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         self,
         value: Any,
         field_type: Literal["datetime"],
-        target_type: Type[datetime] = datetime,
+        target_type: type[datetime] = datetime,
     ) -> datetime: ...
 
     @overload
@@ -647,7 +605,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         self,
         value: Any,
         field_type: Literal["date"],
-        target_type: Type[date] = date,
+        target_type: type[date] = date,
     ) -> date: ...
 
     @overload
@@ -655,7 +613,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         self,
         value: Any,
         field_type: Literal["enum"],
-        target_type: Type[Enum],
+        target_type: type[Enum],
     ) -> Enum: ...
 
     @overload
@@ -663,22 +621,22 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         self,
         value: Any,
         field_type: Literal["json"],
-        target_type: Type[Dict[str, Any]] = dict,
-    ) -> Dict[str, Any]: ...
+        target_type: type[dict[str, Any]] = dict,
+    ) -> dict[str, Any]: ...
 
     @overload
     async def convert_value(
         self,
         value: Any,
         field_type: Literal["array"],
-        target_type: Type[List[T]] = list,
-    ) -> List[T]: ...
+        target_type: type[list[T]] = list,
+    ) -> list[T]: ...
 
     async def convert_value(
         self,
         value: Any,
         field_type: FieldType,
-        target_type: Optional[Type[T]] = None,
+        target_type: type[T] | None = None,
     ) -> T:
         """Convert value between database and Python types.
 
@@ -730,9 +688,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                         (
                             ObjectId(str(v.id))  # type: ignore
                             if hasattr(v, "id")  # type: ignore
-                            else (
-                                ObjectId(v) if isinstance(v, str) else v  # type: ignore
-                            )
+                            else (ObjectId(v) if isinstance(v, str) else v)  # type: ignore
                         )
                         for v in value  # type: ignore
                     ]  # type: ignore
@@ -784,41 +740,37 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
 
     @overload
     async def read(
-        self, source: Type[ModelT], id_or_ids: str, fields: Optional[List[str]] = None
-    ) -> Optional[Dict[str, Any]]: ...
+        self, source: type[ModelT], id_or_ids: str, fields: list[str] | None = None
+    ) -> dict[str, Any] | None: ...
 
     @overload
     async def read(
-        self, source: str, id_or_ids: str, fields: Optional[List[str]] = None
-    ) -> Optional[Dict[str, Any]]: ...
+        self, source: str, id_or_ids: str, fields: list[str] | None = None
+    ) -> dict[str, Any] | None: ...
 
     @overload
     async def read(
         self,
-        source: Type[ModelT],
-        id_or_ids: List[str],
-        fields: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]: ...
+        source: type[ModelT],
+        id_or_ids: list[str],
+        fields: list[str] | None = None,
+    ) -> list[dict[str, Any]]: ...
 
     @overload
     async def read(
-        self, source: str, id_or_ids: List[str], fields: Optional[List[str]] = None
-    ) -> List[Dict[str, Any]]: ...
+        self, source: str, id_or_ids: list[str], fields: list[str] | None = None
+    ) -> list[dict[str, Any]]: ...
 
     async def read(
         self,
-        source: Union[Type[ModelT], str],
-        id_or_ids: Union[str, List[str]],
-        fields: Optional[List[str]] = None,
-    ) -> Union[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+        source: type[ModelT] | str,
+        id_or_ids: str | list[str],
+        fields: list[str] | None = None,
+    ) -> dict[str, Any] | None | list[dict[str, Any]]:
         """Read one or multiple records."""
         try:
             # Get collection name
-            collection_name = (
-                self._get_collection_name(source)
-                if isinstance(source, type)
-                else source
-            )
+            collection_name = self._get_collection_name(source) if isinstance(source, type) else source
 
             # Handle single ID
             if isinstance(id_or_ids, str):
@@ -827,7 +779,9 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                     return None
 
                 collection = self._get_collection(collection_name)
-                proj = {field: 1 for field in fields} if fields else None
+                # Filter out empty field names to prevent MongoDB projection errors
+                valid_fields = [f for f in fields if f and f.strip()] if fields else None
+                proj = dict.fromkeys(valid_fields, 1) if valid_fields else None
                 doc = await collection.find_one({"_id": object_id}, projection=proj)
 
                 if doc:
@@ -840,7 +794,9 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                 return []
 
             collection = self._get_collection(collection_name)
-            proj = {field: 1 for field in fields} if fields else None
+            # Filter out empty field names to prevent MongoDB projection errors
+            valid_fields = [f for f in fields if f and f.strip()] if fields else None
+            proj = dict.fromkeys(valid_fields, 1) if valid_fields else None
             cursor = collection.find({"_id": {"$in": object_ids}}, projection=proj)
             docs = await cursor.to_list(length=None)
 
@@ -848,13 +804,9 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
 
         except Exception as e:
             self.logger.error(f"Failed to read records: {e}")
-            raise DatabaseError(
-                message=f"Failed to read records: {e}", backend="mongodb"
-            ) from e
+            raise DatabaseError(message=f"Failed to read records: {e}", backend="mongodb") from e
 
-    async def get_aggregate_query(
-        self, model_type: Type[ModelT]
-    ) -> AggregateQuery[ModelT]:
+    async def get_aggregate_query(self, model_type: type[ModelT]) -> AggregateQuery[ModelT]:
         """Create aggregate query.
 
         Args:
@@ -866,7 +818,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         collection = self._get_collection(model_type)
         return MongoAggregate[ModelT](collection, model_type)
 
-    async def get_join_query(self, model_type: Type[ModelT]) -> JoinQuery[ModelT, Any]:
+    async def get_join_query(self, model_type: type[ModelT]) -> JoinQuery[ModelT, Any]:
         """Create join query.
 
         Args:
@@ -878,9 +830,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
         collection = self._get_collection(model_type)
         return MongoJoin[ModelT, DatabaseModel](collection, model_type)
 
-    async def setup_relations(
-        self, model: Type[ModelT], relations: Dict[str, RelationOptions]
-    ) -> None:
+    async def setup_relations(self, model: type[ModelT], relations: dict[str, RelationOptions]) -> None:
         """Set up database relations.
 
         This method:
@@ -918,20 +868,12 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                 if options.relation_type == RelationType.MANY_TO_MANY:  # type: ignore
                     if options.through:
                         # Use custom through model
-                        through_collection = self._get_collection(
-                            options.through["model"]._name  # type: ignore
-                        )
-                        self.logger.info(
-                            f"Using custom through collection: {through_collection.name}"
-                        )
+                        through_collection = self._get_collection(options.through["model"]._name)  # type: ignore
+                        self.logger.info(f"Using custom through collection: {through_collection.name}")
                     else:
                         # Create default junction collection
-                        through_collection = self._get_collection(
-                            f"{model._name}_{field_name}"  # type: ignore
-                        )
-                        self.logger.info(
-                            f"Created default junction collection: {through_collection.name}"
-                        )
+                        through_collection = self._get_collection(f"{model._name}_{field_name}")  # type: ignore
+                        self.logger.info(f"Created default junction collection: {through_collection.name}")
 
                         # Create indexes on junction collection
                         await through_collection.create_index(
@@ -942,7 +884,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                         await through_collection.create_index("target_id")
 
         except Exception as e:
-            self.logger.error(f"Failed to setup relations: {str(e)}")
+            self.logger.error(f"Failed to setup relations: {e!s}")
             raise
 
     async def get_related(
@@ -982,9 +924,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             collection = self._get_collection(target_model._name)  # type: ignore
 
             if relation_type == RelationType.ONE_TO_MANY:
-                self.logger.info(
-                    f"Handling ONE_TO_MANY relation, related_name: {options.related_name}"
-                )
+                self.logger.info(f"Handling ONE_TO_MANY relation, related_name: {options.related_name}")
                 # Use aggregation pipeline for better performance
                 pipeline = [
                     {"$match": {options.related_name: source_id}},
@@ -995,14 +935,10 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                     {"$project": {"_id": 0, "ids": 1}},
                 ]
 
-                target_records = await collection.aggregate(pipeline).to_list(
-                    length=None
-                )
+                target_records = await collection.aggregate(pipeline).to_list(length=None)
 
                 # Extract IDs from result
-                target_ids: List[str] = (
-                    target_records[0]["ids"] if target_records else []
-                )
+                target_ids: list[str] = target_records[0]["ids"] if target_records else []
                 self.logger.info(f"Found {len(target_ids)} records using aggregation")
 
                 # Always return recordset (may be empty)
@@ -1013,16 +949,14 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             elif relation_type == RelationType.MANY_TO_ONE:
                 self.logger.info("Handling MANY_TO_ONE relation")
 
-                source_record = await self.read(
-                    instance._name, source_id, fields=[field_name]
-                )
+                source_record = await self.read(instance._name, source_id, fields=[field_name])
                 if not source_record:
                     return target_model._browse(target_model._env, [])  # type: ignore
 
                 target_id = source_record[field_name]  # type: ignore
 
                 # Direct query using foreign key
-                target_record: Dict[str, Any] = await self.read(  # type: ignore
+                target_record: dict[str, Any] = await self.read(  # type: ignore
                     target_model._name, target_id, fields=["id"]  # type: ignore
                 )  # type: ignore
                 self.logger.info(f"Found target record: {target_record}")
@@ -1054,21 +988,14 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                 if options.through:
                     self.logger.info(f"Using through model: {options.through}")
                     # Query through model first
-                    through_collection = self._get_collection(
-                        options.through["model"]._name  # type: ignore
-                    )
-                    if (
-                        not options.through_fields
-                        or "fields" not in options.through_fields
-                    ):
+                    through_collection = self._get_collection(options.through["model"]._name)  # type: ignore
+                    if not options.through_fields or "fields" not in options.through_fields:
                         raise ValueError(
                             "through_fields is required for many-to-many relations and must contain 'fields' key"
                         )
 
-                    cursor = through_collection.find(
-                        {options.through_fields["fields"][0]: source_id}
-                    )
-                    through_records: List[Dict[str, Any]] = []
+                    cursor = through_collection.find({options.through_fields["fields"][0]: source_id})
+                    through_records: list[dict[str, Any]] = []
                     async for doc in cursor:
                         self.logger.info(f"Found through document: {doc}")
                         converted = await self._convert_document(doc)
@@ -1077,15 +1004,11 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
 
                     if not through_records:
                         result = target_model._browse(target_model._env, [])  # type: ignore
-                        self.logger.info(
-                            "No through records found, returning empty recordset"
-                        )
+                        self.logger.info("No through records found, returning empty recordset")
                         return result  # type: ignore
 
                     # Then query target model
-                    target_ids = [
-                        r[options.through_fields["fields"][1]] for r in through_records
-                    ]
+                    target_ids = [r[options.through_fields["fields"][1]] for r in through_records]
                     self.logger.info(f"Found target IDs: {target_ids}")
 
                     target_records = []
@@ -1096,41 +1019,79 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                             target_records.append(record)  # type: ignore
 
                     result = target_model._browse(target_model._env, target_records)  # type: ignore
-                    self.logger.info(
-                        f"Returning recordset with {len(target_records)} records"
-                    )
+                    self.logger.info(f"Returning recordset with {len(target_records)} records")
                     return result  # type: ignore
                 else:
-                    self.logger.info("Using direct many-to-many relation")
-                    # Direct many-to-many
-                    cursor = collection.find({field_name: source_id})
-                    target_records: List[Dict[str, Any]] = []
-                    async for doc in cursor:
-                        self.logger.info(f"Found document: {doc}")
-                        converted = await self._convert_document(doc)
-                        self.logger.info(f"Converted document: {converted}")
-                        target_records.append(converted)
+                    self.logger.info("Using default junction table for many-to-many relation")
 
-                    result = target_model._browse(  # type: ignore
-                        target_model._env, target_records or []  # type: ignore
-                    )  # type: ignore
-                    self.logger.info(
-                        f"Returning recordset with {len(target_records)} records"  # type: ignore
-                    )
+                    # For M2M, we need consistent junction table naming regardless of direction
+                    # Use alphabetical order of model names to ensure consistency
+                    source_model_name = instance._name
+                    target_model_name = target_model._name  # type: ignore
+
+                    # Create consistent junction table name
+                    if source_model_name < target_model_name:
+                        junction_table_name = f"{source_model_name}_{target_model_name}"
+                        source_field = "source_id"
+                        target_field = "target_id"
+                    else:
+                        junction_table_name = f"{target_model_name}_{source_model_name}"
+                        source_field = "target_id"  # Reversed
+                        target_field = "source_id"  # Reversed
+
+                    junction_collection = self._get_collection(junction_table_name)
+                    self.logger.info(f"Querying junction table: {junction_table_name} with {source_field}={source_id}")
+
+                    # Query junction table for related IDs
+                    cursor = junction_collection.find({source_field: source_id})
+                    target_ids = []
+                    async for doc in cursor:
+                        self.logger.info(f"Found junction document: {doc}")
+                        # Extract related ID (opposite of query field)
+                        if source_field == "target_id":
+                            # Queried with target_id, extract source_id
+                            related_id = doc["source_id"]
+                        else:
+                            # Queried with source_id, extract target_id
+                            related_id = doc["target_id"]
+
+                        # Skip empty IDs
+                        if related_id and related_id.strip():
+                            target_ids.append(related_id)
+                        else:
+                            self.logger.warning(f"Skipping junction record with empty related ID: {doc}")
+
+                    self.logger.info(f"Found target IDs: {target_ids}")
+
+                    if not target_ids:
+                        result = target_model._browse(target_model._env, [])  # type: ignore
+                        self.logger.info("No junction records found, returning empty recordset")
+                        return result  # type: ignore
+
+                    # Query target records
+                    target_records = []
+                    for target_id in target_ids:
+                        record = await self.read(target_model._name, target_id)  # type: ignore
+                        self.logger.info(f"Found target record: {record}")
+                        if record:
+                            target_records.append(record)  # type: ignore
+
+                    result = target_model._browse(target_model._env, target_records)  # type: ignore
+                    self.logger.info(f"Returning recordset with {len(target_records)} records")  # type: ignore
                     return result  # type: ignore
 
             self.logger.warning(f"Unknown relation type: {relation_type}")
             return None
 
         except Exception as e:
-            self.logger.error(f"Failed to get related records: {str(e)}")
+            self.logger.error(f"Failed to get related records: {e!s}")
             raise
 
     async def set_related(
         self,
         instance: ModelT,
         field_name: str,
-        value: Union[Optional[ModelT], List[ModelT]],
+        value: ModelT | None | list[ModelT],
         relation_type: RelationType,
         options: RelationOptions,
     ) -> None:
@@ -1155,21 +1116,17 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                 model = await self.env.get_model(model)
                 if not model:
                     raise RuntimeError(f"Model {model} not found")
-                options.model = cast(Type[ModelT], model)
+                options.model = cast(type[ModelT], model)
 
-            resolved_model = cast(Type[ModelT], model)
+            resolved_model = cast(type[ModelT], model)
 
             # Validate value type
             if isinstance(value, list):
                 for item in value:
                     if not isinstance(item, resolved_model):
-                        raise ValueError(
-                            f"Expected {resolved_model.__name__}, got {type(item)}"
-                        )
+                        raise ValueError(f"Expected {resolved_model.__name__}, got {type(item)}")
             elif value is not None and not isinstance(value, resolved_model):
-                raise ValueError(
-                    f"Expected {resolved_model.__name__}, got {type(value)}"
-                )
+                raise ValueError(f"Expected {resolved_model.__name__}, got {type(value)}")
 
             # Get target collection
             target_collection = self._get_collection(resolved_model)
@@ -1180,18 +1137,24 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             if relation_type == RelationType.MANY_TO_MANY:
                 # Get through collection
                 if options.through:
-                    through_collection = self._get_collection(
-                        options.through._name  # type: ignore
-                    )
+                    through_collection = self._get_collection(options.through._name)  # type: ignore
                     local_field, foreign_field = options.through_fields or (
                         "source_id",
                         "target_id",
                     )
                 else:
-                    through_collection = self._get_collection(
-                        f"{instance._name}_{field_name}"  # type: ignore
-                    )
-                    local_field, foreign_field = "source_id", "target_id"
+                    # Use consistent junction table naming for M2M
+                    source_model_name = instance._name
+                    target_model_name = resolved_model._name  # type: ignore
+
+                    if source_model_name < target_model_name:
+                        junction_table_name = f"{source_model_name}_{target_model_name}"
+                        local_field, foreign_field = "source_id", "target_id"
+                    else:
+                        junction_table_name = f"{target_model_name}_{source_model_name}"
+                        local_field, foreign_field = "target_id", "source_id"  # Reversed
+
+                    through_collection = self._get_collection(junction_table_name)
 
                 # Delete existing relations
                 await through_collection.delete_many({local_field: instance.id})
@@ -1200,11 +1163,19 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                     return
 
                 # Create new relations
-                docs = [  # type: ignore
-                    {local_field: instance.id, foreign_field: target.id}  # type: ignore
-                    for target in value  # type: ignore
-                ]
-                await through_collection.insert_many(docs)  # type: ignore
+                docs = []
+                for target in value:  # type: ignore
+                    # Validate IDs are not empty
+                    if not instance.id or not target.id:
+                        self.logger.error(f"Empty ID detected: instance.id={instance.id}, target.id={target.id}")
+                        continue
+                    doc = {local_field: instance.id, foreign_field: target.id}
+                    docs.append(doc)
+
+                if docs:
+                    await through_collection.insert_many(docs)  # type: ignore
+                else:
+                    self.logger.warning("No valid junction records to insert")
 
             elif relation_type == RelationType.ONE_TO_MANY:
                 if not value:
@@ -1238,7 +1209,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
 
         except Exception as e:
             raise DatabaseError(
-                message=f"Failed to set related records: {str(e)}",
+                message=f"Failed to set related records: {e!s}",
                 backend=self.backend_type,
             ) from e
 
@@ -1268,9 +1239,9 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                 model = await self.env.get_model(model)
                 if not model:
                     raise RuntimeError(f"Model {model} not found")
-                options.model = cast(Type[ModelT], model)
+                options.model = cast(type[ModelT], model)
 
-            resolved_model = cast(Type[ModelT], model)
+            resolved_model = cast(type[ModelT], model)
 
             # Get target collection
             target_collection = self._get_collection(resolved_model)
@@ -1281,18 +1252,24 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
             if relation_type == RelationType.MANY_TO_MANY:
                 # Get through collection
                 if options.through:
-                    through_collection = self._get_collection(
-                        options.through._name  # type: ignore
-                    )
+                    through_collection = self._get_collection(options.through._name)  # type: ignore
                     local_field, foreign_field = options.through_fields or (  # type: ignore
                         "source_id",
                         "target_id",
                     )
                 else:
-                    through_collection = self._get_collection(
-                        f"{instance._name}_{field_name}"  # type: ignore
-                    )
-                    local_field, foreign_field = "source_id", "target_id"  # type: ignore
+                    # Use consistent junction table naming for M2M
+                    source_model_name = instance._name
+                    target_model_name = options.model._name  # type: ignore
+
+                    if source_model_name < target_model_name:
+                        junction_table_name = f"{source_model_name}_{target_model_name}"
+                        local_field, foreign_field = "source_id", "target_id"
+                    else:
+                        junction_table_name = f"{target_model_name}_{source_model_name}"
+                        local_field, foreign_field = "target_id", "source_id"  # Reversed
+
+                    through_collection = self._get_collection(junction_table_name)
 
                 # Delete relations
                 await through_collection.delete_many({local_field: instance.id})
@@ -1303,9 +1280,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
 
                 if options.on_delete == "CASCADE":
                     # Delete target records
-                    await target_collection.delete_many(
-                        {options.related_name: instance.id}  # type: ignore
-                    )
+                    await target_collection.delete_many({options.related_name: instance.id})  # type: ignore
                 elif options.on_delete == "SET_NULL":
                     # Set relation to null
                     await target_collection.update_many(
@@ -1322,23 +1297,21 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                     await target_collection.delete_one({"_id": instance.id})
                 elif options.on_delete == "SET_NULL":
                     # Set relation to null
-                    await target_collection.update_one(
-                        {"_id": instance.id}, {"$unset": {options.related_name: ""}}
-                    )
+                    await target_collection.update_one({"_id": instance.id}, {"$unset": {options.related_name: ""}})
 
         except Exception as e:
             raise DatabaseError(
-                message=f"Failed to delete related records: {str(e)}",
+                message=f"Failed to delete related records: {e!s}",
                 backend=self.backend_type,
             ) from e
 
     async def bulk_load_related(
         self,
-        instances: List[ModelT],
+        instances: list[ModelT],
         field_name: str,
         relation_type: RelationType,
         options: RelationOptions,
-    ) -> Dict[str, Union[Optional[ModelT], List[ModelT]]]:
+    ) -> dict[str, ModelT | None | list[ModelT]]:
         """Load related records for multiple instances efficiently.
 
         Args:
@@ -1358,29 +1331,23 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                 return {}
 
             instance_ids = [instance.id for instance in instances]
-            result: Dict[str, Union[Optional[ModelT], List[ModelT]]] = {}
+            result: dict[str, ModelT | None | list[ModelT]] = {}
 
             if relation_type == RelationType.MANY_TO_MANY:
                 # Get through collection
                 if options.through:
-                    through_collection = self._get_collection(
-                        options.through._name  # type: ignore
-                    )
+                    through_collection = self._get_collection(options.through._name)  # type: ignore
                     local_field, foreign_field = options.through_fields or (
                         "source_id",
                         "target_id",
                     )
                 else:
-                    through_collection = self._get_collection(
-                        f"{instances[0]._name}_{field_name}"  # type: ignore
-                    )
+                    through_collection = self._get_collection(f"{instances[0]._name}_{field_name}")  # type: ignore
                     local_field, foreign_field = "source_id", "target_id"
 
                 # Get all relations
                 cursor = through_collection.find({local_field: {"$in": instance_ids}})
-                relations = {
-                    doc[local_field]: doc[foreign_field] async for doc in cursor
-                }
+                relations = {doc[local_field]: doc[foreign_field] async for doc in cursor}
 
                 if not relations:
                     return {instance.id: [] for instance in instances}
@@ -1397,9 +1364,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                 # Map relations to instances
                 for instance in instances:
                     result[instance.id] = [
-                        targets[target_id]
-                        for target_id in relations.get(instance.id, [])
-                        if target_id in targets
+                        targets[target_id] for target_id in relations.get(instance.id, []) if target_id in targets
                     ]
 
             elif relation_type == RelationType.ONE_TO_MANY:
@@ -1407,9 +1372,7 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
                 target_collection = self._get_collection(options.model._name)  # type: ignore
 
                 # Get all target records
-                cursor = target_collection.find(
-                    {options.related_name: {"$in": instance_ids}}
-                )
+                cursor = target_collection.find({options.related_name: {"$in": instance_ids}})
                 targets = {  # type: ignore
                     doc[options.related_name]: options.model._browse(  # type: ignore
                         self._env, [str(doc["_id"])]  # type: ignore
@@ -1442,6 +1405,6 @@ class MongoAdapter(DatabaseAdapter[ModelT]):
 
         except Exception as e:
             raise DatabaseError(
-                message=f"Failed to bulk load related records: {str(e)}",
+                message=f"Failed to bulk load related records: {e!s}",
                 backend=self.backend_type,
             ) from e

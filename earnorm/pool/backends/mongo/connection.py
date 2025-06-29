@@ -104,9 +104,7 @@ class MongoConnection(AsyncConnectionProtocol[DBType, CollType]):
     @property
     def is_stale(self) -> bool:
         """Check if connection is stale."""
-        return (
-            self.idle_time > self._max_idle_time or self.lifetime > self._max_lifetime
-        )
+        return self.idle_time > self._max_idle_time or self.lifetime > self._max_lifetime
 
     def touch(self) -> None:
         """Update last used timestamp."""

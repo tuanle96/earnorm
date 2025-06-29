@@ -5,7 +5,8 @@ This module provides validators for reference fields, including:
 - Reference integrity validation
 """
 
-from typing import Any, Coroutine, Dict, Optional, Type
+from collections.abc import Coroutine
+from typing import Any
 
 from bson import ObjectId
 from bson.errors import InvalidId
@@ -34,9 +35,9 @@ class ExistsValidator(BaseValidator):
 
     def __init__(
         self,
-        collection: AsyncIOMotorCollection[Dict[str, Any]],
-        model_class: Type[ModelProtocol],
-        message: Optional[str] = None,
+        collection: AsyncIOMotorCollection[dict[str, Any]],
+        model_class: type[ModelProtocol],
+        message: str | None = None,
     ) -> None:
         """Initialize validator.
 
@@ -85,15 +86,13 @@ class ExistsValidator(BaseValidator):
         # Check if document exists
         document = await self.collection.find_one({"_id": value})
         if document is None:
-            raise ValidationError(
-                self.message or f"Document with ID '{value}' does not exist"
-            )
+            raise ValidationError(self.message or f"Document with ID '{value}' does not exist")
 
 
 def validate_exists(
-    collection: AsyncIOMotorCollection[Dict[str, Any]],
-    model_class: Type[ModelProtocol],
-    message: Optional[str] = None,
+    collection: AsyncIOMotorCollection[dict[str, Any]],
+    model_class: type[ModelProtocol],
+    message: str | None = None,
 ) -> ExistsValidator:
     """Create reference existence validator.
 

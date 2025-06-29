@@ -158,7 +158,7 @@ logger = logging.getLogger(__name__)
 async def init(
     config_path: str | Path,
     *,
-    env_file: Optional[str | Path] = None,
+    env_file: str | Path | None = None,
     cleanup_handlers: bool = True,
     debug: bool = False,
 ) -> None:
@@ -229,9 +229,7 @@ async def init(
             container.register("config", config)
 
         except Exception as e:
-            raise ConfigError(
-                f"Failed to initialize environment and config: {e}"
-            ) from e
+            raise ConfigError(f"Failed to initialize environment and config: {e}") from e
 
         # 6. Setup cleanup handlers
         if cleanup_handlers:
@@ -257,4 +255,4 @@ async def init(
 
 
 __version__ = "0.1.0"
-__all__ = ["init", "__version__", "BaseModel"]
+__all__ = ["BaseModel", "__version__", "init"]

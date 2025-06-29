@@ -25,14 +25,9 @@ from enum import Enum
 from typing import (
     TYPE_CHECKING,
     Any,
-    Dict,
-    List,
-    Optional,
     Protocol,
-    Type,
     TypedDict,
     TypeVar,
-    Union,
 )
 
 if TYPE_CHECKING:
@@ -50,8 +45,8 @@ class RelationFieldOptions(TypedDict, total=False):
     index: bool  # Whether to create an index
     help: str  # Help text for the field
     compute: Any  # Compute method
-    depends: List[str]  # Dependencies for compute method
-    validators: List[Any]  # Field validators
+    depends: list[str]  # Dependencies for compute method
+    validators: list[Any]  # Field validators
     lazy: bool  # Whether to use lazy loading
 
 
@@ -94,22 +89,21 @@ class RelationOptions:
         ... )
     """
 
-    model: Union[Type[ModelProtocol], str]
-    related_name: Optional[str] = None
+    model: type[ModelProtocol] | str
+    related_name: str | None = None
     on_delete: str = "CASCADE"
-    through: Optional[Dict[str, Any]] = None
-    through_fields: Optional[Dict[str, Any]] = None
+    through: dict[str, Any] | None = None
+    through_fields: dict[str, Any] | None = None
     lazy: bool = True
     required: bool = False
-    help: Optional[str] = None
+    help: str | None = None
 
     def __post_init__(self) -> None:
         """Validate options after initialization."""
 
         if self.on_delete not in ("CASCADE", "SET_NULL", "PROTECT"):
             raise ValueError(
-                f"Invalid on_delete value: {self.on_delete}. "
-                "Must be one of: CASCADE, SET_NULL, PROTECT"
+                f"Invalid on_delete value: {self.on_delete}. " "Must be one of: CASCADE, SET_NULL, PROTECT"
             )
 
 
@@ -128,7 +122,7 @@ class RelationProtocol(Protocol[T_co]):
         ...         super().__init__(model, RelationType.ONE_TO_MANY, **options)
     """
 
-    async def get_related(self, instance: Any) -> Optional[Union[T_co, List[T_co]]]:
+    async def get_related(self, instance: Any) -> T_co | list[T_co] | None:
         """Get related record(s).
 
         Args:

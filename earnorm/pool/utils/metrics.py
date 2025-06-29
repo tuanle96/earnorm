@@ -35,7 +35,7 @@ Examples:
 
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, TypeVar
+from typing import Any, TypeVar
 
 from earnorm.pool.protocols.pool import AsyncPoolProtocol
 
@@ -59,7 +59,7 @@ class PoolMetrics:
     max_lifetime: int
     idle_timeout: int
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert metrics to dictionary."""
         return {
             "backend_type": self.backend_type,
@@ -87,7 +87,7 @@ class ConnectionMetrics:
     is_stale: bool
     is_available: bool
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert metrics to dictionary."""
         return {
             "id": self.id,
@@ -109,7 +109,7 @@ class PoolStatistics:
     stale_connections: int
     connection_usage: float
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert statistics to dictionary."""
         return {
             "average_idle_time": self.average_idle_time,
@@ -126,9 +126,9 @@ class HealthCheck:
     status: str
     metrics: PoolMetrics
     statistics: PoolStatistics
-    connections: List[ConnectionMetrics]
+    connections: list[ConnectionMetrics]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert health check to dictionary."""
         return {
             "status": self.status,
@@ -259,7 +259,7 @@ def calculate_connection_metrics(
 
 
 def calculate_pool_statistics(
-    connections: List[ConnectionMetrics],
+    connections: list[ConnectionMetrics],
     total_connections: int,
     active_connections: int,
 ) -> PoolStatistics:
@@ -312,9 +312,7 @@ def calculate_pool_statistics(
         average_idle_time=total_idle_time / len(connections),
         average_lifetime=total_lifetime / len(connections),
         stale_connections=stale_connections,
-        connection_usage=(
-            active_connections / total_connections if total_connections > 0 else 0.0
-        ),
+        connection_usage=(active_connections / total_connections if total_connections > 0 else 0.0),
     )
 
 
@@ -341,7 +339,7 @@ async def check_pool_health(pool: AsyncPoolProtocol[DB, COLL]) -> HealthCheck:
     metrics = await pool.get_pool_stats()  # type: ignore # method exists in implementations
 
     # Get connection metrics
-    connections: List[ConnectionMetrics] = []
+    connections: list[ConnectionMetrics] = []
     for conn in pool._pool.values():  # type: ignore # accessing internal state
         conn_metrics = calculate_connection_metrics(
             id=str(id(conn)),  # type: ignore # accessing connection attributes

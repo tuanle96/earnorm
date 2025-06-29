@@ -6,9 +6,6 @@ from typing import (
     TYPE_CHECKING,
     AsyncContextManager,
     Generic,
-    List,
-    Optional,
-    Type,
     TypeVar,
 )
 
@@ -43,9 +40,9 @@ class Transaction(ABC, Generic[ModelT]):
     @abstractmethod
     async def __aexit__(
         self,
-        exc_type: Optional[Type[BaseException]],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[TracebackType],
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
     ) -> None:
         """Exit transaction context.
 
@@ -69,7 +66,7 @@ class Transaction(ABC, Generic[ModelT]):
         pass
 
     @abstractmethod
-    async def insert_many(self, models: List[ModelT]) -> List[ModelT]:
+    async def insert_many(self, models: list[ModelT]) -> list[ModelT]:
         """Insert multiple models into database.
 
         Args:
@@ -96,7 +93,7 @@ class Transaction(ABC, Generic[ModelT]):
         pass
 
     @abstractmethod
-    async def update_many(self, models: List[ModelT]) -> List[ModelT]:
+    async def update_many(self, models: list[ModelT]) -> list[ModelT]:
         """Update multiple models in database.
 
         Args:
@@ -123,7 +120,7 @@ class Transaction(ABC, Generic[ModelT]):
         pass
 
     @abstractmethod
-    async def delete_many(self, models: List[ModelT]) -> None:
+    async def delete_many(self, models: list[ModelT]) -> None:
         """Delete multiple models from database.
 
         Args:
@@ -170,7 +167,7 @@ class TransactionManager(AsyncContextManager[Transaction[ModelT]]):
 
     def __init__(self) -> None:
         """Initialize transaction manager."""
-        self._transaction: Optional[Transaction[ModelT]] = None
+        self._transaction: Transaction[ModelT] | None = None
 
     async def __aenter__(self) -> Transaction[ModelT]:
         """Enter transaction context.
@@ -183,9 +180,9 @@ class TransactionManager(AsyncContextManager[Transaction[ModelT]]):
 
     async def __aexit__(
         self,
-        exc_type: Optional[Type[BaseException]],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[TracebackType],
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
     ) -> None:
         """Exit transaction context.
 
@@ -202,7 +199,7 @@ class TransactionManager(AsyncContextManager[Transaction[ModelT]]):
                 await self._transaction.commit()
 
     @abstractmethod
-    def set_model_type(self, model_type: Type[ModelT]) -> None:
+    def set_model_type(self, model_type: type[ModelT]) -> None:
         """Set model type for transaction.
 
         This method must be called before starting a transaction.

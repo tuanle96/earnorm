@@ -23,15 +23,13 @@ Examples:
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from typing import (
     Any,
-    Dict,
     Final,
     Generic,
-    List,
     Optional,
     Protocol,
-    Sequence,
     TypeVar,
     final,
 )
@@ -44,7 +42,7 @@ T_contra = TypeVar("T_contra", contravariant=True)
 T = TypeVar("T", bound=Any)
 
 # Type aliases with better type hints
-ValidationMetadata = Dict[str, Any]
+ValidationMetadata = dict[str, Any]
 
 
 class ValidatorProtocol(Protocol[T_contra]):
@@ -93,17 +91,15 @@ class Validator(Generic[T], ValidatorProtocol[T], ABC):
         code: Error code for identifying error type
     """
 
-    def __init__(
-        self, *, message: Optional[str] = None, code: Optional[str] = None
-    ) -> None:
+    def __init__(self, *, message: str | None = None, code: str | None = None) -> None:
         """Initialize validator.
 
         Args:
             message: Error message template
             code: Error code for identifying error type
         """
-        self.message: Optional[str] = message
-        self.code: Optional[str] = code
+        self.message: str | None = message
+        self.code: str | None = code
 
     @abstractmethod
     async def validate(self, value: T, context: ValidationContext) -> None:
@@ -150,7 +146,7 @@ class ValidatorChain(Validator[T]):
             validators: Sequence of validators to apply
         """
         super().__init__()
-        self.validators: List[Validator[T]] = list(validators)
+        self.validators: list[Validator[T]] = list(validators)
 
     async def validate(self, value: T, context: ValidationContext) -> None:
         """Validate value using all validators in chain.
@@ -225,7 +221,7 @@ class TypeValidator(Validator[T]):
     def __init__(
         self,
         value_type: type,
-        message: Optional[str] = None,
+        message: str | None = None,
         code: str = DEFAULT_CODE,
     ) -> None:
         """Initialize type validator.
@@ -251,8 +247,7 @@ class TypeValidator(Validator[T]):
         """
         if value is not None and not isinstance(value, self.value_type):
             raise FieldValidationError(
-                message=self.message
-                or f"Expected {self.value_type.__name__}, got {type(value).__name__}",
+                message=self.message or f"Expected {self.value_type.__name__}, got {type(value).__name__}",
                 field_name=getattr(context.field, "name", "unknown"),
                 code=self.code or self.DEFAULT_CODE,
             )
@@ -273,9 +268,9 @@ class RangeValidator(Validator[T]):
 
     def __init__(
         self,
-        min_value: Optional[T] = None,
-        max_value: Optional[T] = None,
-        message: Optional[str] = None,
+        min_value: T | None = None,
+        max_value: T | None = None,
+        message: str | None = None,
         code: str = "invalid_range",
     ) -> None:
         """Initialize range validator.
@@ -303,8 +298,7 @@ class RangeValidator(Validator[T]):
         if value is not None:
             if self.min_value is not None and value < self.min_value:  # type: ignore
                 raise FieldValidationError(
-                    message=self.message
-                    or f"Value must be greater than {self.min_value}",
+                    message=self.message or f"Value must be greater than {self.min_value}",
                     field_name=getattr(context.field, "name", "unknown"),
                     code=self.code or self.DEFAULT_CODE,
                 )
@@ -331,7 +325,7 @@ class RegexValidator(Validator[Optional[str]]):
     def __init__(
         self,
         pattern: str,
-        message: Optional[str] = None,
+        message: str | None = None,
         code: str = DEFAULT_CODE,
     ) -> None:
         """Initialize regex validator.
@@ -344,7 +338,7 @@ class RegexValidator(Validator[Optional[str]]):
         super().__init__(message=message, code=code)
         self.pattern = pattern
 
-    async def validate(self, value: Optional[str], context: ValidationContext) -> None:
+    async def validate(self, value: str | None, context: ValidationContext) -> None:
         """Validate value matches pattern.
 
         Args:
@@ -376,7 +370,7 @@ class ChoicesValidator(Validator[T]):
     def __init__(
         self,
         choices: list[T],
-        message: Optional[str] = None,
+        message: str | None = None,
         code: str = DEFAULT_CODE,
     ) -> None:
         """Initialize choices validator.
@@ -402,8 +396,7 @@ class ChoicesValidator(Validator[T]):
         """
         if value is not None and value not in self.choices:
             raise FieldValidationError(
-                message=self.message
-                or f"Value must be one of: {', '.join(str(c) for c in self.choices)}",
+                message=self.message or f"Value must be one of: {', '.join(str(c) for c in self.choices)}",
                 field_name=getattr(context.field, "name", "unknown"),
                 code=self.code or self.DEFAULT_CODE,
             )

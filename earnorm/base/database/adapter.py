@@ -25,14 +25,9 @@ from decimal import Decimal
 from enum import Enum
 from typing import (
     Any,
-    Dict,
     Generic,
-    List,
     Literal,
-    Optional,
-    Type,
     TypeVar,
-    Union,
     get_args,
     get_origin,
     overload,
@@ -70,7 +65,7 @@ FieldType = Literal[
 ]
 
 # Define type mapping
-TYPE_MAPPING: Dict[FieldType, Type[Any]] = {
+TYPE_MAPPING: dict[FieldType, type[Any]] = {
     "string": str,
     "integer": int,
     "float": float,
@@ -79,9 +74,9 @@ TYPE_MAPPING: Dict[FieldType, Type[Any]] = {
     "datetime": datetime,
     "date": date,
     "enum": Enum,
-    "json": Dict[str, Any],
-    "array": List[Any],
-    "object": Dict[str, Any],
+    "json": dict[str, Any],
+    "array": list[Any],
+    "object": dict[str, Any],
 }
 
 
@@ -148,9 +143,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
 
     @abstractmethod
     @overload
-    async def query(
-        self, model_type: Type[ModelT], query_type: Literal["base"] = "base"
-    ) -> BaseQuery[ModelT]:
+    async def query(self, model_type: type[ModelT], query_type: Literal["base"] = "base") -> BaseQuery[ModelT]:
         """Create basic query builder.
 
         Args:
@@ -174,9 +167,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
 
     @abstractmethod
     @overload
-    async def query(
-        self, model_type: Type[ModelT], query_type: Literal["aggregate"]
-    ) -> AggregateQuery[ModelT]:
+    async def query(self, model_type: type[ModelT], query_type: Literal["aggregate"]) -> AggregateQuery[ModelT]:
         """Create aggregate query builder.
 
         Args:
@@ -199,9 +190,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
 
     @abstractmethod
     @overload
-    async def query(
-        self, model_type: Type[ModelT], query_type: Literal["join"]
-    ) -> JoinQuery[ModelT, Any]:
+    async def query(self, model_type: type[ModelT], query_type: Literal["join"]) -> JoinQuery[ModelT, Any]:
         """Create join query builder.
 
         Args:
@@ -224,9 +213,9 @@ class DatabaseAdapter(Generic[ModelT], ABC):
     @abstractmethod
     async def query(
         self,
-        model_type: Type[ModelT],
+        model_type: type[ModelT],
         query_type: Literal["base", "aggregate", "join"] = "base",
-    ) -> Union[BaseQuery[ModelT], AggregateQuery[ModelT], JoinQuery[ModelT, Any]]:
+    ) -> BaseQuery[ModelT] | AggregateQuery[ModelT] | JoinQuery[ModelT, Any]:
         """Create query builder of specified type.
 
         This method supports three types of queries:
@@ -272,9 +261,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
         pass
 
     @abstractmethod
-    async def get_aggregate_query(
-        self, model_type: Type[ModelT]
-    ) -> AggregateQuery[ModelT]:
+    async def get_aggregate_query(self, model_type: type[ModelT]) -> AggregateQuery[ModelT]:
         """Create aggregate query builder for model type.
         This includes group operations as they are a type of aggregation.
 
@@ -287,7 +274,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
         pass
 
     @abstractmethod
-    async def get_join_query(self, model_type: Type[ModelT]) -> JoinQuery[ModelT, Any]:
+    async def get_join_query(self, model_type: type[ModelT]) -> JoinQuery[ModelT, Any]:
         """Create join query builder for model type.
 
         Args:
@@ -299,7 +286,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
         pass
 
     @abstractmethod
-    async def transaction(self, model_type: Type[ModelT]) -> TransactionManager[ModelT]:
+    async def transaction(self, model_type: type[ModelT]) -> TransactionManager[ModelT]:
         """Create new transaction.
 
         Args:
@@ -312,7 +299,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
 
     @abstractmethod
     @overload
-    async def create(self, model_type: Type[ModelT], values: Dict[str, Any]) -> str:
+    async def create(self, model_type: type[ModelT], values: dict[str, Any]) -> str:
         """Create a single record.
 
         Args:
@@ -329,9 +316,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
 
     @abstractmethod
     @overload
-    async def create(
-        self, model_type: Type[ModelT], values: List[Dict[str, Any]]
-    ) -> List[str]:
+    async def create(self, model_type: type[ModelT], values: list[dict[str, Any]]) -> list[str]:
         """Create multiple records.
 
         Args:
@@ -349,9 +334,9 @@ class DatabaseAdapter(Generic[ModelT], ABC):
     @abstractmethod
     async def create(
         self,
-        model_type: Type[ModelT],
-        values: Union[Dict[str, Any], List[Dict[str, Any]]],
-    ) -> Union[str, List[str]]:
+        model_type: type[ModelT],
+        values: dict[str, Any] | list[dict[str, Any]],
+    ) -> str | list[str]:
         """Create one or multiple records.
 
         This method supports two modes:
@@ -393,28 +378,26 @@ class DatabaseAdapter(Generic[ModelT], ABC):
     @overload
     async def update(
         self,
-        model: Type[ModelT],
-        filter_or_ops: Union[Dict[str, Any], DomainExpression],
-        values: Dict[str, Any],
+        model: type[ModelT],
+        filter_or_ops: dict[str, Any] | DomainExpression,
+        values: dict[str, Any],
     ) -> int: ...
 
     @abstractmethod
     @overload
     async def update(
         self,
-        model: Type[ModelT],
-        filter_or_ops: List[Dict[str, Any]],
-    ) -> Dict[str, int]: ...
+        model: type[ModelT],
+        filter_or_ops: list[dict[str, Any]],
+    ) -> dict[str, int]: ...
 
     @abstractmethod
     async def update(
         self,
-        model: Union[ModelT, Type[ModelT]],
-        filter_or_ops: Optional[
-            Union[Dict[str, Any], DomainExpression, List[Dict[str, Any]]]
-        ] = None,
-        values: Optional[Dict[str, Any]] = None,
-    ) -> Union[ModelT, int, Dict[str, int]]:
+        model: ModelT | type[ModelT],
+        filter_or_ops: dict[str, Any] | DomainExpression | list[dict[str, Any]] | None = None,
+        values: dict[str, Any] | None = None,
+    ) -> ModelT | int | dict[str, int]:
         """Update one or multiple records.
 
         This method supports three modes:
@@ -497,8 +480,8 @@ class DatabaseAdapter(Generic[ModelT], ABC):
     @abstractmethod
     @overload
     async def read(
-        self, source: Type[ModelT], id_or_ids: str, fields: Optional[List[str]] = None
-    ) -> Optional[Dict[str, Any]]:
+        self, source: type[ModelT], id_or_ids: str, fields: list[str] | None = None
+    ) -> dict[str, Any] | None:
         """Read a single record using model type.
 
         Args:
@@ -522,9 +505,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
 
     @abstractmethod
     @overload
-    async def read(
-        self, source: str, id_or_ids: str, fields: List[str]
-    ) -> Optional[Dict[str, Any]]:
+    async def read(self, source: str, id_or_ids: str, fields: list[str]) -> dict[str, Any] | None:
         """Read a single record using collection name.
 
         Args:
@@ -547,10 +528,10 @@ class DatabaseAdapter(Generic[ModelT], ABC):
     @overload
     async def read(
         self,
-        source: Type[ModelT],
-        id_or_ids: List[str],
-        fields: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
+        source: type[ModelT],
+        id_or_ids: list[str],
+        fields: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
         """Read multiple records using model type.
 
         Args:
@@ -574,9 +555,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
 
     @abstractmethod
     @overload
-    async def read(
-        self, source: str, id_or_ids: List[str], fields: List[str]
-    ) -> List[Dict[str, Any]]:
+    async def read(self, source: str, id_or_ids: list[str], fields: list[str]) -> list[dict[str, Any]]:
         """Read multiple records using collection name.
 
         Args:
@@ -598,10 +577,10 @@ class DatabaseAdapter(Generic[ModelT], ABC):
     @abstractmethod
     async def read(
         self,
-        source: Union[Type[ModelT], str],
-        id_or_ids: Union[str, List[str]],
-        fields: Optional[List[str]] = None,
-    ) -> Union[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+        source: type[ModelT] | str,
+        id_or_ids: str | list[str],
+        fields: list[str] | None = None,
+    ) -> dict[str, Any] | None | list[dict[str, Any]]:
         """Read one or multiple records from database.
 
         This method supports four modes:
@@ -656,7 +635,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
 
     @abstractmethod
     @overload
-    async def delete(self, model: Type[ModelT], filter: Dict[str, Any]) -> int:
+    async def delete(self, model: type[ModelT], filter: dict[str, Any]) -> int:
         """Delete multiple records by filter.
 
         Args:
@@ -674,9 +653,9 @@ class DatabaseAdapter(Generic[ModelT], ABC):
     @abstractmethod
     async def delete(
         self,
-        model: Union[ModelT, Type[ModelT]],
-        filter: Optional[Dict[str, Any]] = None,
-    ) -> Optional[int]:
+        model: ModelT | type[ModelT],
+        filter: dict[str, Any] | None = None,
+    ) -> int | None:
         """Delete one or multiple records.
 
         This method supports two modes:
@@ -712,7 +691,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
         self,
         value: Any,
         field_type: Literal["string"],
-        target_type: Type[str] = str,
+        target_type: type[str] = str,
     ) -> str:
         """Convert value to string."""
         ...
@@ -723,7 +702,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
         self,
         value: Any,
         field_type: Literal["integer"],
-        target_type: Type[int] = int,
+        target_type: type[int] = int,
     ) -> int:
         """Convert value to integer."""
         ...
@@ -734,7 +713,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
         self,
         value: Any,
         field_type: Literal["float"],
-        target_type: Type[float] = float,
+        target_type: type[float] = float,
     ) -> float:
         """Convert value to float."""
         ...
@@ -745,7 +724,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
         self,
         value: Any,
         field_type: Literal["decimal"],
-        target_type: Type[Decimal] = Decimal,
+        target_type: type[Decimal] = Decimal,
     ) -> Decimal:
         """Convert value to decimal."""
         ...
@@ -756,7 +735,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
         self,
         value: Any,
         field_type: Literal["boolean"],
-        target_type: Type[bool] = bool,
+        target_type: type[bool] = bool,
     ) -> bool:
         """Convert value to boolean."""
         ...
@@ -767,7 +746,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
         self,
         value: Any,
         field_type: Literal["datetime"],
-        target_type: Type[datetime] = datetime,
+        target_type: type[datetime] = datetime,
     ) -> datetime:
         """Convert value to datetime."""
         ...
@@ -778,7 +757,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
         self,
         value: Any,
         field_type: Literal["date"],
-        target_type: Type[date] = date,
+        target_type: type[date] = date,
     ) -> date:
         """Convert value to date."""
         ...
@@ -789,7 +768,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
         self,
         value: Any,
         field_type: Literal["enum"],
-        target_type: Type[Enum],
+        target_type: type[Enum],
     ) -> Enum:
         """Convert value to enum."""
         ...
@@ -800,8 +779,8 @@ class DatabaseAdapter(Generic[ModelT], ABC):
         self,
         value: Any,
         field_type: Literal["json"],
-        target_type: Type[Dict[str, Any]] = dict,
-    ) -> Dict[str, Any]:
+        target_type: type[dict[str, Any]] = dict,
+    ) -> dict[str, Any]:
         """Convert value to JSON object."""
         ...
 
@@ -811,8 +790,8 @@ class DatabaseAdapter(Generic[ModelT], ABC):
         self,
         value: Any,
         field_type: Literal["array"],
-        target_type: Type[List[T]] = list,
-    ) -> List[T]:
+        target_type: type[list[T]] = list,
+    ) -> list[T]:
         """Convert value to array."""
         ...
 
@@ -821,7 +800,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
         self,
         value: Any,
         field_type: FieldType,
-        target_type: Optional[Type[T]] = None,
+        target_type: type[T] | None = None,
     ) -> T:
         """Convert value between database and Python format.
 
@@ -882,9 +861,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
         # Validate target_type compatibility with field_type
         expected_type = TYPE_MAPPING.get(field_type)
         if expected_type and not issubclass(get_origin(target_type) or target_type, expected_type):  # type: ignore
-            raise TypeError(
-                f"Target type {target_type} is not compatible with field type {field_type}"
-            )
+            raise TypeError(f"Target type {target_type} is not compatible with field type {field_type}")
 
         # Handle null/None values
         if value is None:
@@ -932,7 +909,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
                     return list(value)  # type: ignore
 
                 # Convert each item using the specified type
-                converted: List[Optional[T]] = [
+                converted: list[T | None] = [
                     item_type(item) if item is not None else None for item in value  # type: ignore
                 ]
                 return converted  # type: ignore
@@ -946,9 +923,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
                 raise ValueError(f"Unsupported field type: {field_type}")
 
         except Exception as e:
-            raise ValueError(
-                f"Failed to convert value {value} to {field_type}: {str(e)}"
-            ) from e
+            raise ValueError(f"Failed to convert value {value} to {field_type}: {e!s}") from e
 
     @property
     @abstractmethod
@@ -969,9 +944,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
         return not isinstance(obj, type) and isinstance(obj, DatabaseModel)
 
     @abstractmethod
-    async def setup_relations(
-        self, model: Type[ModelT], relations: Dict[str, RelationOptions]
-    ) -> None:
+    async def setup_relations(self, model: type[ModelT], relations: dict[str, RelationOptions]) -> None:
         """Set up relation fields for model.
 
         This method:
@@ -1013,9 +986,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
                     resolved_model = await self.env.get_model(options.model)
                     options.model = resolved_model
                 except Exception as e:
-                    raise RuntimeError(
-                        f"Failed to resolve model {options.model} for field {field_name}"
-                    ) from e
+                    raise RuntimeError(f"Failed to resolve model {options.model} for field {field_name}") from e
 
     @abstractmethod
     async def get_related(
@@ -1024,7 +995,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
         field_name: str,
         relation_type: RelationType,
         options: RelationOptions,
-    ) -> Union[Optional[ModelT], List[ModelT]]:
+    ) -> ModelT | None | list[ModelT]:
         """Get related records for relation field.
 
         This method handles both string and class references for related models.
@@ -1064,7 +1035,7 @@ class DatabaseAdapter(Generic[ModelT], ABC):
         self,
         instance: ModelT,
         field_name: str,
-        value: Union[Optional[ModelT], List[ModelT]],
+        value: ModelT | None | list[ModelT],
         relation_type: RelationType,
         options: RelationOptions,
     ) -> None:
@@ -1143,11 +1114,11 @@ class DatabaseAdapter(Generic[ModelT], ABC):
     @abstractmethod
     async def bulk_load_related(
         self,
-        instances: List[ModelT],
+        instances: list[ModelT],
         field_name: str,
         relation_type: RelationType,
         options: RelationOptions,
-    ) -> Dict[str, Union[Optional[ModelT], List[ModelT]]]:
+    ) -> dict[str, ModelT | None | list[ModelT]]:
         """Load related records for multiple instances efficiently.
 
         Args:

@@ -26,7 +26,7 @@ Examples:
 """
 
 from enum import Enum
-from typing import Any, Dict, Final, Generic, List, Optional, Type, TypeVar, Union
+from typing import Any, Final, Generic, TypeVar
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
@@ -56,13 +56,13 @@ class EnumField(BaseField[E], FieldComparisonMixin, Generic[E]):
         backend_options: Database backend options
     """
 
-    enum_class: Type[E]
+    enum_class: type[E]
     case_sensitive: bool
     backend_options: dict[str, Any]
 
     def __init__(
         self,
-        enum_class: Type[E],
+        enum_class: type[E],
         *,
         case_sensitive: bool = DEFAULT_CASE_SENSITIVE,
         **options: Any,
@@ -88,11 +88,7 @@ class EnumField(BaseField[E], FieldComparisonMixin, Generic[E]):
 
         # Get the type of enum values
         first_value = next(iter(enum_class.__members__.values())).value
-        value_type = (
-            str
-            if isinstance(first_value, str)
-            else int if isinstance(first_value, int) else object
-        )
+        value_type = str if isinstance(first_value, str) else int if isinstance(first_value, int) else object
 
         # Initialize backend options based on value type
         if value_type == str:
@@ -115,9 +111,7 @@ class EnumField(BaseField[E], FieldComparisonMixin, Generic[E]):
                 "mysql": {"type": "TEXT"},
             }
 
-    async def validate(
-        self, value: Any, context: Optional[Dict[str, Any]] = None
-    ) -> Any:
+    async def validate(self, value: Any, context: dict[str, Any] | None = None) -> Any:
         """Validate enum value.
 
         This method validates:
@@ -145,8 +139,7 @@ class EnumField(BaseField[E], FieldComparisonMixin, Generic[E]):
             if not isinstance(value, self.enum_class):
                 raise FieldValidationError(
                     message=(
-                        f"Value must be an instance of {self.enum_class.__name__}, "
-                        f"got {type(value).__name__}"
+                        f"Value must be an instance of {self.enum_class.__name__}, " f"got {type(value).__name__}"
                     ),
                     field_name=self.name,
                     code="invalid_type",
@@ -155,8 +148,7 @@ class EnumField(BaseField[E], FieldComparisonMixin, Generic[E]):
             if value not in self.enum_class.__members__.values():
                 raise FieldValidationError(
                     message=(
-                        f"Invalid enum value: {value}. "
-                        f"Allowed values: {list(self.enum_class.__members__.values())}"
+                        f"Invalid enum value: {value}. " f"Allowed values: {list(self.enum_class.__members__.values())}"
                     ),
                     field_name=self.name,
                     code="invalid_choice",
@@ -164,7 +156,7 @@ class EnumField(BaseField[E], FieldComparisonMixin, Generic[E]):
 
         return value
 
-    async def convert(self, value: Any) -> Optional[E]:
+    async def convert(self, value: Any) -> E | None:
         """Convert value to enum.
 
         Handles:
@@ -206,10 +198,10 @@ class EnumField(BaseField[E], FieldComparisonMixin, Generic[E]):
                     for member in self.enum_class.__members__.values():
                         member_value = str(member.value)
                         if (
-                            self.case_sensitive
-                            and member_value == value
-                            or not self.case_sensitive
-                            and member_value.upper() == value.upper()
+                            (self.case_sensitive
+                            and member_value == value)
+                            or (not self.case_sensitive
+                            and member_value.upper() == value.upper())
                         ):
                             return member
 
@@ -230,7 +222,7 @@ class EnumField(BaseField[E], FieldComparisonMixin, Generic[E]):
                 code="conversion_error",
             ) from e
 
-    async def to_db(self, value: Optional[E], backend: str) -> DatabaseValue:
+    async def to_db(self, value: E | None, backend: str) -> DatabaseValue:
         """Convert enum to database format.
 
         Args:
@@ -245,7 +237,7 @@ class EnumField(BaseField[E], FieldComparisonMixin, Generic[E]):
 
         return value.value
 
-    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[E]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> E | None:
         """Convert database value to enum.
 
         Args:
@@ -302,10 +294,7 @@ class EnumField(BaseField[E], FieldComparisonMixin, Generic[E]):
                         and isinstance(value, str)
                         and (
                             (self.case_sensitive and member.value == value)
-                            or (
-                                not self.case_sensitive
-                                and member.value.upper() == value.upper()
-                            )
+                            or (not self.case_sensitive and member.value.upper() == value.upper())
                         )
                     ) or member.value == value:
                         return member.value
@@ -313,7 +302,7 @@ class EnumField(BaseField[E], FieldComparisonMixin, Generic[E]):
         except (TypeError, ValueError):
             return None
 
-    def equals(self, value: Union[E, str, int]) -> ComparisonOperator:
+    def equals(self, value: E | str | int) -> ComparisonOperator:
         """Check if value equals another value.
 
         Args:
@@ -324,7 +313,7 @@ class EnumField(BaseField[E], FieldComparisonMixin, Generic[E]):
         """
         return ComparisonOperator(self.name, "eq", self._prepare_value(value))
 
-    def not_equals(self, value: Union[E, str, int]) -> ComparisonOperator:
+    def not_equals(self, value: E | str | int) -> ComparisonOperator:
         """Check if value does not equal another value.
 
         Args:
@@ -335,7 +324,7 @@ class EnumField(BaseField[E], FieldComparisonMixin, Generic[E]):
         """
         return ComparisonOperator(self.name, "ne", self._prepare_value(value))
 
-    def in_list(self, values: List[Union[E, str, int]]) -> ComparisonOperator:
+    def in_list(self, values: list[E | str | int]) -> ComparisonOperator:
         """Check if value is in list of values.
 
         Args:
@@ -347,7 +336,7 @@ class EnumField(BaseField[E], FieldComparisonMixin, Generic[E]):
         prepared_values = [self._prepare_value(value) for value in values]
         return ComparisonOperator(self.name, "in", prepared_values)
 
-    def not_in_list(self, values: List[Union[E, str, int]]) -> ComparisonOperator:
+    def not_in_list(self, values: list[E | str | int]) -> ComparisonOperator:
         """Check if value is not in list of values.
 
         Args:

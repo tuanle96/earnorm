@@ -20,7 +20,7 @@ Examples:
     >>> query.aggregate().group_by(User.age).max(User.salary)
 """
 
-from typing import Any, Dict, List, Optional, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 from motor.motor_asyncio import AsyncIOMotorCollection
 
@@ -48,7 +48,7 @@ class MongoAggregate(AggregateProtocol[ModelT]):
     def __init__(
         self,
         collection: AsyncIOMotorCollection[JsonDict],  # type: ignore
-        model_type: Type[ModelT],
+        model_type: type[ModelT],
     ) -> None:
         """Initialize MongoDB aggregate.
 
@@ -58,9 +58,9 @@ class MongoAggregate(AggregateProtocol[ModelT]):
         """
         self._collection = collection
         self._model_type = model_type
-        self._group_fields: List[str] = []
-        self._aggregations: List[Dict[str, Any]] = []
-        self._having_conditions: Dict[str, Any] = {}
+        self._group_fields: list[str] = []
+        self._aggregations: list[dict[str, Any]] = []
+        self._having_conditions: dict[str, Any] = {}
 
     def group_by(self, *fields: str) -> "MongoAggregate[ModelT]":
         """Group by fields.
@@ -74,9 +74,7 @@ class MongoAggregate(AggregateProtocol[ModelT]):
         self._group_fields.extend(fields)
         return self
 
-    def count(
-        self, field: str = "*", alias: Optional[str] = None
-    ) -> "MongoAggregate[ModelT]":
+    def count(self, field: str = "*", alias: str | None = None) -> "MongoAggregate[ModelT]":
         """Count records.
 
         Args:
@@ -90,7 +88,7 @@ class MongoAggregate(AggregateProtocol[ModelT]):
         self._aggregations.append({alias: {"$sum": 1}})
         return self
 
-    def sum(self, field: str, alias: Optional[str] = None) -> "MongoAggregate[ModelT]":
+    def sum(self, field: str, alias: str | None = None) -> "MongoAggregate[ModelT]":
         """Sum field values.
 
         Args:
@@ -104,7 +102,7 @@ class MongoAggregate(AggregateProtocol[ModelT]):
         self._aggregations.append({alias: {"$sum": f"${field}"}})
         return self
 
-    def avg(self, field: str, alias: Optional[str] = None) -> "MongoAggregate[ModelT]":
+    def avg(self, field: str, alias: str | None = None) -> "MongoAggregate[ModelT]":
         """Average field values.
 
         Args:
@@ -118,7 +116,7 @@ class MongoAggregate(AggregateProtocol[ModelT]):
         self._aggregations.append({alias: {"$avg": f"${field}"}})
         return self
 
-    def min(self, field: str, alias: Optional[str] = None) -> "MongoAggregate[ModelT]":
+    def min(self, field: str, alias: str | None = None) -> "MongoAggregate[ModelT]":
         """Get minimum field value.
 
         Args:
@@ -132,7 +130,7 @@ class MongoAggregate(AggregateProtocol[ModelT]):
         self._aggregations.append({alias: {"$min": f"${field}"}})
         return self
 
-    def max(self, field: str, alias: Optional[str] = None) -> "MongoAggregate[ModelT]":
+    def max(self, field: str, alias: str | None = None) -> "MongoAggregate[ModelT]":
         """Get maximum field value.
 
         Args:
@@ -146,9 +144,7 @@ class MongoAggregate(AggregateProtocol[ModelT]):
         self._aggregations.append({alias: {"$max": f"${field}"}})
         return self
 
-    def having(
-        self, domain: Union[List[DomainItem], JsonDict]
-    ) -> "MongoAggregate[ModelT]":
+    def having(self, domain: list[DomainItem] | JsonDict) -> "MongoAggregate[ModelT]":
         """Add having conditions.
 
         Args:
@@ -176,23 +172,17 @@ class MongoAggregate(AggregateProtocol[ModelT]):
         if not self._group_fields and not self._aggregations:
             raise ValueError("No grouping fields or aggregations specified")
 
-    def get_pipeline_stages(self) -> List[JsonDict]:
+    def get_pipeline_stages(self) -> list[JsonDict]:
         """Get MongoDB aggregation pipeline stages for this aggregation.
 
         Returns:
             List[JsonDict]: List of pipeline stages
         """
-        stages: List[JsonDict] = []
+        stages: list[JsonDict] = []
 
         # Build $group stage
         group_stage: JsonDict = {
-            "$group": {
-                "_id": (
-                    {field: f"${field}" for field in self._group_fields}
-                    if self._group_fields
-                    else None
-                )
-            }
+            "$group": {"_id": ({field: f"${field}" for field in self._group_fields} if self._group_fields else None)}
         }
 
         # Add aggregations
@@ -226,7 +216,7 @@ class MongoAggregate(AggregateProtocol[ModelT]):
 
         return stages
 
-    def to_pipeline(self) -> List[JsonDict]:
+    def to_pipeline(self) -> list[JsonDict]:
         """Convert aggregate operation to MongoDB pipeline.
 
         Returns:
@@ -239,17 +229,11 @@ class MongoAggregate(AggregateProtocol[ModelT]):
             >>> print(pipeline)
             [{"$group": {"_id": "$age", "count": {"$sum": 1}}}]
         """
-        stages: List[JsonDict] = []
+        stages: list[JsonDict] = []
 
         # Build $group stage
         group_stage: JsonDict = {
-            "$group": {
-                "_id": (
-                    {field: f"${field}" for field in self._group_fields}
-                    if self._group_fields
-                    else None
-                )
-            }
+            "$group": {"_id": ({field: f"${field}" for field in self._group_fields} if self._group_fields else None)}
         }
 
         # Add aggregations
@@ -284,7 +268,7 @@ class MongoAggregate(AggregateProtocol[ModelT]):
         return stages
 
     @property
-    def model_type(self) -> Type[ModelT]:
+    def model_type(self) -> type[ModelT]:
         """Get model type.
 
         Returns:
@@ -311,7 +295,7 @@ class MongoAggregate(AggregateProtocol[ModelT]):
             MongoDB query
         """
 
-        def convert_node(node: Union[DomainNode, DomainLeaf]) -> JsonDict:
+        def convert_node(node: DomainNode | DomainLeaf) -> JsonDict:
             if isinstance(node, DomainLeaf):
                 field = node.field
                 op = node.operator

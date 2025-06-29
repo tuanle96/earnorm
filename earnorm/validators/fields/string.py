@@ -10,7 +10,8 @@ This module provides validators for string fields, including:
 """
 
 import re
-from typing import Any, Optional, Sequence, Union
+from collections.abc import Sequence
+from typing import Any
 
 from earnorm.types import ValidatorFunc
 from earnorm.validators.base import BaseValidator, ValidationError, create_validator
@@ -132,9 +133,7 @@ class RegexValidator(BaseValidator):
         ```
     """
 
-    def __init__(
-        self, pattern: Union[str, re.Pattern[str]], message: Optional[str] = None
-    ) -> None:
+    def __init__(self, pattern: str | re.Pattern[str], message: str | None = None) -> None:
         """Initialize validator.
 
         Args:
@@ -161,9 +160,9 @@ class RegexValidator(BaseValidator):
 
 
 def validate_length(
-    min_length: Optional[int] = None,
-    max_length: Optional[int] = None,
-    message: Optional[str] = None,
+    min_length: int | None = None,
+    max_length: int | None = None,
+    message: str | None = None,
 ) -> ValidatorFunc:
     """Create length validator.
 
@@ -198,9 +197,7 @@ def validate_length(
     return validator
 
 
-def validate_choice(
-    choices: Sequence[str], message: Optional[str] = None
-) -> ValidatorFunc:
+def validate_choice(choices: Sequence[str], message: str | None = None) -> ValidatorFunc:
     """Create choice validator.
 
     Args:
@@ -226,9 +223,7 @@ def validate_choice(
     )
 
 
-def validate_regex(
-    pattern: Union[str, re.Pattern[str]], message: Optional[str] = None
-) -> ValidatorFunc:
+def validate_regex(pattern: str | re.Pattern[str], message: str | None = None) -> ValidatorFunc:
     """Create regex validator.
 
     Args:

@@ -33,14 +33,13 @@ Examples:
 
 import asyncio
 import logging
-from typing import Any, AsyncContextManager, Optional, Set, TypeVar, cast
+from typing import Any, AsyncContextManager, TypeVar, cast
 
 try:
     from redis.asyncio import Redis
 except ImportError as e:
     raise ImportError(
-        "Redis package is not installed. Please install it with: "
-        "pip install 'redis[hiredis]>=4.2.0'"
+        "Redis package is not installed. Please install it with: " "pip install 'redis[hiredis]>=4.2.0'"
     ) from e
 
 from earnorm.exceptions import PoolExhaustedError, RedisConnectionError
@@ -107,8 +106,8 @@ class RedisPool(AsyncPoolProtocol[DB, COLL]):
         self._kwargs = kwargs
 
         self._client: Redis | None = None
-        self._available: Set[AsyncConnectionProtocol[DB, COLL]] = set()
-        self._in_use: Set[AsyncConnectionProtocol[DB, COLL]] = set()
+        self._available: set[AsyncConnectionProtocol[DB, COLL]] = set()
+        self._in_use: set[AsyncConnectionProtocol[DB, COLL]] = set()
         self._lock = asyncio.Lock()
 
     @property
@@ -342,7 +341,7 @@ class _ConnectionManager(AsyncContextManager[AsyncConnectionProtocol[DB, COLL]])
             pool: Redis pool
         """
         self.pool = pool
-        self.conn: Optional[AsyncConnectionProtocol[DB, COLL]] = None
+        self.conn: AsyncConnectionProtocol[DB, COLL] | None = None
 
     async def __aenter__(self) -> AsyncConnectionProtocol[DB, COLL]:
         """Enter async context.

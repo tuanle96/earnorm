@@ -25,17 +25,12 @@ Examples:
 """
 
 import json
+from collections.abc import Iterable
 from typing import (
     Any,
-    Dict,
     Generic,
-    Iterable,
-    List,
-    Optional,
     Protocol,
-    Set,
     TypeVar,
-    Union,
     cast,
 )
 
@@ -55,7 +50,7 @@ class Comparable(Protocol):
 T = TypeVar("T", bound=Comparable)
 
 
-class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
+class SetField(BaseField[set[T]], FieldComparisonMixin, Generic[T]):
     """Field for set values.
 
     This field type handles unique sequences of values, with support for:
@@ -71,16 +66,16 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
         backend_options: Database backend options
     """
 
-    min_length: Optional[int]
-    max_length: Optional[int]
-    backend_options: Dict[str, Any]
+    min_length: int | None
+    max_length: int | None
+    backend_options: dict[str, Any]
 
     def __init__(
         self,
         element_field: BaseField[T],
         *,
-        min_length: Optional[int] = None,
-        max_length: Optional[int] = None,
+        min_length: int | None = None,
+        max_length: int | None = None,
         **options: Any,
     ) -> None:
         """Initialize set field.
@@ -122,9 +117,7 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
         await super().setup(name, model_name)
         await self.element_field.setup(f"{name}[]", model_name)
 
-    async def validate(
-        self, value: Any, context: Optional[Dict[str, Any]] = None
-    ) -> Optional[Set[T]]:
+    async def validate(self, value: Any, context: dict[str, Any] | None = None) -> set[T] | None:
         """Validate set value.
 
         This method validates:
@@ -156,13 +149,13 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
                     value = set(value)
             except (TypeError, ValueError) as e:
                 raise FieldValidationError(
-                    message=f"Cannot convert to set: {str(e)}",
+                    message=f"Cannot convert to set: {e!s}",
                     field_name=self.name,
                     code="invalid_type",
                     context=context,
                 )
 
-            value_set: Set[Any] = cast(Set[Any], value)
+            value_set: set[Any] = cast(set[Any], value)
 
             # Validate length
             if self.min_length is not None and len(value_set) < self.min_length:
@@ -186,26 +179,20 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
                 **(context or {}),
                 "parent_field": self,
                 "parent_value": value_set,
-                "validation_path": (
-                    f"{context.get('validation_path', '')}.{self.name}"
-                    if context
-                    else self.name
-                ),
+                "validation_path": (f"{context.get('validation_path', '')}.{self.name}" if context else self.name),
             }
 
             # Validate elements
-            validated_elements: Set[T] = set()
+            validated_elements: set[T] = set()
             for i, element in enumerate(value_set):
                 try:
                     element_context["index"] = i
-                    validated = await self.element_field.validate(
-                        element, element_context
-                    )
+                    validated = await self.element_field.validate(element, element_context)
                     if validated is not None:
                         validated_elements.add(validated)
                 except FieldValidationError as e:
                     raise FieldValidationError(
-                        message=f"Invalid element at index {i}: {str(e)}",
+                        message=f"Invalid element at index {i}: {e!s}",
                         field_name=self.name,
                         code="invalid_element",
                         context=element_context,
@@ -215,7 +202,7 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
 
         return None
 
-    async def convert(self, value: Any) -> Optional[Set[T]]:
+    async def convert(self, value: Any) -> set[T] | None:
         """Convert value to set.
 
         Args:
@@ -243,7 +230,7 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
                         )
                 except json.JSONDecodeError as e:
                     raise FieldValidationError(
-                        message=f"Invalid JSON array: {str(e)}",
+                        message=f"Invalid JSON array: {e!s}",
                         field_name=self.name,
                         code="invalid_json",
                     ) from e
@@ -253,13 +240,13 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
                 value = set(cast(Iterable[Any], value))
             except (TypeError, ValueError) as e:
                 raise FieldValidationError(
-                    message=f"Cannot convert to set: {str(e)}",
+                    message=f"Cannot convert to set: {e!s}",
                     field_name=self.name,
                     code="conversion_error",
                 ) from e
 
             # Convert elements
-            result: Set[T] = set()
+            result: set[T] = set()
             for i, element in enumerate(value):
                 try:
                     converted = await self.element_field.convert(element)
@@ -267,7 +254,7 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
                         result.add(converted)
                 except FieldValidationError as e:
                     raise FieldValidationError(
-                        message=f"Cannot convert element at index {i}: {str(e)}",
+                        message=f"Cannot convert element at index {i}: {e!s}",
                         field_name=self.name,
                         code="conversion_error",
                     ) from e
@@ -276,12 +263,12 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
 
         except Exception as e:
             raise FieldValidationError(
-                message=f"Cannot convert to set: {str(e)}",
+                message=f"Cannot convert to set: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
 
-    async def to_db(self, value: Optional[Set[T]], backend: str) -> DatabaseValue:
+    async def to_db(self, value: set[T] | None, backend: str) -> DatabaseValue:
         """Convert set to database format.
 
         Args:
@@ -298,9 +285,9 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
             return None
 
         try:
-            result: List[DatabaseValue] = []
+            result: list[DatabaseValue] = []
             # Convert to list and sort
-            elements: List[T] = list(value)
+            elements: list[T] = list(value)
             elements.sort()  # Sort in-place since T is Comparable
             for element in elements:
                 db_value = await self.element_field.to_db(element, backend)
@@ -308,12 +295,12 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
             return result
         except Exception as e:
             raise FieldValidationError(
-                message=f"Cannot convert set to database format: {str(e)}",
+                message=f"Cannot convert set to database format: {e!s}",
                 field_name=self.name,
                 code="db_conversion_error",
             ) from e
 
-    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[Set[T]]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> set[T] | None:
         """Convert database value to set.
 
         Args:
@@ -337,7 +324,7 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
             )
 
         try:
-            result: Set[T] = set()
+            result: set[T] = set()
             for i, element in enumerate(value):
                 try:
                     converted = await self.element_field.from_db(element, backend)
@@ -345,7 +332,7 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
                         result.add(converted)
                 except Exception as e:
                     raise FieldValidationError(
-                        message=f"Cannot convert database value at index {i}: {str(e)}",
+                        message=f"Cannot convert database value at index {i}: {e!s}",
                         field_name=self.name,
                         code="db_conversion_error",
                     ) from e
@@ -353,7 +340,7 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
             return result
         except Exception as e:
             raise FieldValidationError(
-                message=f"Cannot convert database value to set: {str(e)}",
+                message=f"Cannot convert database value to set: {e!s}",
                 field_name=self.name,
                 code="db_conversion_error",
             ) from e
@@ -373,12 +360,10 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
         try:
             if isinstance(value, (list, set)):
                 # Convert to list and sort
-                elements: List[T] = list(cast(Iterable[T], value))
+                elements: list[T] = list(cast(Iterable[T], value))
                 elements.sort()  # Sort in-place since T is Comparable
-                return [
-                    getattr(self.element_field, "_prepare_value")(x) for x in elements
-                ]
-            return [getattr(self.element_field, "_prepare_value")(value)]
+                return [self.element_field._prepare_value(x) for x in elements]
+            return [self.element_field._prepare_value(value)]
         except (TypeError, ValueError, AttributeError):
             return None
 
@@ -404,7 +389,7 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
         """
         return ComparisonOperator(self.name, "not_contains", self._prepare_value(value))
 
-    def contains_all(self, values: Union[List[T], Set[T]]) -> ComparisonOperator:
+    def contains_all(self, values: list[T] | set[T]) -> ComparisonOperator:
         """Check if set contains all values.
 
         Args:
@@ -413,11 +398,9 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
         Returns:
             ComparisonOperator: Comparison operator with field name and values
         """
-        return ComparisonOperator(
-            self.name, "contains_all", self._prepare_value(values)
-        )
+        return ComparisonOperator(self.name, "contains_all", self._prepare_value(values))
 
-    def contains_any(self, values: Union[List[T], Set[T]]) -> ComparisonOperator:
+    def contains_any(self, values: list[T] | set[T]) -> ComparisonOperator:
         """Check if set contains any value.
 
         Args:
@@ -426,11 +409,9 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
         Returns:
             ComparisonOperator: Comparison operator with field name and values
         """
-        return ComparisonOperator(
-            self.name, "contains_any", self._prepare_value(values)
-        )
+        return ComparisonOperator(self.name, "contains_any", self._prepare_value(values))
 
-    def is_subset(self, values: Union[List[T], Set[T]]) -> ComparisonOperator:
+    def is_subset(self, values: list[T] | set[T]) -> ComparisonOperator:
         """Check if set is subset of values.
 
         Args:
@@ -441,7 +422,7 @@ class SetField(BaseField[Set[T]], FieldComparisonMixin, Generic[T]):
         """
         return ComparisonOperator(self.name, "is_subset", self._prepare_value(values))
 
-    def is_superset(self, values: Union[List[T], Set[T]]) -> ComparisonOperator:
+    def is_superset(self, values: list[T] | set[T]) -> ComparisonOperator:
         """Check if set is superset of values.
 
         Args:

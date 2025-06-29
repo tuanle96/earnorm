@@ -41,10 +41,10 @@ from .transaction import (
 )
 
 __all__ = [
-    "Transaction",
-    "TransactionError",
-    "TransactionManager",
     "MongoTransaction",
     "MongoTransactionError",
     "MongoTransactionManager",
+    "Transaction",
+    "TransactionError",
+    "TransactionManager",
 ]

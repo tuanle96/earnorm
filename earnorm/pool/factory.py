@@ -21,7 +21,7 @@ Examples:
     ```
 """
 
-from typing import Any, Dict, Type, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 from earnorm.pool.backends.mongo.pool import MongoPool
 from earnorm.pool.backends.redis.pool import RedisPool
@@ -35,13 +35,13 @@ COLL = TypeVar("COLL")
 class PoolFactory:
     """Pool factory for creating database connection pools."""
 
-    _pools: Dict[str, Type[AsyncPoolProtocol[Any, Any]]] = {
-        "mongodb": cast(Type[AsyncPoolProtocol[Any, Any]], MongoPool),
-        "redis": cast(Type[AsyncPoolProtocol[Any, Any]], RedisPool),
+    _pools: dict[str, type[AsyncPoolProtocol[Any, Any]]] = {
+        "mongodb": cast(type[AsyncPoolProtocol[Any, Any]], MongoPool),
+        "redis": cast(type[AsyncPoolProtocol[Any, Any]], RedisPool),
     }
 
     @classmethod
-    def register(cls, name: str, pool_class: Type[AsyncPoolProtocol[DB, COLL]]) -> None:
+    def register(cls, name: str, pool_class: type[AsyncPoolProtocol[DB, COLL]]) -> None:
         """Register pool implementation.
 
         Args:

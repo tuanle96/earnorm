@@ -13,7 +13,7 @@ Examples:
 """
 
 from abc import abstractmethod
-from typing import Any, Dict, List, Optional, Protocol, TypeVar, Union
+from typing import Any, Protocol, TypeVar
 
 from earnorm.types import DatabaseModel, JsonDict
 
@@ -24,7 +24,7 @@ class QueryProtocol(Protocol[ModelT]):
     """Protocol for query operations."""
 
     @abstractmethod
-    def filter(self, domain: Union[List[Any], JsonDict]) -> "QueryProtocol[ModelT]":
+    def filter(self, domain: list[Any] | JsonDict) -> "QueryProtocol[ModelT]":
         """Add filter conditions.
 
         Args:
@@ -72,7 +72,7 @@ class QueryProtocol(Protocol[ModelT]):
         ...
 
     @abstractmethod
-    def hint(self, index_hint: Dict[str, Any]) -> "QueryProtocol[ModelT]":
+    def hint(self, index_hint: dict[str, Any]) -> "QueryProtocol[ModelT]":
         """Add index hint for query optimization.
 
         Args:
@@ -87,7 +87,7 @@ class QueryProtocol(Protocol[ModelT]):
         ...
 
     @abstractmethod
-    def prefetch(self, fields: List[str]) -> "QueryProtocol[ModelT]":
+    def prefetch(self, fields: list[str]) -> "QueryProtocol[ModelT]":
         """Add fields to prefetch.
 
         This method specifies which related fields should be prefetched
@@ -103,7 +103,7 @@ class QueryProtocol(Protocol[ModelT]):
         ...
 
     @abstractmethod
-    async def execute(self) -> List[ModelT]:
+    async def execute(self) -> list[ModelT]:
         """Execute query and return results.
 
         Returns:
@@ -130,7 +130,7 @@ class QueryProtocol(Protocol[ModelT]):
         ...
 
     @abstractmethod
-    async def first(self) -> Optional[ModelT]:
+    async def first(self) -> ModelT | None:
         """Get first result or None.
 
         Returns:

@@ -11,7 +11,7 @@ Examples:
 """
 
 import logging
-from typing import Any, List, Protocol, Union
+from typing import Any, Protocol
 
 from bson.objectid import ObjectId
 
@@ -65,7 +65,7 @@ class MongoConverter:
         "!": "$not",
     }
 
-    def convert(self, domain: Union[List[Any], JsonDict]) -> JsonDict:
+    def convert(self, domain: list[Any] | JsonDict) -> JsonDict:
         """Convert domain to MongoDB query format.
 
         Args:
@@ -84,7 +84,7 @@ class MongoConverter:
             return {}
         return self.convert_node(expr.root)
 
-    def convert_node(self, node: Union[DomainNode, DomainLeaf]) -> JsonDict:
+    def convert_node(self, node: DomainNode | DomainLeaf) -> JsonDict:
         """Convert domain node to MongoDB query format.
 
         Args:

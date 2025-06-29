@@ -23,7 +23,8 @@ Examples:
     ...     admins = User.find(User.metadata.has_value("admin"))
 """
 
-from typing import Any, Dict, Generic, Mapping, Optional, TypeVar, cast
+from collections.abc import Mapping
+from typing import Any, Generic, TypeVar, cast
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
@@ -32,7 +33,7 @@ from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldCompari
 T = TypeVar("T")
 
 
-class DictField(BaseField[Dict[str, T]], FieldComparisonMixin, Generic[T]):
+class DictField(BaseField[dict[str, T]], FieldComparisonMixin, Generic[T]):
     """Field for dictionary values.
 
     This field type handles dictionaries, with support for:
@@ -51,16 +52,16 @@ class DictField(BaseField[Dict[str, T]], FieldComparisonMixin, Generic[T]):
     """
 
     _value_field: BaseField[T]
-    min_length: Optional[int]
-    max_length: Optional[int]
-    backend_options: Dict[str, Any]
+    min_length: int | None
+    max_length: int | None
+    backend_options: dict[str, Any]
 
     def __init__(
         self,
         value_field: BaseField[T],
         *,
-        min_length: Optional[int] = None,
-        max_length: Optional[int] = None,
+        min_length: int | None = None,
+        max_length: int | None = None,
         **options: Any,
     ) -> None:
         """Initialize dictionary field.
@@ -101,7 +102,7 @@ class DictField(BaseField[Dict[str, T]], FieldComparisonMixin, Generic[T]):
                     "unique": False,
                 }
 
-    async def get_value_field(self) -> BaseField[T]:
+    def get_value_field(self) -> BaseField[T]:
         """Get value field type.
 
         Returns:
@@ -109,7 +110,7 @@ class DictField(BaseField[Dict[str, T]], FieldComparisonMixin, Generic[T]):
         """
         if not hasattr(self, "_value_field"):
             raise AttributeError("value_field has not been initialized")
-        return await self._value_field  # type: ignore
+        return self._value_field  # type: ignore
 
     async def setup(self, name: str, model_name: str) -> None:
         """Set up field.
@@ -123,12 +124,10 @@ class DictField(BaseField[Dict[str, T]], FieldComparisonMixin, Generic[T]):
             model_name: Model name
         """
         await super().setup(name, model_name)
-        value_field = await self.get_value_field()
+        value_field = self.get_value_field()
         await value_field.setup(f"{name}.value", model_name)
 
-    async def validate(
-        self, value: Any, context: Optional[Dict[str, Any]] = None
-    ) -> Optional[Dict[str, T]]:
+    async def validate(self, value: Any, context: dict[str, Any] | None = None) -> dict[str, T] | None:
         """Validate dictionary value.
 
         This method validates:
@@ -157,7 +156,7 @@ class DictField(BaseField[Dict[str, T]], FieldComparisonMixin, Generic[T]):
                     code="invalid_type",
                 )
 
-            dict_value = cast(Dict[Any, Any], value)
+            dict_value = cast(dict[Any, Any], value)
 
             # Validate length
             if self.min_length is not None and len(dict_value) < self.min_length:
@@ -175,18 +174,18 @@ class DictField(BaseField[Dict[str, T]], FieldComparisonMixin, Generic[T]):
                 )
 
             # Validate keys and values
-            result: Dict[str, T] = {}
+            result: dict[str, T] = {}
             for key, val in dict_value.items():
                 key_str = str(key)
                 # Validate value
                 try:
-                    value_field = await self.get_value_field()
+                    value_field = self.get_value_field()
                     validated_value = await value_field.validate(val, context)
                     if validated_value is not None:
                         result[key_str] = validated_value
                 except FieldValidationError as e:
                     raise FieldValidationError(
-                        message=f"Invalid value for key '{key_str}': {str(e)}",
+                        message=f"Invalid value for key '{key_str}': {e!s}",
                         field_name=self.name,
                         code="invalid_value",
                     ) from e
@@ -195,7 +194,7 @@ class DictField(BaseField[Dict[str, T]], FieldComparisonMixin, Generic[T]):
 
         return None
 
-    async def convert(self, value: Any) -> Optional[Dict[str, T]]:
+    async def convert(self, value: Any) -> dict[str, T] | None:
         """Convert value to dictionary.
 
         This method handles:
@@ -218,8 +217,8 @@ class DictField(BaseField[Dict[str, T]], FieldComparisonMixin, Generic[T]):
 
         try:
             if isinstance(value, Mapping):
-                dict_value = cast(Dict[Any, Any], value)
-                result: Dict[str, T] = {}
+                dict_value = cast(dict[Any, Any], value)
+                result: dict[str, T] = {}
                 value_field = self.get_value_field()
                 for key, val in dict_value.items():
                     key_str = str(key)
@@ -237,9 +236,7 @@ class DictField(BaseField[Dict[str, T]], FieldComparisonMixin, Generic[T]):
                 code="conversion_error",
             ) from e
 
-    async def to_db(
-        self, value: Optional[Dict[str, T]], backend: str
-    ) -> Optional[Dict[str, Any]]:
+    async def to_db(self, value: dict[str, T] | None, backend: str) -> dict[str, Any] | None:
         """Convert dictionary to database format.
 
         Args:
@@ -252,7 +249,7 @@ class DictField(BaseField[Dict[str, T]], FieldComparisonMixin, Generic[T]):
         if value is None:
             return None
 
-        result: Dict[str, Any] = {}
+        result: dict[str, Any] = {}
         value_field = self.get_value_field()
         for key, val in value.items():
             db_value = await value_field.to_db(val, backend)  # type: ignore
@@ -260,9 +257,7 @@ class DictField(BaseField[Dict[str, T]], FieldComparisonMixin, Generic[T]):
                 result[key] = db_value
         return result
 
-    async def from_db(
-        self, value: DatabaseValue, backend: str
-    ) -> Optional[Dict[str, T]]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> dict[str, T] | None:
         """Convert database value to dictionary.
 
         Args:
@@ -286,7 +281,7 @@ class DictField(BaseField[Dict[str, T]], FieldComparisonMixin, Generic[T]):
             )
 
         try:
-            result: Dict[str, T] = {}
+            result: dict[str, T] = {}
             value_field = self.get_value_field()
             for key, val in value.items():
                 converted_value = await value_field.from_db(val, backend)  # type: ignore
@@ -296,7 +291,7 @@ class DictField(BaseField[Dict[str, T]], FieldComparisonMixin, Generic[T]):
 
         except Exception as e:
             raise FieldValidationError(
-                message=f"Cannot convert database value: {str(e)}",
+                message=f"Cannot convert database value: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
@@ -323,7 +318,7 @@ class DictField(BaseField[Dict[str, T]], FieldComparisonMixin, Generic[T]):
         """
         return ComparisonOperator(self.name, "has_value", value)
 
-    def matches(self, query: Dict[str, Any]) -> ComparisonOperator:
+    def matches(self, query: dict[str, Any]) -> ComparisonOperator:
         """Check if dictionary matches query.
 
         Args:

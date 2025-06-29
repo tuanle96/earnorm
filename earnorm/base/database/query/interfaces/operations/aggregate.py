@@ -14,7 +14,7 @@ Examples:
 """
 
 from abc import abstractmethod
-from typing import Any, List, Optional, TypeVar, Union
+from typing import Any, TypeVar
 
 from earnorm.base.database.query.interfaces.operations.base import OperationProtocol
 from earnorm.types import DatabaseModel, JsonDict
@@ -38,7 +38,7 @@ class AggregateProtocol(OperationProtocol[ModelT]):
         ...
 
     @abstractmethod
-    def having(self, domain: Union[List[Any], JsonDict]) -> "AggregateProtocol[ModelT]":
+    def having(self, domain: list[Any] | JsonDict) -> "AggregateProtocol[ModelT]":
         """Add having conditions.
 
         Args:
@@ -50,9 +50,7 @@ class AggregateProtocol(OperationProtocol[ModelT]):
         ...
 
     @abstractmethod
-    def count(
-        self, field: str = "*", alias: Optional[str] = None
-    ) -> "AggregateProtocol[ModelT]":
+    def count(self, field: str = "*", alias: str | None = None) -> "AggregateProtocol[ModelT]":
         """Count records.
 
         Args:
@@ -65,9 +63,7 @@ class AggregateProtocol(OperationProtocol[ModelT]):
         ...
 
     @abstractmethod
-    def sum(
-        self, field: str, alias: Optional[str] = None
-    ) -> "AggregateProtocol[ModelT]":
+    def sum(self, field: str, alias: str | None = None) -> "AggregateProtocol[ModelT]":
         """Sum field values.
 
         Args:
@@ -80,9 +76,7 @@ class AggregateProtocol(OperationProtocol[ModelT]):
         ...
 
     @abstractmethod
-    def avg(
-        self, field: str, alias: Optional[str] = None
-    ) -> "AggregateProtocol[ModelT]":
+    def avg(self, field: str, alias: str | None = None) -> "AggregateProtocol[ModelT]":
         """Average field values.
 
         Args:
@@ -95,9 +89,7 @@ class AggregateProtocol(OperationProtocol[ModelT]):
         ...
 
     @abstractmethod
-    def min(
-        self, field: str, alias: Optional[str] = None
-    ) -> "AggregateProtocol[ModelT]":
+    def min(self, field: str, alias: str | None = None) -> "AggregateProtocol[ModelT]":
         """Get minimum field value.
 
         Args:
@@ -110,9 +102,7 @@ class AggregateProtocol(OperationProtocol[ModelT]):
         ...
 
     @abstractmethod
-    def max(
-        self, field: str, alias: Optional[str] = None
-    ) -> "AggregateProtocol[ModelT]":
+    def max(self, field: str, alias: str | None = None) -> "AggregateProtocol[ModelT]":
         """Get maximum field value.
 
         Args:
@@ -132,7 +122,7 @@ class AggregateProtocol(OperationProtocol[ModelT]):
         """
         ...
 
-    def get_pipeline_stages(self) -> List[JsonDict]:
+    def get_pipeline_stages(self) -> list[JsonDict]:
         """Get MongoDB aggregation pipeline stages for this aggregation.
 
         Returns:

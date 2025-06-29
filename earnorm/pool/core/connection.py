@@ -35,11 +35,7 @@ from enum import Enum
 from typing import (
     Any,
     AsyncContextManager,
-    Dict,
-    List,
-    Optional,
     Protocol,
-    Set,
     TypeVar,
 )
 
@@ -83,7 +79,7 @@ class ConnectionMetrics:
     successful_operations: int = 0
     failed_operations: int = 0
     total_errors: int = 0
-    error_types: Dict[str, int] = field(default_factory=dict)
+    error_types: dict[str, int] = field(default_factory=dict)
     validation_failures: int = 0
     recovery_attempts: int = 0
     successful_recoveries: int = 0
@@ -147,8 +143,8 @@ class ConnectionWrapper:
     connection: Any
     state: ConnectionState = ConnectionState.IDLE
     metrics: ConnectionMetrics = field(default_factory=ConnectionMetrics)
-    last_error: Optional[Exception] = None
-    error_severity: Optional[ErrorSeverity] = None
+    last_error: Exception | None = None
+    error_severity: ErrorSeverity | None = None
 
 
 class ConnectionManager:
@@ -189,10 +185,10 @@ class ConnectionManager:
         self._cleanup_interval = cleanup_interval
         self._pre_warm = pre_warm
 
-        self._connections: List[ConnectionWrapper] = []
-        self._idle_connections: Set[ConnectionWrapper] = set()
+        self._connections: list[ConnectionWrapper] = []
+        self._idle_connections: set[ConnectionWrapper] = set()
         self._lock = asyncio.Lock()
-        self._cleanup_task: Optional[asyncio.Task[None]] = None
+        self._cleanup_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         """Start connection manager."""

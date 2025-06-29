@@ -7,7 +7,7 @@ Examples:
     >>> # Using domain expressions
     >>> expr = DomainExpression([("age", ">", 18), "&", ("status", "=", "active")])
     >>> expr.validate()  # Validates expression structure
-    >>> 
+    >>>
     >>> # Using domain nodes
     >>> root = DomainNode("&", [
     ...     DomainLeaf("age", ">", 18),
@@ -16,7 +16,7 @@ Examples:
     >>> expr = DomainExpression.from_node(root)
 """
 
-from typing import Any, List, Literal, Optional, Tuple, TypeVar, Union
+from typing import Any, Literal, TypeVar, Union
 
 from earnorm.types import JsonDict
 
@@ -41,7 +41,7 @@ DomainOperator = Literal[
 
 LogicalOperator = Literal["&", "|", "!"]
 
-DomainTuple = Tuple[str, DomainOperator, Any]
+DomainTuple = tuple[str, DomainOperator, Any]
 DomainItem = Union[DomainTuple, LogicalOperator]
 
 
@@ -95,7 +95,7 @@ class DomainNode:
     def __init__(
         self,
         operator: LogicalOperator,
-        operands: List[Union["DomainNode", DomainLeaf]],
+        operands: list[Union["DomainNode", DomainLeaf]],
     ) -> None:
         """Initialize logical node.
 
@@ -132,18 +132,18 @@ class DomainExpression:
         domain: Domain expression in list format
     """
 
-    def __init__(self, domain: List[DomainItem]) -> None:
+    def __init__(self, domain: list[DomainItem]) -> None:
         """Initialize domain expression.
 
         Args:
             domain: Domain expression in list format
         """
         self.domain = domain
-        self.root: Optional[Union[DomainNode, DomainLeaf]] = None
+        self.root: DomainNode | DomainLeaf | None = None
         self._build_tree()
 
     @classmethod
-    def from_node(cls, root: Union[DomainNode, DomainLeaf]) -> "DomainExpression":
+    def from_node(cls, root: DomainNode | DomainLeaf) -> "DomainExpression":
         """Create domain expression from root node.
 
         Args:
@@ -176,8 +176,8 @@ class DomainExpression:
             return
 
         # Handle multiple conditions
-        stack: List[Union[DomainNode, DomainLeaf]] = []
-        operators: List[LogicalOperator] = []
+        stack: list[DomainNode | DomainLeaf] = []
+        operators: list[LogicalOperator] = []
 
         i = 0
         while i < len(self.domain):
@@ -230,9 +230,9 @@ class DomainExpression:
 
         # Process operators in order of precedence
         for op in ("&", "|"):
-            new_stack: List[Union[DomainNode, DomainLeaf]] = []
-            curr_ops: List[LogicalOperator] = []
-            operands: List[Union[DomainNode, DomainLeaf]] = []
+            new_stack: list[DomainNode | DomainLeaf] = []
+            curr_ops: list[LogicalOperator] = []
+            operands: list[DomainNode | DomainLeaf] = []
 
             for i, item in enumerate(stack):
                 if i < len(operators) and operators[i] == op:
@@ -264,7 +264,7 @@ class DomainExpression:
             return
         self.root.validate()
 
-    def to_list(self) -> List[Any]:
+    def to_list(self) -> list[Any]:
         """Convert domain expression to list format.
 
         Returns:

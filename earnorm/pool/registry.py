@@ -15,7 +15,7 @@ Examples:
 """
 
 import logging
-from typing import Any, Dict, TypeVar
+from typing import Any, TypeVar
 
 from earnorm.exceptions import PoolError
 from earnorm.pool.protocols.connection import AsyncConnectionProtocol
@@ -43,7 +43,7 @@ class PoolNotFoundError(PoolError):
 class PoolRegistry:
     """Pool registry for managing pool instances."""
 
-    _pools: Dict[str, AsyncPoolProtocol[Any, Any]] = {}
+    _pools: dict[str, AsyncPoolProtocol[Any, Any]] = {}
 
     @classmethod
     def register(cls, name: str, pool: AsyncPoolProtocol[Any, Any]) -> None:
@@ -62,14 +62,10 @@ class PoolRegistry:
 
         # Check if pool implements required protocol methods
         required_methods = ["acquire", "release", "init", "close"]
-        missing_methods = [
-            method for method in required_methods if not hasattr(pool, method)
-        ]
+        missing_methods = [method for method in required_methods if not hasattr(pool, method)]
 
         if missing_methods:
-            raise TypeError(
-                f"Pool must implement AsyncPoolProtocol. Missing methods: {', '.join(missing_methods)}"
-            )
+            raise TypeError(f"Pool must implement AsyncPoolProtocol. Missing methods: {', '.join(missing_methods)}")
 
         logger.debug("Registering pool: %s", name)
         cls._pools[name] = pool
@@ -105,7 +101,7 @@ class PoolRegistry:
         return cls._pools[name]
 
     @classmethod
-    def list(cls) -> Dict[str, AsyncPoolProtocol[Any, Any]]:
+    def list(cls) -> dict[str, AsyncPoolProtocol[Any, Any]]:
         """Get all registered pools.
 
         Returns:

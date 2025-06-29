@@ -28,7 +28,7 @@ Examples:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, TypeVar, Union, cast
 
 from earnorm.exceptions import ValidationError
 from earnorm.fields.base import BaseField
@@ -46,7 +46,7 @@ else:
 logger = logging.getLogger(__name__)
 
 # Type for model reference - can be string or class
-ModelType = Union[str, Type[T]]
+ModelType = Union[str, type[T]]
 
 
 class RelationField(BaseField[T], RelationProtocol[T]):
@@ -89,11 +89,11 @@ class RelationField(BaseField[T], RelationProtocol[T]):
         model: ModelType[T],
         relation_type: RelationType,
         *,
-        related_name: Optional[str] = None,
+        related_name: str | None = None,
         on_delete: str = "CASCADE",
         lazy: bool = True,
         required: bool = False,
-        help: Optional[str] = None,
+        help: str | None = None,
         **options: Any,
     ) -> None:
         """Initialize relation field.
@@ -112,14 +112,14 @@ class RelationField(BaseField[T], RelationProtocol[T]):
             options["help"] = help
         super().__init__(required=required, **options)
         self._model_ref = model
-        self._resolved_model: Optional[Type[T]] = None
+        self._resolved_model: type[T] | None = None
         self.relation_type = relation_type
         self.related_name = related_name
         self.on_delete = on_delete
         self.lazy = lazy
 
         # Will be set during setup
-        self._owner_model: Optional[Type[T]] = None
+        self._owner_model: type[T] | None = None
 
     @staticmethod
     def _convert_class_name_to_model_name(class_name: str) -> str:
@@ -151,7 +151,7 @@ class RelationField(BaseField[T], RelationProtocol[T]):
         name = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", class_name)
         return re.sub("([a-z0-9])([A-Z])", r"\1_\2", name).lower()
 
-    async def _resolve_model(self) -> Type[T]:
+    async def _resolve_model(self) -> type[T]:
         """Resolve model reference to actual class.
 
         Returns:
@@ -169,7 +169,7 @@ class RelationField(BaseField[T], RelationProtocol[T]):
         # Handle class reference - nếu đã là class thì dùng trực tiếp
         if hasattr(self._model_ref, "_name"):
             self.logger.info(f"Model reference is already a class: {self._model_ref}")
-            self._resolved_model = cast(Type[T], self._model_ref)
+            self._resolved_model = cast(type[T], self._model_ref)
             return self._resolved_model
 
         # Handle string reference
@@ -182,7 +182,7 @@ class RelationField(BaseField[T], RelationProtocol[T]):
         model = await self.env.get_model(self._model_ref)  # type: ignore
         if model:
             self.logger.info(f"Found model: {model}")
-            self._resolved_model = cast(Type[T], model)
+            self._resolved_model = cast(type[T], model)
             return self._resolved_model
 
         # Model not found
@@ -194,7 +194,7 @@ class RelationField(BaseField[T], RelationProtocol[T]):
         raise RuntimeError(error_msg)
 
     @property
-    async def model(self) -> Type[T]:
+    async def model(self) -> type[T]:
         """Get model reference.
 
         Returns:
@@ -204,13 +204,13 @@ class RelationField(BaseField[T], RelationProtocol[T]):
             RuntimeError: If model is not resolved
         """
         if isinstance(self._model_ref, type):
-            return cast(Type[T], self._model_ref)
+            return cast(type[T], self._model_ref)
         if self._resolved_model is None:
             self.logger.info(f"Auto resolving model for {self._model_ref}")
             self._resolved_model = await self._resolve_model()
         return self._resolved_model
 
-    async def get_model(self) -> Type[T]:
+    async def get_model(self) -> type[T]:
         """Get resolved model class.
 
         Returns:
@@ -242,7 +242,7 @@ class RelationField(BaseField[T], RelationProtocol[T]):
         if not owner_model:
             raise RuntimeError(f"Model {model_name} not found")
 
-        self._owner_model = cast(Type[T], owner_model)
+        self._owner_model = cast(type[T], owner_model)
 
         # Resolve model reference if needed
         if not isinstance(self._model_ref, type):
@@ -302,7 +302,7 @@ class RelationField(BaseField[T], RelationProtocol[T]):
 
         # Get relation options
         options = RelationOptions(
-            model=cast(Union[Type[ModelProtocol], str], self._model_ref),
+            model=cast(type[ModelProtocol] | str, self._model_ref),
             related_name=self.related_name or "",
             on_delete=self.on_delete,
             through=None,
@@ -312,9 +312,7 @@ class RelationField(BaseField[T], RelationProtocol[T]):
         # Set up in database
         await self.env.adapter.setup_relations(self._owner_model, {self.name: options})
 
-    async def validate(
-        self, value: Any, context: Optional[Dict[str, Any]] = None
-    ) -> None:
+    async def validate(self, value: Any, context: dict[str, Any] | None = None) -> None:
         """Validate relation value.
 
         Args:
@@ -360,7 +358,7 @@ class RelationField(BaseField[T], RelationProtocol[T]):
                     code="invalid_relation_type",
                 )
 
-    async def to_db(self, value: Optional[T], backend: str) -> DatabaseValue:
+    async def to_db(self, value: T | None, backend: str) -> DatabaseValue:
         """Convert Python value to database format.
 
         Args:
@@ -381,7 +379,7 @@ class RelationField(BaseField[T], RelationProtocol[T]):
 
         return str(value.id)
 
-    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[T]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> T | None:
         """Convert database value to Python format.
 
         Args:
@@ -402,10 +400,10 @@ class RelationField(BaseField[T], RelationProtocol[T]):
                 record = await model.browse(str(item))
                 if record:
                     records.append(record)  # type: ignore
-            return cast(Optional[T], records)
+            return cast(T | None, records)
 
         record = await model.browse(str(value))
-        return cast(Optional[T], record)
+        return cast(T | None, record)
 
     @property
     def model_ref(self) -> ModelType[T]:
@@ -417,7 +415,7 @@ class RelationField(BaseField[T], RelationProtocol[T]):
         return self._model_ref
 
     @property
-    def resolved_model(self) -> Optional[Type[T]]:
+    def resolved_model(self) -> type[T] | None:
         """Get resolved model class.
 
         Returns:
@@ -425,7 +423,7 @@ class RelationField(BaseField[T], RelationProtocol[T]):
         """
         return self._resolved_model
 
-    async def get_related(self, instance: Any) -> Union[Optional[T], List[T]]:
+    async def get_related(self, instance: Any) -> T | None | list[T]:
         """Get related record(s).
 
         Args:
@@ -443,7 +441,7 @@ class RelationField(BaseField[T], RelationProtocol[T]):
             self.name,
             RelationType(self.field_type),
             RelationOptions(
-                model=cast(Union[Type[ModelProtocol], str], self._model_ref),
+                model=cast(type[ModelProtocol] | str, self._model_ref),
                 related_name=self.related_name or "",
                 on_delete=self.on_delete,
                 through=None,
@@ -453,9 +451,7 @@ class RelationField(BaseField[T], RelationProtocol[T]):
 
         return records
 
-    async def set_related(
-        self, instance: Any, value: Union[Optional[T], List[T]]
-    ) -> None:
+    async def set_related(self, instance: Any, value: T | None | list[T]) -> None:
         """Set related record(s).
 
         Args:
@@ -475,7 +471,7 @@ class RelationField(BaseField[T], RelationProtocol[T]):
             value,
             RelationType(self.field_type),
             RelationOptions(
-                model=cast(Union[Type[ModelProtocol], str], self._model_ref),
+                model=cast(type[ModelProtocol] | str, self._model_ref),
                 related_name=self.related_name or "",
                 on_delete=self.on_delete,
                 through=None,
@@ -498,7 +494,7 @@ class RelationField(BaseField[T], RelationProtocol[T]):
             self.name,
             RelationType(self.field_type),
             RelationOptions(
-                model=cast(Union[Type[ModelProtocol], str], self._model_ref),
+                model=cast(type[ModelProtocol] | str, self._model_ref),
                 related_name=self.related_name or "",
                 on_delete=self.on_delete,
                 through=None,
@@ -506,7 +502,7 @@ class RelationField(BaseField[T], RelationProtocol[T]):
             ),
         )
 
-    async def __get__(self, instance: Optional[Any], owner: Optional[type] = None) -> T:
+    async def __get__(self, instance: Any | None, owner: type | None = None) -> T:
         """Get related record(s).
 
         This method is common for all relation fields. It ensures that:

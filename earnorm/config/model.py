@@ -70,7 +70,7 @@ See Also:
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import yaml
 from dotenv import load_dotenv
@@ -82,7 +82,7 @@ logger = logging.getLogger(__name__)
 CONFIG_PREFIXES = ("MONGO_", "REDIS_", "CACHE_", "EVENT_")
 
 # Type for config data
-ConfigData = Dict[str, Union[str, int, bool]]
+ConfigData = dict[str, str | int | bool]
 
 
 class SystemConfig(BaseModel):
@@ -174,16 +174,16 @@ class SystemConfig(BaseModel):
 
     # Version and timestamps
     version: str = Field(default="1.0.0")
-    created_at: Optional[str] = Field(default=None)
-    updated_at: Optional[str] = Field(default=None)
+    created_at: str | None = Field(default=None)
+    updated_at: str | None = Field(default=None)
 
     # Database Configuration
     database_backend: str = Field(default="mongodb")
     database_uri: str = Field(...)  # Required field
     database_name: str = Field(...)  # Required field
-    database_username: Optional[str] = Field(default=None)
-    database_password: Optional[str] = Field(default=None)
-    database_options: Dict[str, Any] = Field(
+    database_username: str | None = Field(default=None)
+    database_password: str | None = Field(default=None)
+    database_options: dict[str, Any] = Field(
         default_factory=lambda: {
             "server_selection_timeout_ms": 5000,
             "connect_timeout_ms": 10000,
@@ -196,14 +196,14 @@ class SystemConfig(BaseModel):
     )
 
     # Pool Configuration
-    min_pool_size: Optional[int] = Field(default=None)
-    max_pool_size: Optional[int] = Field(default=None)
+    min_pool_size: int | None = Field(default=None)
+    max_pool_size: int | None = Field(default=None)
 
     # Redis Configuration
     redis_host: str = Field(default="localhost")
     redis_port: int = Field(default=6379)
     redis_db: int = Field(default=0)
-    redis_password: Optional[str] = Field(default=None)
+    redis_password: str | None = Field(default=None)
     redis_min_pool_size: int = Field(default=1)
     redis_max_pool_size: int = Field(default=10)
     redis_pool_timeout: int = Field(default=10)
@@ -239,9 +239,7 @@ class SystemConfig(BaseModel):
 
     @field_validator("min_pool_size", "max_pool_size")
     @classmethod
-    def validate_pool_sizes(
-        cls, v: Optional[int], info: ValidationInfo
-    ) -> Optional[int]:
+    def validate_pool_sizes(cls, v: int | None, info: ValidationInfo) -> int | None:
         """Validate pool size configuration.
 
         Args:
@@ -262,14 +260,13 @@ class SystemConfig(BaseModel):
 
         if min_size is not None and max_size is not None and min_size > max_size:
             raise ValueError(
-                f"Minimum pool size ({min_size}) cannot be greater than "
-                f"maximum pool size ({max_size})"
+                f"Minimum pool size ({min_size}) cannot be greater than " f"maximum pool size ({max_size})"
             )
 
         return v
 
     @classmethod
-    def load_env(cls, env_file: Optional[Union[str, Path]] = None) -> "SystemConfig":
+    def load_env(cls, env_file: str | Path | None = None) -> "SystemConfig":
         """Load configuration from environment variables.
 
         Args:
@@ -287,7 +284,7 @@ class SystemConfig(BaseModel):
             load_dotenv(env_file)
 
         # Get all environment variables with config prefixes
-        config_data: Dict[str, Any] = {}
+        config_data: dict[str, Any] = {}
         for key, value in os.environ.items():
             if any(key.startswith(prefix) for prefix in CONFIG_PREFIXES):
                 config_key = key.lower()
@@ -297,7 +294,7 @@ class SystemConfig(BaseModel):
         return cls(**config_data)
 
     @classmethod
-    def load_yaml(cls, yaml_file: Union[str, Path]) -> "SystemConfig":
+    def load_yaml(cls, yaml_file: str | Path) -> "SystemConfig":
         """Load configuration from YAML file.
 
         Args:
@@ -317,7 +314,7 @@ class SystemConfig(BaseModel):
         # Create config instance
         return cls(**config_data)
 
-    def save_yaml(self, yaml_file: Union[str, Path]) -> None:
+    def save_yaml(self, yaml_file: str | Path) -> None:
         """Save configuration to YAML file.
 
         Args:
@@ -361,13 +358,9 @@ class SystemConfig(BaseModel):
             config_dict = dict(config_data)
 
         # Convert database options if needed
-        if "database_options" in config_dict and isinstance(
-            config_dict["database_options"], str
-        ):
+        if "database_options" in config_dict and isinstance(config_dict["database_options"], str):
             try:
-                config_dict["database_options"] = yaml.safe_load(
-                    config_dict["database_options"]
-                )
+                config_dict["database_options"] = yaml.safe_load(config_dict["database_options"])
             except Exception as e:
                 logger.error("Failed to parse database options: %s", e)
                 config_dict["database_options"] = {}

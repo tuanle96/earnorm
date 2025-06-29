@@ -24,17 +24,12 @@ Examples:
 """
 
 import json
+from collections.abc import Sequence
 from typing import (
     Any,
-    Dict,
     Generic,
-    List,
-    Optional,
     Protocol,
-    Sequence,
-    Tuple,
     TypeVar,
-    Union,
     cast,
 )
 
@@ -54,7 +49,7 @@ class Comparable(Protocol):
 T = TypeVar("T", bound=Comparable)
 
 
-class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
+class TupleField(BaseField[tuple[T, ...]], FieldComparisonMixin, Generic[T]):
     """Field for tuple values.
 
     This field type handles fixed-length sequences of values, with support for:
@@ -68,8 +63,8 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
         backend_options: Database backend options
     """
 
-    element_fields: Tuple[BaseField[T], ...]  # type: ignore
-    backend_options: Dict[str, Any]
+    element_fields: tuple[BaseField[T], ...]  # type: ignore
+    backend_options: dict[str, Any]
 
     def __init__(
         self,
@@ -97,7 +92,7 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
             }
 
     @property
-    def element_fields(self) -> Tuple[BaseField[T], ...]:
+    def element_fields(self) -> tuple[BaseField[T], ...]:
         """Get element fields."""
         return object.__getattribute__(self, "_element_fields")
 
@@ -112,9 +107,7 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
         for i, field in enumerate(self.element_fields):
             await field.setup(f"{name}[{i}]", model_name)
 
-    async def validate(
-        self, value: Any, context: Optional[Dict[str, Any]] = None
-    ) -> Optional[Tuple[T, ...]]:
+    async def validate(self, value: Any, context: dict[str, Any] | None = None) -> tuple[T, ...] | None:
         """Validate tuple value.
 
         This method validates:
@@ -146,13 +139,13 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
                     value = tuple(value)
             except (TypeError, ValueError) as e:
                 raise FieldValidationError(
-                    message=f"Cannot convert to tuple: {str(e)}",
+                    message=f"Cannot convert to tuple: {e!s}",
                     field_name=self.name,
                     code="invalid_type",
                     context=context,
                 )
 
-            value_tuple: Tuple[Any, ...] = cast(Tuple[Any, ...], value)
+            value_tuple: tuple[Any, ...] = cast(tuple[Any, ...], value)
 
             # Validate length
             expected_length = len(self.element_fields)
@@ -169,16 +162,12 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
                 **(context or {}),
                 "parent_field": self,
                 "parent_value": value_tuple,
-                "validation_path": (
-                    f"{context.get('validation_path', '')}.{self.name}"
-                    if context
-                    else self.name
-                ),
+                "validation_path": (f"{context.get('validation_path', '')}.{self.name}" if context else self.name),
             }
 
             # Validate elements
-            validated_elements: List[T] = []
-            for i, (element, field) in enumerate(zip(value_tuple, self.element_fields)):
+            validated_elements: list[T] = []
+            for i, (element, field) in enumerate(zip(value_tuple, self.element_fields, strict=False)):
                 try:
                     element_context["index"] = i
                     validated = await field.validate(element, element_context)
@@ -186,7 +175,7 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
                         validated_elements.append(validated)
                 except FieldValidationError as e:
                     raise FieldValidationError(
-                        message=f"Invalid element at index {i}: {str(e)}",
+                        message=f"Invalid element at index {i}: {e!s}",
                         field_name=self.name,
                         code="invalid_element",
                         context=element_context,
@@ -196,7 +185,7 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
 
         return None
 
-    async def convert(self, value: Any) -> Optional[Tuple[T, ...]]:
+    async def convert(self, value: Any) -> tuple[T, ...] | None:
         """Convert value to tuple.
 
         Args:
@@ -224,7 +213,7 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
                         )
                 except json.JSONDecodeError as e:
                     raise FieldValidationError(
-                        message=f"Invalid JSON array: {str(e)}",
+                        message=f"Invalid JSON array: {e!s}",
                         field_name=self.name,
                         code="invalid_json",
                     ) from e
@@ -234,7 +223,7 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
                 value = tuple(cast(Sequence[Any], value))
             except (TypeError, ValueError) as e:
                 raise FieldValidationError(
-                    message=f"Cannot convert to tuple: {str(e)}",
+                    message=f"Cannot convert to tuple: {e!s}",
                     field_name=self.name,
                     code="conversion_error",
                 ) from e
@@ -249,15 +238,15 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
                 )
 
             # Convert elements
-            result: List[T] = []
-            for i, (element, field) in enumerate(zip(value, self.element_fields)):  # type: ignore
+            result: list[T] = []
+            for i, (element, field) in enumerate(zip(value, self.element_fields, strict=False)):  # type: ignore
                 try:
                     converted = await field.convert(element)
                     if converted is not None:
                         result.append(converted)
                 except FieldValidationError as e:
                     raise FieldValidationError(
-                        message=f"Cannot convert element at index {i}: {str(e)}",
+                        message=f"Cannot convert element at index {i}: {e!s}",
                         field_name=self.name,
                         code="conversion_error",
                     ) from e
@@ -266,14 +255,12 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
 
         except Exception as e:
             raise FieldValidationError(
-                message=f"Cannot convert to tuple: {str(e)}",
+                message=f"Cannot convert to tuple: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
 
-    async def to_db(
-        self, value: Optional[Tuple[T, ...]], backend: str
-    ) -> DatabaseValue:
+    async def to_db(self, value: tuple[T, ...] | None, backend: str) -> DatabaseValue:
         """Convert tuple to database format.
 
         Args:
@@ -290,21 +277,19 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
             return None
 
         try:
-            result: List[DatabaseValue] = []
-            for element, field in zip(value, self.element_fields):
+            result: list[DatabaseValue] = []
+            for element, field in zip(value, self.element_fields, strict=False):
                 db_value = await field.to_db(element, backend)
                 result.append(db_value)
             return result
         except Exception as e:
             raise FieldValidationError(
-                message=f"Cannot convert tuple to database format: {str(e)}",
+                message=f"Cannot convert tuple to database format: {e!s}",
                 field_name=self.name,
                 code="db_conversion_error",
             ) from e
 
-    async def from_db(
-        self, value: DatabaseValue, backend: str
-    ) -> Optional[Tuple[T, ...]]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> tuple[T, ...] | None:
         """Convert database value to tuple.
 
         Args:
@@ -328,15 +313,15 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
             )
 
         try:
-            result: List[T] = []
-            for i, (element, field) in enumerate(zip(value, self.element_fields)):
+            result: list[T] = []
+            for i, (element, field) in enumerate(zip(value, self.element_fields, strict=False)):
                 try:
                     converted = await field.from_db(element, backend)
                     if converted is not None:
                         result.append(converted)
                 except Exception as e:
                     raise FieldValidationError(
-                        message=f"Cannot convert database value at index {i}: {str(e)}",
+                        message=f"Cannot convert database value at index {i}: {e!s}",
                         field_name=self.name,
                         code="db_conversion_error",
                     ) from e
@@ -344,7 +329,7 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
             return tuple(result)
         except Exception as e:
             raise FieldValidationError(
-                message=f"Cannot convert database value to tuple: {str(e)}",
+                message=f"Cannot convert database value to tuple: {e!s}",
                 field_name=self.name,
                 code="db_conversion_error",
             ) from e
@@ -364,14 +349,13 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
         try:
             if isinstance(value, (list, tuple)):
                 return [
-                    getattr(field, "_prepare_value")(x)
-                    for x, field in zip(value, self.element_fields)  # type: ignore
+                    field._prepare_value(x) for x, field in zip(value, self.element_fields, strict=False)  # type: ignore
                 ]
-            return [getattr(self.element_fields[0], "_prepare_value")(value)]
+            return [self.element_fields[0]._prepare_value(value)]
         except (TypeError, ValueError, AttributeError):
             return None
 
-    def equals(self, value: Union[Tuple[T, ...], List[T]]) -> ComparisonOperator:
+    def equals(self, value: tuple[T, ...] | list[T]) -> ComparisonOperator:
         """Check if tuple equals value.
 
         Args:
@@ -382,7 +366,7 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
         """
         return ComparisonOperator(self.name, "equals", self._prepare_value(value))
 
-    def not_equals(self, value: Union[Tuple[T, ...], List[T]]) -> ComparisonOperator:
+    def not_equals(self, value: tuple[T, ...] | list[T]) -> ComparisonOperator:
         """Check if tuple does not equal value.
 
         Args:
@@ -415,7 +399,7 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
         """
         return ComparisonOperator(self.name, "not_contains", self._prepare_value(value))
 
-    def contains_all(self, values: Union[Tuple[T, ...], List[T]]) -> ComparisonOperator:
+    def contains_all(self, values: tuple[T, ...] | list[T]) -> ComparisonOperator:
         """Check if tuple contains all values.
 
         Args:
@@ -424,11 +408,9 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
         Returns:
             ComparisonOperator: Comparison operator with field name and values
         """
-        return ComparisonOperator(
-            self.name, "contains_all", self._prepare_value(values)
-        )
+        return ComparisonOperator(self.name, "contains_all", self._prepare_value(values))
 
-    def contains_any(self, values: Union[Tuple[T, ...], List[T]]) -> ComparisonOperator:
+    def contains_any(self, values: tuple[T, ...] | list[T]) -> ComparisonOperator:
         """Check if tuple contains any value.
 
         Args:
@@ -437,9 +419,7 @@ class TupleField(BaseField[Tuple[T, ...]], FieldComparisonMixin, Generic[T]):
         Returns:
             ComparisonOperator: Comparison operator with field name and values
         """
-        return ComparisonOperator(
-            self.name, "contains_any", self._prepare_value(values)
-        )
+        return ComparisonOperator(self.name, "contains_any", self._prepare_value(values))
 
     def starts_with(self, value: T) -> ComparisonOperator:
         """Check if tuple starts with value.

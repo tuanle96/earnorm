@@ -6,8 +6,10 @@ from typing import Any, TypeVar, cast
 
 from redis.asyncio import Redis
 from redis.asyncio.client import Pipeline
-from redis.exceptions import ConnectionError as BaseRedisConnectionError
-from redis.exceptions import TimeoutError as RedisTimeoutError
+from redis.exceptions import (
+    ConnectionError as BaseRedisConnectionError,
+    TimeoutError as RedisTimeoutError,
+)
 
 from earnorm.exceptions import QueryError, RedisConnectionError
 from earnorm.pool.core.circuit import CircuitBreaker
@@ -97,9 +99,7 @@ class RedisConnection(AsyncConnectionProtocol[DB, None]):
     @property
     def is_stale(self) -> bool:
         """Check if connection is stale."""
-        return (
-            self.idle_time > self._max_idle_time or self.lifetime > self._max_lifetime
-        )
+        return self.idle_time > self._max_idle_time or self.lifetime > self._max_lifetime
 
     def touch(self) -> None:
         """Update last used timestamp."""
@@ -190,9 +190,7 @@ class RedisConnection(AsyncConnectionProtocol[DB, None]):
         """Disconnect from Redis."""
         await self.close()
 
-    async def execute_typed(
-        self, operation: str, *args: Any, **kwargs: Any
-    ) -> Awaitable[Any]:
+    async def execute_typed(self, operation: str, *args: Any, **kwargs: Any) -> Awaitable[Any]:
         """Execute Redis operation.
 
         Args:

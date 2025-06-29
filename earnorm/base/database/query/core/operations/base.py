@@ -24,7 +24,8 @@ Examples:
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, Generic, List, Optional, Self, Type, TypeVar
+from collections.abc import Callable
+from typing import Any, Generic, Self, TypeVar
 
 from earnorm.types import DatabaseModel, JsonDict
 
@@ -44,13 +45,13 @@ class BaseOperation(Generic[ModelT], ABC):
 
     def __init__(self) -> None:
         """Initialize operation."""
-        self._pipeline: List[JsonDict] = []
-        self._options: Dict[str, Any] = {}
+        self._pipeline: list[JsonDict] = []
+        self._options: dict[str, Any] = {}
         self._is_valid: bool = True
-        self._error_message: Optional[str] = None
+        self._error_message: str | None = None
 
     @property
-    def pipeline(self) -> List[JsonDict]:
+    def pipeline(self) -> list[JsonDict]:
         """Get current pipeline.
 
         Returns:
@@ -59,7 +60,7 @@ class BaseOperation(Generic[ModelT], ABC):
         return self._pipeline
 
     @property
-    def options(self) -> Dict[str, Any]:
+    def options(self) -> dict[str, Any]:
         """Get current options.
 
         Returns:
@@ -77,7 +78,7 @@ class BaseOperation(Generic[ModelT], ABC):
         return self._is_valid
 
     @property
-    def error_message(self) -> Optional[str]:
+    def error_message(self) -> str | None:
         """Get error message if operation is invalid.
 
         Returns:
@@ -123,7 +124,7 @@ class BaseOperation(Generic[ModelT], ABC):
         self.clear_error()
 
     @abstractmethod
-    def to_pipeline(self) -> List[JsonDict]:
+    def to_pipeline(self) -> list[JsonDict]:
         """Convert operation to database pipeline.
 
         Returns:
@@ -165,14 +166,14 @@ class Operation(Generic[ModelT]):
         >>> result = await op.execute()
     """
 
-    def __init__(self, model_type: Type[ModelT]) -> None:
+    def __init__(self, model_type: type[ModelT]) -> None:
         """Initialize operation.
 
         Args:
             model_type: The model class to operate on
         """
         self._model_type = model_type
-        self._processors: List[Callable[[Any], Any]] = []
+        self._processors: list[Callable[[Any], Any]] = []
 
     def add_processor(self, processor: Callable[[Any], Any]) -> Self:
         """Add result processor function.

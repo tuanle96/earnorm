@@ -14,13 +14,13 @@ Examples:
     ```
 """
 
-from typing import Any, Optional
+from typing import Any
 
 
 class DatabaseError(Exception):
     """Base class for database-related errors."""
 
-    def __init__(self, message: str, context: Optional[Any] = None) -> None:
+    def __init__(self, message: str, context: Any | None = None) -> None:
         """Initialize database error.
 
         Args:

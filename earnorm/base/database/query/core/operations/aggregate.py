@@ -54,7 +54,7 @@ Examples:
     ... }).execute()
 """
 
-from typing import Any, Dict, List, Optional, TypeVar, Union
+from typing import Any, TypeVar
 
 from earnorm.base.database.query.core.operations.base import BaseOperation
 from earnorm.base.database.query.interfaces.operations.aggregate import (
@@ -78,9 +78,9 @@ class BaseAggregate(BaseOperation[ModelT], AggregateProtocol[ModelT]):
     def __init__(self) -> None:
         """Initialize aggregate operation."""
         super().__init__()
-        self._group_fields: List[str] = []
-        self._having: Optional[Union[List[Any], JsonDict]] = None
-        self._aggregates: Dict[str, Any] = {}
+        self._group_fields: list[str] = []
+        self._having: list[Any] | JsonDict | None = None
+        self._aggregates: dict[str, Any] = {}
 
     def group_by(self, *fields: str) -> "BaseAggregate[ModelT]":
         """Group results by fields.
@@ -94,7 +94,7 @@ class BaseAggregate(BaseOperation[ModelT], AggregateProtocol[ModelT]):
         self._group_fields.extend(fields)
         return self
 
-    def having(self, domain: Union[List[Any], JsonDict]) -> "BaseAggregate[ModelT]":
+    def having(self, domain: list[Any] | JsonDict) -> "BaseAggregate[ModelT]":
         """Add having conditions.
 
         Args:
@@ -106,9 +106,7 @@ class BaseAggregate(BaseOperation[ModelT], AggregateProtocol[ModelT]):
         self._having = domain
         return self
 
-    def count(
-        self, field: str = "*", alias: Optional[str] = None
-    ) -> "BaseAggregate[ModelT]":
+    def count(self, field: str = "*", alias: str | None = None) -> "BaseAggregate[ModelT]":
         """Count records.
 
         Args:
@@ -122,7 +120,7 @@ class BaseAggregate(BaseOperation[ModelT], AggregateProtocol[ModelT]):
         self._aggregates[alias] = {"$count": field if field != "*" else ""}
         return self
 
-    def sum(self, field: str, alias: Optional[str] = None) -> "BaseAggregate[ModelT]":
+    def sum(self, field: str, alias: str | None = None) -> "BaseAggregate[ModelT]":
         """Sum field values.
 
         Args:
@@ -136,7 +134,7 @@ class BaseAggregate(BaseOperation[ModelT], AggregateProtocol[ModelT]):
         self._aggregates[alias] = {"$sum": f"${field}"}
         return self
 
-    def avg(self, field: str, alias: Optional[str] = None) -> "BaseAggregate[ModelT]":
+    def avg(self, field: str, alias: str | None = None) -> "BaseAggregate[ModelT]":
         """Average field values.
 
         Args:
@@ -150,7 +148,7 @@ class BaseAggregate(BaseOperation[ModelT], AggregateProtocol[ModelT]):
         self._aggregates[alias] = {"$avg": f"${field}"}
         return self
 
-    def min(self, field: str, alias: Optional[str] = None) -> "BaseAggregate[ModelT]":
+    def min(self, field: str, alias: str | None = None) -> "BaseAggregate[ModelT]":
         """Get minimum field value.
 
         Args:
@@ -164,7 +162,7 @@ class BaseAggregate(BaseOperation[ModelT], AggregateProtocol[ModelT]):
         self._aggregates[alias] = {"$min": f"${field}"}
         return self
 
-    def max(self, field: str, alias: Optional[str] = None) -> "BaseAggregate[ModelT]":
+    def max(self, field: str, alias: str | None = None) -> "BaseAggregate[ModelT]":
         """Get maximum field value.
 
         Args:
@@ -188,7 +186,7 @@ class BaseAggregate(BaseOperation[ModelT], AggregateProtocol[ModelT]):
             raise ValueError("No grouping fields or aggregate functions specified")
 
     @property
-    def group_fields(self) -> List[str]:
+    def group_fields(self) -> list[str]:
         """Get group fields.
 
         Returns:
@@ -197,7 +195,7 @@ class BaseAggregate(BaseOperation[ModelT], AggregateProtocol[ModelT]):
         return self._group_fields
 
     @property
-    def having_conditions(self) -> Optional[Union[List[Any], JsonDict]]:
+    def having_conditions(self) -> list[Any] | JsonDict | None:
         """Get having conditions.
 
         Returns:
@@ -206,7 +204,7 @@ class BaseAggregate(BaseOperation[ModelT], AggregateProtocol[ModelT]):
         return self._having
 
     @property
-    def aggregates(self) -> Dict[str, Any]:
+    def aggregates(self) -> dict[str, Any]:
         """Get aggregate functions.
 
         Returns:

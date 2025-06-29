@@ -1,15 +1,10 @@
 """Field-related type definitions."""
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import (
     Any,
-    Awaitable,
-    Callable,
-    Dict,
-    List,
     Protocol,
-    Set,
-    Tuple,
     TypeVar,
     Union,
     runtime_checkable,
@@ -19,33 +14,33 @@ from bson import ObjectId
 from bson.decimal128 import Decimal128
 
 # Field value types
-FieldValue = Union[str, int, float, bool, List[Any], Dict[str, Any], None]
+FieldValue = Union[str, int, float, bool, list[Any], dict[str, Any], None]
 DatabaseValue = Union[
     None,
     bool,
     int,
     float,
     str,
-    Dict[str, Any],
-    List[Any],
+    dict[str, Any],
+    list[Any],
     datetime,
     Decimal128,
     ObjectId,
 ]
 
 # Field option types
-FieldOptions = Dict[str, Any]
-BackendOptions = Dict[str, Dict[str, Any]]
+FieldOptions = dict[str, Any]
+BackendOptions = dict[str, dict[str, Any]]
 
 # Compute method type
 ComputeMethod = Callable[..., Any]
 
 # Field dependency type
-FieldDependencies = Set[str]
+FieldDependencies = set[str]
 
 # Type for validator functions
 ValidatorFunc = Callable[[Any], None]
-ValidatorResult = Union[bool, Tuple[bool, str]]
+ValidatorResult = Union[bool, tuple[bool, str]]
 ValidatorCallable = Callable[[Any], Awaitable[ValidatorResult]]
 
 # Generic type for field values
@@ -90,7 +85,7 @@ class FieldComparisonMixin(Protocol):
         """
         return pattern
 
-    def _prepare_list(self, values: List[Any]) -> List[Any]:
+    def _prepare_list(self, values: list[Any]) -> list[Any]:
         """Prepare list values for comparison.
 
         This method should be overridden by list fields to handle
@@ -141,7 +136,7 @@ class FieldProtocol(Protocol[V]):
     name: str
     required: bool
     unique: bool
-    validators: List[ValidatorProtocol]
+    validators: list[ValidatorProtocol]
     backend_options: BackendOptions
 
     async def validate(self, value: Any) -> None:
@@ -262,7 +257,7 @@ class ComparisonOperator:
         self.operator = operator
         self.value = value
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary.
 
         Returns:
@@ -280,19 +275,19 @@ class ComparisonOperator:
 
 
 __all__ = [
-    "FieldValue",
-    "DatabaseValue",
-    "FieldOptions",
     "BackendOptions",
-    "ComputeMethod",
-    "FieldDependencies",
-    "ValidatorFunc",
-    "ValidatorResult",
-    "ValidatorCallable",
-    "FieldComparisonMixin",
-    "ValidatorProtocol",
-    "FieldProtocol",
-    "RelationProtocol",
     "ComparisonOperator",
+    "ComputeMethod",
+    "DatabaseValue",
+    "FieldComparisonMixin",
+    "FieldDependencies",
+    "FieldOptions",
+    "FieldProtocol",
+    "FieldValue",
+    "RelationProtocol",
     "V",
+    "ValidatorCallable",
+    "ValidatorFunc",
+    "ValidatorProtocol",
+    "ValidatorResult",
 ]

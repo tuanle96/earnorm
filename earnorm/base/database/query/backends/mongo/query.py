@@ -22,15 +22,28 @@ Examples:
 
 import asyncio
 import logging
-from typing import Any, Callable, Coroutine, Dict, List, Optional, Protocol, Type, TypeVar, Union, cast
+from collections.abc import Callable, Coroutine
+from typing import (
+    Any,
+    Protocol,
+    TypeVar,
+    cast,
+)
 
 from bson import ObjectId
 from bson.errors import InvalidId
 from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorCommandCursor
 
 from earnorm.base.database.query.core.query import BaseQuery
-from earnorm.base.database.query.interfaces.domain import DomainExpression, DomainItem, DomainLeaf, DomainNode
-from earnorm.base.database.query.interfaces.operations.aggregate import AggregateProtocol
+from earnorm.base.database.query.interfaces.domain import (
+    DomainExpression,
+    DomainItem,
+    DomainLeaf,
+    DomainNode,
+)
+from earnorm.base.database.query.interfaces.operations.aggregate import (
+    AggregateProtocol,
+)
 from earnorm.base.database.query.interfaces.operations.join import JoinProtocol
 from earnorm.base.database.query.interfaces.operations.window import WindowProtocol
 from earnorm.base.database.query.interfaces.query import QueryProtocol
@@ -69,16 +82,16 @@ class MongoQuery(BaseQuery[ModelT]):
     def __init__(
         self,
         collection: AsyncIOMotorCollection[JsonDict],  # type: ignore
-        model_type: Type[ModelT],
+        model_type: type[ModelT],
         filter: JsonDict = {},  # pylint: disable=redefined-builtin
         projection: JsonDict = {},
-        sort: List[tuple[str, int]] = [],
+        sort: list[tuple[str, int]] = [],
         skip: int = 0,
         limit: int = 0,
-        pipeline: List[JsonDict] = [],
+        pipeline: list[JsonDict] = [],
         allow_disk_use: bool = False,
-        hint: Optional[Union[str, List[tuple[str, int]]]] = None,
-        operation: Optional[str] = None,
+        hint: str | list[tuple[str, int]] | None = None,
+        operation: str | None = None,
         document: JsonDict = {},
         update: JsonDict = {},
         options: dict[str, Any] = {},
@@ -116,24 +129,22 @@ class MongoQuery(BaseQuery[ModelT]):
         self._document = document
         self._update = update
         self._options = options
-        self._postprocessors: List[
+        self._postprocessors: list[
             Callable[
-                [Dict[str, Any]],
-                Union[Dict[str, Any], Coroutine[Any, Any, Dict[str, Any]]],
+                [dict[str, Any]],
+                dict[str, Any] | Coroutine[Any, Any, dict[str, Any]],
             ]
         ] = []
-        self._processed_docs: List[Dict[str, Any]] = []
+        self._processed_docs: list[dict[str, Any]] = []
 
     def add_postprocessor(
         self,
-        processor: Callable[
-            [Dict[str, Any]], Union[Dict[str, Any], Coroutine[Any, Any, Dict[str, Any]]]
-        ],
+        processor: Callable[[dict[str, Any]], dict[str, Any] | Coroutine[Any, Any, dict[str, Any]]],
     ) -> None:
         """Add document post-processor function."""
         self._postprocessors.append(processor)
 
-    async def _process_document(self, doc: Dict[str, Any]) -> Dict[str, Any]:
+    async def _process_document(self, doc: dict[str, Any]) -> dict[str, Any]:
         """Process single document with post-processors.
 
         Args:
@@ -152,12 +163,12 @@ class MongoQuery(BaseQuery[ModelT]):
             return doc
         except Exception as e:
             self.logger.warning(
-                f"Document processing failed: {str(e)} for document: {doc}",
+                f"Document processing failed: {e!s} for document: {doc}",
                 exc_info=True,
             )
             return doc
 
-    async def to_raw_data(self) -> List[Dict[str, Any]]:
+    async def to_raw_data(self) -> list[dict[str, Any]]:
         """Get raw data from MongoDB query result.
 
         This method executes the query and returns raw data from MongoDB
@@ -188,12 +199,10 @@ class MongoQuery(BaseQuery[ModelT]):
                     model_fields.remove("id")
                     model_fields.append("_id")
                 # Add field selection
-                pipeline.append({"$project": {field: 1 for field in model_fields}})
+                pipeline.append({"$project": dict.fromkeys(model_fields, 1)})
 
             # Execute aggregation
-            cursor = self._collection.aggregate(
-                pipeline=pipeline, allowDiskUse=self._allow_disk_use
-            )
+            cursor = self._collection.aggregate(pipeline=pipeline, allowDiskUse=self._allow_disk_use)
 
             # Get raw results
             results = await cursor.to_list(length=None)
@@ -224,11 +233,9 @@ class MongoQuery(BaseQuery[ModelT]):
 
         except Exception as e:
             self.logger.error("Failed to execute MongoDB query: %s", str(e))
-            raise DatabaseError(
-                message=f"MongoDB query failed: {str(e)}", backend="mongodb"
-            ) from e
+            raise DatabaseError(message=f"MongoDB query failed: {e!s}", backend="mongodb") from e
 
-    async def execute(self) -> List[ModelT]:
+    async def execute(self) -> list[ModelT]:
         """Execute MongoDB query and return model instances.
 
         This method executes the query and converts the results to model instances.
@@ -250,7 +257,7 @@ class MongoQuery(BaseQuery[ModelT]):
             results = await self.to_raw_data()
 
             # Convert to model instances
-            instances: List[ModelT] = []
+            instances: list[ModelT] = []
             for doc in results:
                 try:
                     # Create model instance
@@ -263,7 +270,7 @@ class MongoQuery(BaseQuery[ModelT]):
                         str(e),
                     )
                     raise DatabaseError(
-                        message=f"Failed to create model instance: {str(e)}",
+                        message=f"Failed to create model instance: {e!s}",
                         backend="mongodb",
                     ) from e
 
@@ -271,11 +278,9 @@ class MongoQuery(BaseQuery[ModelT]):
 
         except Exception as e:
             self.logger.error("Failed to execute MongoDB query: %s", str(e))
-            raise DatabaseError(
-                message=f"MongoDB query failed: {str(e)}", backend="mongodb"
-            ) from e
+            raise DatabaseError(message=f"MongoDB query failed: {e!s}", backend="mongodb") from e
 
-    def filter(self, domain: Union[List[Any], JsonDict]) -> "MongoQuery[ModelT]":
+    def filter(self, domain: list[Any] | JsonDict) -> "MongoQuery[ModelT]":
         """Filter documents.
 
         Args:
@@ -289,7 +294,7 @@ class MongoQuery(BaseQuery[ModelT]):
             self._filter.update(domain)
         else:
             # Convert domain expression to MongoDB query
-            expr = DomainExpression(cast(List[DomainItem], domain))
+            expr = DomainExpression(cast(list[DomainItem], domain))
             expr.validate()
             mongo_query = self._convert_domain_to_mongo(expr)
             self._filter.update(mongo_query)
@@ -305,13 +310,11 @@ class MongoQuery(BaseQuery[ModelT]):
             MongoDB query
         """
 
-        def convert_node(node: Union[DomainNode, DomainLeaf]) -> JsonDict:
+        def convert_node(node: DomainNode | DomainLeaf) -> JsonDict:
             if isinstance(node, DomainLeaf):
                 field = node.field
                 op = node.operator
-                value: Union[str, int, List[Union[str, int, ObjectId]], Any] = (
-                    node.value
-                )
+                value: str | int | list[str | int | ObjectId] | Any = node.value
 
                 # Convert id field and value
                 if field == "id":
@@ -322,7 +325,7 @@ class MongoQuery(BaseQuery[ModelT]):
                     elif isinstance(value, list) and op in ("in", "not in"):
                         value = [
                             ObjectId(str(v)) if isinstance(v, (str, int)) else v
-                            for v in cast(List[Union[str, int, Any]], value)
+                            for v in cast(list[str | int | Any], value)
                         ]
 
                 if op == "=":
@@ -415,7 +418,7 @@ class MongoQuery(BaseQuery[ModelT]):
         Returns:
             Number of documents
         """
-        pipeline: List[JsonDict] = []
+        pipeline: list[JsonDict] = []
 
         # Add filter stage
         if self._filter:
@@ -425,9 +428,7 @@ class MongoQuery(BaseQuery[ModelT]):
         pipeline.append({"$count": "count"})
 
         # Execute pipeline
-        cursor: AsyncIOMotorCommandCursor[JsonDict] = self._collection.aggregate(
-            pipeline
-        )
+        cursor: AsyncIOMotorCommandCursor[JsonDict] = self._collection.aggregate(pipeline)
         result = [doc async for doc in cursor]
         return result[0]["count"] if result else 0
 
@@ -439,7 +440,7 @@ class MongoQuery(BaseQuery[ModelT]):
         """
         return await self.count() > 0
 
-    async def first(self) -> Optional[ModelT]:
+    async def first(self) -> ModelT | None:
         """Get first result or None.
 
         Returns:
@@ -451,8 +452,8 @@ class MongoQuery(BaseQuery[ModelT]):
 
     def join(
         self,
-        model: Union[str, Type[JoinT]],
-        on: Optional[dict[str, Any]] = None,
+        model: str | type[JoinT],
+        on: dict[str, Any] | None = None,
         join_type: str = "inner",
     ) -> JoinProtocol[ModelT, JoinT]:
         """Create join operation.
@@ -526,7 +527,7 @@ class MongoQuery(BaseQuery[ModelT]):
         result = await self._collection.delete_many(self._filter)
         return {"deleted_count": result.deleted_count}
 
-    async def _process_id(self, doc: Dict[str, Any]) -> Dict[str, Any]:
+    async def _process_id(self, doc: dict[str, Any]) -> dict[str, Any]:
         """Convert _id to id and validate format."""
         if "_id" in doc:
             try:
@@ -536,17 +537,17 @@ class MongoQuery(BaseQuery[ModelT]):
                 doc["id"] = None
         return doc
 
-    def hint(self, index_hint: Dict[str, Any]) -> "QueryProtocol[ModelT]":
+    def hint(self, index_hint: dict[str, Any]) -> "QueryProtocol[ModelT]":
         """Add index hint for query optimization."""
         self._hint = index_hint
         return self
 
-    def prefetch(self, fields: List[str]) -> "QueryProtocol[ModelT]":
+    def prefetch(self, fields: list[str]) -> "QueryProtocol[ModelT]":
         """Add fields to prefetch."""
         self._prefetch_fields = fields
         return self
 
-    def _build_pipeline(self) -> List[JsonDict]:
+    def _build_pipeline(self) -> list[JsonDict]:
         """Build MongoDB aggregation pipeline.
 
         This method builds a MongoDB aggregation pipeline based on:
@@ -562,7 +563,7 @@ class MongoQuery(BaseQuery[ModelT]):
         Returns:
             List[JsonDict]: MongoDB aggregation pipeline stages
         """
-        pipeline: List[JsonDict] = []
+        pipeline: list[JsonDict] = []
 
         # Add filter stage if exists
         if self._filter:
@@ -575,7 +576,7 @@ class MongoQuery(BaseQuery[ModelT]):
             if "id" in fields:
                 fields.remove("id")
                 fields.append("_id")
-            pipeline.append({"$project": {field: 1 for field in fields}})
+            pipeline.append({"$project": dict.fromkeys(fields, 1)})
 
         # Add join stages
         for join in self._joins:

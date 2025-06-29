@@ -34,7 +34,8 @@ Example:
 """
 
 import logging
-from typing import Any, Callable, Dict
+from collections.abc import Callable
+from typing import Any
 
 from earnorm.config.model import SystemConfig
 from earnorm.di.container.factory import FactoryManager
@@ -83,7 +84,7 @@ class Container(ContainerInterface):
         self._service_manager: ServiceManager = ServiceManager()
         self._factory_manager: FactoryManager = FactoryManager()
         self._resolver: DependencyResolver = DependencyResolver()
-        self._cache: Dict[str, Any] = {}
+        self._cache: dict[str, Any] = {}
 
     async def init(self, config: SystemConfig) -> None:
         """Initialize container and all managers.
@@ -213,11 +214,7 @@ class Container(ContainerInterface):
             >>> assert container.has("config")
             >>> assert not container.has("unknown")
         """
-        return (
-            name in self._cache
-            or self._service_manager.has(name)
-            or self._factory_manager.has(name)
-        )
+        return name in self._cache or self._service_manager.has(name) or self._factory_manager.has(name)
 
     def unregister(self, name: str) -> None:
         """Unregister a service or factory from the container.

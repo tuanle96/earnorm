@@ -76,7 +76,7 @@ class PoolConfig:
     max_lifetime: int = DEFAULT_MAX_LIFETIME
     validate_on_borrow: bool = True
     test_on_return: bool = True
-    extra_config: Optional[Dict[str, Any]] = None
+    extra_config: dict[str, Any] | None = None
 
 
 __all__ = [

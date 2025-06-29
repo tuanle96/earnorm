@@ -19,8 +19,9 @@ Examples:
 import asyncio
 import enum
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, List, Optional, Type, TypeVar
+from typing import Any, TypeVar
 
 from earnorm.exceptions import CircuitBreakerError
 
@@ -69,7 +70,7 @@ class CircuitBreaker:
         failure_threshold: int = 5,
         reset_timeout: float = 60.0,
         half_open_timeout: float = 5.0,
-        excluded_exceptions: Optional[List[Type[Exception]]] = None,
+        excluded_exceptions: list[type[Exception]] | None = None,
         backend: str = "unknown",
     ) -> None:
         """Initialize circuit breaker.
@@ -117,9 +118,7 @@ class CircuitBreaker:
         Returns:
             True if exception should count as failure
         """
-        return not any(
-            isinstance(exc, exc_type) for exc_type in self._excluded_exceptions
-        )
+        return not any(isinstance(exc, exc_type) for exc_type in self._excluded_exceptions)
 
     async def _update_state(self) -> None:
         """Update circuit state based on current conditions."""
@@ -212,9 +211,7 @@ class CircuitBreaker:
             await self._on_failure(exc)
             return False
 
-    async def execute(
-        self, operation: Callable[..., Awaitable[T]], *args: Any, **kwargs: Any
-    ) -> T:
+    async def execute(self, operation: Callable[..., Awaitable[T]], *args: Any, **kwargs: Any) -> T:
         """Execute operation with circuit breaker.
 
         Args:

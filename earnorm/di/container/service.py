@@ -31,7 +31,7 @@ Example:
 """
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 from earnorm.config.model import SystemConfig
 from earnorm.di.lifecycle import LifecycleAware
@@ -74,10 +74,10 @@ class ServiceManager(LifecycleAware):
         3. Lifecycle manager for handling service lifecycles
         4. Configuration storage
         """
-        self._services: Dict[str, Any] = {}
-        self._instances: Dict[str, Any] = {}
+        self._services: dict[str, Any] = {}
+        self._instances: dict[str, Any] = {}
         self._lifecycle = LifecycleManager()
-        self._config: Optional[SystemConfig] = None
+        self._config: SystemConfig | None = None
 
     async def init(self) -> None:
         """Initialize service manager.
@@ -106,7 +106,7 @@ class ServiceManager(LifecycleAware):
         await self._lifecycle.destroy_all()
 
     @property
-    def id(self) -> Optional[str]:
+    def id(self) -> str | None:
         """Get service manager ID.
 
         Returns:
@@ -115,7 +115,7 @@ class ServiceManager(LifecycleAware):
         return "service_manager"
 
     @property
-    def data(self) -> Dict[str, str]:
+    def data(self) -> dict[str, str]:
         """Get service manager data.
 
         Returns:
@@ -183,7 +183,7 @@ class ServiceManager(LifecycleAware):
         """
         return name in self._services
 
-    async def get_sync(self, name: str) -> Optional[Any]:
+    async def get_sync(self, name: str) -> Any | None:
         """Get a service instance synchronously.
 
         This method attempts to retrieve a service synchronously.
@@ -222,7 +222,7 @@ class ServiceManager(LifecycleAware):
 
         return instance
 
-    async def get(self, name: str) -> Optional[Any]:
+    async def get(self, name: str) -> Any | None:
         """Get a service instance asynchronously.
 
         This method supports services that require async initialization.

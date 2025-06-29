@@ -6,7 +6,8 @@ This module provides custom validators for model validation:
 - Async validators
 """
 
-from typing import Any, Coroutine, Optional, TypeVar
+from collections.abc import Coroutine
+from typing import Any, TypeVar
 
 from earnorm.types import ModelProtocol
 from earnorm.validators.base import BaseValidator
@@ -26,7 +27,7 @@ class ModelValidator(BaseValidator):
         ```
     """
 
-    def __init__(self, message: Optional[str] = None) -> None:
+    def __init__(self, message: str | None = None) -> None:
         """Initialize validator.
 
         Args:
@@ -93,7 +94,7 @@ class AsyncModelValidator(BaseValidator):
         ```
     """
 
-    def __init__(self, message: Optional[str] = None) -> None:
+    def __init__(self, message: str | None = None) -> None:
         """Initialize validator.
 
         Args:

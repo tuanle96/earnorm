@@ -8,7 +8,7 @@ This module provides validators for number fields, including:
 """
 
 from decimal import Decimal
-from typing import Any, Optional, Union
+from typing import Any, Union
 
 from earnorm.types import ValidatorFunc
 from earnorm.validators.base import BaseValidator, ValidationError, create_validator
@@ -34,9 +34,9 @@ class RangeValidator(BaseValidator):
 
     def __init__(
         self,
-        min_value: Optional[Number] = None,
-        max_value: Optional[Number] = None,
-        message: Optional[str] = None,
+        min_value: Number | None = None,
+        max_value: Number | None = None,
+        message: str | None = None,
     ) -> None:
         """Initialize validator.
 
@@ -64,16 +64,12 @@ class RangeValidator(BaseValidator):
         value = float(value)
 
         if self.min_value is not None and value < self.min_value:
-            raise ValidationError(
-                self.message or f"Value must be at least {self.min_value}"
-            )
+            raise ValidationError(self.message or f"Value must be at least {self.min_value}")
         if self.max_value is not None and value > self.max_value:
-            raise ValidationError(
-                self.message or f"Value must be at most {self.max_value}"
-            )
+            raise ValidationError(self.message or f"Value must be at most {self.max_value}")
 
 
-def validate_min(min_value: Number, message: Optional[str] = None) -> ValidatorFunc:
+def validate_min(min_value: Number, message: str | None = None) -> ValidatorFunc:
     """Create minimum value validator.
 
     Args:
@@ -100,7 +96,7 @@ def validate_min(min_value: Number, message: Optional[str] = None) -> ValidatorF
     )
 
 
-def validate_max(max_value: Number, message: Optional[str] = None) -> ValidatorFunc:
+def validate_max(max_value: Number, message: str | None = None) -> ValidatorFunc:
     """Create maximum value validator.
 
     Args:
@@ -127,7 +123,7 @@ def validate_max(max_value: Number, message: Optional[str] = None) -> ValidatorF
     )
 
 
-def validate_positive(message: Optional[str] = None) -> ValidatorFunc:
+def validate_positive(message: str | None = None) -> ValidatorFunc:
     """Create positive number validator.
 
     Args:
@@ -153,7 +149,7 @@ def validate_positive(message: Optional[str] = None) -> ValidatorFunc:
     )
 
 
-def validate_negative(message: Optional[str] = None) -> ValidatorFunc:
+def validate_negative(message: str | None = None) -> ValidatorFunc:
     """Create negative number validator.
 
     Args:
@@ -179,7 +175,7 @@ def validate_negative(message: Optional[str] = None) -> ValidatorFunc:
     )
 
 
-def validate_zero(message: Optional[str] = None) -> ValidatorFunc:
+def validate_zero(message: str | None = None) -> ValidatorFunc:
     """Create zero validator.
 
     Args:
@@ -205,9 +201,9 @@ def validate_zero(message: Optional[str] = None) -> ValidatorFunc:
 
 
 def validate_range(
-    min_value: Optional[Number] = None,
-    max_value: Optional[Number] = None,
-    message: Optional[str] = None,
+    min_value: Number | None = None,
+    max_value: Number | None = None,
+    message: str | None = None,
 ) -> ValidatorFunc:
     """Create range validator.
 

@@ -69,7 +69,7 @@ Examples:
     ... ).execute()
 """
 
-from typing import Dict, Literal, Optional, Protocol, Type, TypeVar, Union
+from typing import Literal, Protocol, TypeVar
 
 from earnorm.base.database.query.core.operations.base import BaseOperation
 from earnorm.base.database.query.interfaces.operations.join import JoinProtocol
@@ -101,14 +101,14 @@ class BaseJoin(BaseOperation[ModelT], JoinProtocol[ModelT, JoinT]):
     def __init__(self) -> None:
         """Initialize join operation."""
         super().__init__()
-        self._model: Optional[Union[str, Type[JoinT]]] = None
-        self._conditions: Dict[str, str] = {}
+        self._model: str | type[JoinT] | None = None
+        self._conditions: dict[str, str] = {}
         self._join_type: str = "inner"  # Use str to match protocol
 
     def join(
         self,
-        model: Union[str, Type[JoinT]],
-        on: Optional[Dict[str, str]] = None,
+        model: str | type[JoinT],
+        on: dict[str, str] | None = None,
         join_type: str = "inner",  # Use str to match protocol
     ) -> "BaseJoin[ModelT, JoinT]":
         """Add join condition.
@@ -127,9 +127,7 @@ class BaseJoin(BaseOperation[ModelT], JoinProtocol[ModelT, JoinT]):
         self._join_type = join_type
         return self
 
-    def on(
-        self, *conditions: Union[tuple[str, str, str], str, Comparable]
-    ) -> "BaseJoin[ModelT, JoinT]":
+    def on(self, *conditions: tuple[str, str, str] | str | Comparable) -> "BaseJoin[ModelT, JoinT]":
         """Add join conditions.
 
         Args:
@@ -211,7 +209,7 @@ class BaseJoin(BaseOperation[ModelT], JoinProtocol[ModelT, JoinT]):
             raise ValueError(f"Invalid join type: {self._join_type}")
 
     @property
-    def model(self) -> Optional[Union[str, Type[JoinT]]]:
+    def model(self) -> str | type[JoinT] | None:
         """Get join model.
 
         Returns:
@@ -220,7 +218,7 @@ class BaseJoin(BaseOperation[ModelT], JoinProtocol[ModelT, JoinT]):
         return self._model
 
     @property
-    def conditions(self) -> Dict[str, str]:
+    def conditions(self) -> dict[str, str]:
         """Get join conditions.
 
         Returns:

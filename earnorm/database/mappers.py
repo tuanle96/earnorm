@@ -32,7 +32,7 @@ Examples:
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, TypeVar
+from typing import Any, TypeVar
 
 from earnorm.database.type_mapping import get_field_options, get_field_type
 from earnorm.fields.base import BaseField
@@ -83,7 +83,7 @@ class DatabaseTypeMapper(ABC):
         pass
 
     @abstractmethod
-    def get_field_options(self, field: BaseField[Any]) -> Dict[str, Any]:
+    def get_field_options(self, field: BaseField[Any]) -> dict[str, Any]:
         """Get database field options.
 
         This method should return a dictionary of options for the field
@@ -141,7 +141,7 @@ class MongoDBTypeMapper(DatabaseTypeMapper):
         field_type = field.__class__.__name__.lower().replace("field", "")
         return get_field_type(field_type, "mongodb")
 
-    def get_field_options(self, field: BaseField[Any]) -> Dict[str, Any]:
+    def get_field_options(self, field: BaseField[Any]) -> dict[str, Any]:
         """Get MongoDB field options.
 
         Handles MongoDB-specific field options including:
@@ -235,7 +235,7 @@ class PostgresTypeMapper(DatabaseTypeMapper):
 
         return db_type
 
-    def get_field_options(self, field: BaseField[Any]) -> Dict[str, Any]:
+    def get_field_options(self, field: BaseField[Any]) -> dict[str, Any]:
         """Get PostgreSQL field options.
 
         Handles PostgreSQL-specific field options including:
@@ -327,7 +327,7 @@ class MySQLTypeMapper(DatabaseTypeMapper):
 
         return db_type
 
-    def get_field_options(self, field: BaseField[Any]) -> Dict[str, Any]:
+    def get_field_options(self, field: BaseField[Any]) -> dict[str, Any]:
         """Get MySQL field options.
 
         Handles MySQL-specific field options including:

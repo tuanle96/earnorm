@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: earnorm-mongodb
+    restart: unless-stopped
+    ports:
+      - "27018:27017"  # Custom port 27018 to avoid conflicts
+    environment:
+      MONGO_INITDB_DATABASE: earnbase
+    command: mongod --noauth
+    volumes:
+      - mongodb_data:/data/db
+      - ./docker/mongodb/init:/docker-entrypoint-initdb.d
+    networks:
+      - earnorm-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  mongo-express:
+    image: mongo-express:1.0.0
+    container_name: earnorm-mongo-express
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      ME_CONFIG_MONGODB_URL: mongodb://mongodb:27017/
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: admin123
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - earnorm-network
+
+volumes:
+  mongodb_data:
+    driver: local
+
+networks:
+  earnorm-network:
+    driver: bridge

@@ -18,7 +18,7 @@ Examples:
     ```
 """
 
-from typing import Any, List, Literal, Protocol, Tuple, Type, TypeVar, Union
+from typing import Any, Literal, Protocol, TypeVar
 
 from motor.motor_asyncio import AsyncIOMotorCollection
 
@@ -28,7 +28,7 @@ from earnorm.types.fields import ComparisonOperator
 from .converter import MongoConverter
 from .query import MongoQuery
 
-SortSpec = List[Tuple[str, int]]
+SortSpec = list[tuple[str, int]]
 ModelT = TypeVar("ModelT", bound=DatabaseModel)
 
 Operation = Literal["insert_one", "update", "delete", None]
@@ -68,9 +68,7 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         ```
     """
 
-    def __init__(
-        self, collection: AsyncIOMotorCollection[JsonDict], model_type: Type[ModelT]
-    ) -> None:
+    def __init__(self, collection: AsyncIOMotorCollection[JsonDict], model_type: type[ModelT]) -> None:
         """Initialize builder.
 
         Args:
@@ -87,9 +85,9 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         self._sort: SortSpec = []
         self._skip: int = 0
         self._limit: int = 0
-        self._pipeline: List[JsonDict] = []
+        self._pipeline: list[JsonDict] = []
         self._allow_disk_use = False
-        self._hint: Union[str, List[Tuple[str, int]], None] = None
+        self._hint: str | list[tuple[str, int]] | None = None
         self._operation: Operation = None
         self._document: JsonDict = {}
         self._update: JsonDict = {}
@@ -114,9 +112,7 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         self._current_field = field
         return self
 
-    def _create_expression(
-        self, operator: str, value: Union[ValueType, List[ValueType]]
-    ) -> JsonDict:
+    def _create_expression(self, operator: str, value: ValueType | list[ValueType]) -> JsonDict:
         """Create domain expression from current field and value.
 
         Args:
@@ -223,7 +219,7 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         self._filter = self._create_expression("$lte", value)
         return self
 
-    def in_list(self, values: List[ValueType]) -> "MongoQueryBuilder[ModelT]":
+    def in_list(self, values: list[ValueType]) -> "MongoQueryBuilder[ModelT]":
         """Field value in list.
 
         Args:
@@ -238,7 +234,7 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         self._filter = self._create_expression("$in", values)
         return self
 
-    def not_in_list(self, values: List[ValueType]) -> "MongoQueryBuilder[ModelT]":
+    def not_in_list(self, values: list[ValueType]) -> "MongoQueryBuilder[ModelT]":
         """Field value not in list.
 
         Args:
@@ -292,9 +288,7 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         self._filter = expr
         return self
 
-    def filter(
-        self, *conditions: Union[ComparisonOperator, JsonDict], **kwargs: Any
-    ) -> "MongoQueryBuilder[ModelT]":
+    def filter(self, *conditions: ComparisonOperator | JsonDict, **kwargs: Any) -> "MongoQueryBuilder[ModelT]":
         """Add filter conditions.
 
         Args:
@@ -402,7 +396,7 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         self._limit = limit
         return self
 
-    def pipeline(self, pipeline: List[JsonDict]) -> "MongoQueryBuilder[ModelT]":
+    def pipeline(self, pipeline: list[JsonDict]) -> "MongoQueryBuilder[ModelT]":
         """Set aggregation pipeline.
 
         Args:
@@ -429,9 +423,7 @@ class MongoQueryBuilder(QueryBuilder[ModelT]):
         self._allow_disk_use = allow
         return self
 
-    def hint(
-        self, hint: Union[str, List[Tuple[str, int]]]
-    ) -> "MongoQueryBuilder[ModelT]":
+    def hint(self, hint: str | list[tuple[str, int]]) -> "MongoQueryBuilder[ModelT]":
         """Set index hint.
 
         Args:

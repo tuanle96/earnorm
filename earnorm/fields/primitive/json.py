@@ -26,7 +26,7 @@ Examples:
 """
 
 import json
-from typing import Any, Dict, Final, Optional
+from typing import Any, Final
 
 from jsonschema import Draft202012Validator, ValidationError, validate
 
@@ -57,7 +57,7 @@ class JSONField(BaseField[Any], FieldComparisonMixin):
         backend_options: Database backend options
     """
 
-    schema: Optional[dict[str, Any]]
+    schema: dict[str, Any] | None
     encoder: type[json.JSONEncoder]
     decoder: type[json.JSONDecoder]
     backend_options: dict[str, Any]
@@ -65,9 +65,9 @@ class JSONField(BaseField[Any], FieldComparisonMixin):
     def __init__(
         self,
         *,
-        schema: Optional[dict[str, Any]] = None,
-        encoder: Optional[type[json.JSONEncoder]] = None,
-        decoder: Optional[type[json.JSONDecoder]] = None,
+        schema: dict[str, Any] | None = None,
+        encoder: type[json.JSONEncoder] | None = None,
+        decoder: type[json.JSONDecoder] | None = None,
         **options: Any,
     ) -> None:
         """Initialize JSON field.
@@ -93,7 +93,7 @@ class JSONField(BaseField[Any], FieldComparisonMixin):
             try:
                 Draft202012Validator.check_schema(schema)
             except ValidationError as e:
-                raise ValueError(f"Invalid JSON schema: {str(e)}") from e
+                raise ValueError(f"Invalid JSON schema: {e!s}") from e
 
         # Initialize backend options
         self.backend_options = {
@@ -102,9 +102,7 @@ class JSONField(BaseField[Any], FieldComparisonMixin):
             "mysql": {"type": "JSON"},
         }
 
-    async def validate(
-        self, value: Any, context: Optional[Dict[str, Any]] = None
-    ) -> Any:
+    async def validate(self, value: Any, context: dict[str, Any] | None = None) -> Any:
         """Validate JSON value.
 
         This method validates:
@@ -139,20 +137,20 @@ class JSONField(BaseField[Any], FieldComparisonMixin):
                         validate(instance=value, schema=self.schema)
                     except ValidationError as e:
                         raise FieldValidationError(
-                            message=f"JSON schema validation failed: {str(e)}",
+                            message=f"JSON schema validation failed: {e!s}",
                             field_name=self.name,
                             code="schema_error",
                         ) from e
             except (TypeError, ValueError) as e:
                 raise FieldValidationError(
-                    message=f"Invalid JSON value: {str(e)}",
+                    message=f"Invalid JSON value: {e!s}",
                     field_name=self.name,
                     code="invalid_json",
                 ) from e
 
         return value
 
-    async def convert(self, value: Any) -> Optional[Any]:
+    async def convert(self, value: Any) -> Any | None:
         """Convert value to JSON-compatible type.
 
         Handles:
@@ -178,12 +176,12 @@ class JSONField(BaseField[Any], FieldComparisonMixin):
             return value
         except (TypeError, ValueError) as e:
             raise FieldValidationError(
-                message=f"Cannot convert value to JSON: {str(e)}",
+                message=f"Cannot convert value to JSON: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
 
-    async def to_db(self, value: Optional[Any], backend: str) -> DatabaseValue:
+    async def to_db(self, value: Any | None, backend: str) -> DatabaseValue:
         """Convert value to database format.
 
         Args:
@@ -205,12 +203,12 @@ class JSONField(BaseField[Any], FieldComparisonMixin):
             return json.dumps(value, cls=self.encoder)
         except (TypeError, ValueError) as e:
             raise FieldValidationError(
-                message=f"Cannot convert value to JSON: {str(e)}",
+                message=f"Cannot convert value to JSON: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
 
-    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[Any]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> Any | None:
         """Convert database value to JSON.
 
         Args:
@@ -234,7 +232,7 @@ class JSONField(BaseField[Any], FieldComparisonMixin):
             return value
         except (TypeError, ValueError) as e:
             raise FieldValidationError(
-                message=f"Cannot convert database value to JSON: {str(e)}",
+                message=f"Cannot convert database value to JSON: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
@@ -258,7 +256,7 @@ class JSONField(BaseField[Any], FieldComparisonMixin):
         except (TypeError, ValueError):
             return None
 
-    def has_key(self, key: str, path: Optional[str] = None) -> ComparisonOperator:
+    def has_key(self, key: str, path: str | None = None) -> ComparisonOperator:
         """Check if JSON object has specific key.
 
         Args:
@@ -270,7 +268,7 @@ class JSONField(BaseField[Any], FieldComparisonMixin):
         """
         return ComparisonOperator(self.name, "has_key", {"key": key, "path": path})
 
-    def has_value(self, value: Any, path: Optional[str] = None) -> ComparisonOperator:
+    def has_value(self, value: Any, path: str | None = None) -> ComparisonOperator:
         """Check if JSON object has specific value.
 
         Args:
@@ -280,9 +278,7 @@ class JSONField(BaseField[Any], FieldComparisonMixin):
         Returns:
             ComparisonOperator: Comparison operator with field name and value
         """
-        return ComparisonOperator(
-            self.name, "has_value", {"value": self._prepare_value(value), "path": path}
-        )
+        return ComparisonOperator(self.name, "has_value", {"value": self._prepare_value(value), "path": path})
 
     def contains(self, value: Any) -> ComparisonOperator:
         """Check if JSON array contains value.

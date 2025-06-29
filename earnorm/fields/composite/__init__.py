@@ -15,9 +15,9 @@ from earnorm.fields.composite.set import SetField
 from earnorm.fields.composite.tuple import TupleField
 
 __all__ = [
+    "DictField",
+    "EmbeddedField",
     "ListField",
     "SetField",
-    "DictField",
     "TupleField",
-    "EmbeddedField",
 ]

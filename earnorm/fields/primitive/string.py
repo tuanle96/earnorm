@@ -9,7 +9,8 @@ It includes:
 """
 
 import re
-from typing import Any, Dict, Final, List, Optional, Pattern, Union
+from re import Pattern
+from typing import Any, Final
 
 from earnorm.exceptions import FieldValidationError
 from earnorm.fields.base import BaseField
@@ -18,8 +19,8 @@ from earnorm.types.fields import ComparisonOperator, DatabaseValue, FieldCompari
 
 # Constants
 DEFAULT_MIN_LENGTH: Final[int] = 0
-DEFAULT_MAX_LENGTH: Final[Optional[int]] = None
-DEFAULT_PATTERN: Final[Optional[str]] = None
+DEFAULT_MAX_LENGTH: Final[int | None] = None
+DEFAULT_PATTERN: Final[str | None] = None
 DEFAULT_CASE_SENSITIVE: Final[bool] = True
 DEFAULT_STRIP: Final[bool] = False
 DEFAULT_LOWER: Final[bool] = False
@@ -45,9 +46,9 @@ class StringField(BaseField[str], FieldComparisonMixin):
     field_type = "string"  # Database field type
     python_type = str  # Python type
 
-    min_length: Optional[int]
-    max_length: Optional[int]
-    pattern: Optional[Union[str, Pattern[str]]]
+    min_length: int | None
+    max_length: int | None
+    pattern: str | Pattern[str] | None
     case_sensitive: bool
     strip: bool
     lower: bool
@@ -56,14 +57,14 @@ class StringField(BaseField[str], FieldComparisonMixin):
 
     def __init__(
         self,
-        min_length: Optional[int] = None,
-        max_length: Optional[int] = None,
-        pattern: Optional[Union[str, Pattern[str]]] = None,
+        min_length: int | None = None,
+        max_length: int | None = None,
+        pattern: str | Pattern[str] | None = None,
         case_sensitive: bool = True,
         strip: bool = False,
         lower: bool = False,
         upper: bool = False,
-        choices: Optional[List[str]] = None,
+        choices: list[str] | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize string field.
@@ -91,12 +92,8 @@ class StringField(BaseField[str], FieldComparisonMixin):
         # Initialize backend options
         self.backend_options = {
             "mongodb": {"type": "string"},
-            "postgres": {
-                "type": f"VARCHAR({max_length})" if max_length is not None else "TEXT"
-            },
-            "mysql": {
-                "type": f"VARCHAR({max_length})" if max_length is not None else "TEXT"
-            },
+            "postgres": {"type": f"VARCHAR({max_length})" if max_length is not None else "TEXT"},
+            "mysql": {"type": f"VARCHAR({max_length})" if max_length is not None else "TEXT"},
         }
 
         # Validate min_length and max_length
@@ -114,7 +111,7 @@ class StringField(BaseField[str], FieldComparisonMixin):
                 else:
                     re.compile(pattern)
             except re.error as e:
-                raise ValueError(f"Invalid pattern: {str(e)}") from e
+                raise ValueError(f"Invalid pattern: {e!s}") from e
 
         if lower and upper:
             raise ValueError("Cannot set both lower and upper to True")
@@ -123,14 +120,10 @@ class StringField(BaseField[str], FieldComparisonMixin):
         if choices is not None:
             field_validators.append(ChoicesValidator(choices))
 
-        options_without_validators = {
-            k: v for k, v in kwargs.items() if k != "validators"
-        }
+        options_without_validators = {k: v for k, v in kwargs.items() if k != "validators"}
         super().__init__(validators=field_validators, **options_without_validators)
 
-    async def validate(
-        self, value: Any, context: Optional[Dict[str, Any]] = None
-    ) -> Any:
+    async def validate(self, value: Any, context: dict[str, Any] | None = None) -> Any:
         """Validate string value.
 
         This method checks:
@@ -159,27 +152,19 @@ class StringField(BaseField[str], FieldComparisonMixin):
 
         # Validate length
         if self.min_length is not None and len(value) < self.min_length:
-            raise ValueError(
-                f"String length must be at least {self.min_length} characters"
-            )
+            raise ValueError(f"String length must be at least {self.min_length} characters")
         if self.max_length is not None and len(value) > self.max_length:
-            raise ValueError(
-                f"String length must be at most {self.max_length} characters"
-            )
+            raise ValueError(f"String length must be at most {self.max_length} characters")
 
         # Validate pattern
         if self.pattern:
-            pattern = (
-                self.pattern
-                if isinstance(self.pattern, Pattern)
-                else re.compile(self.pattern)
-            )
+            pattern = self.pattern if isinstance(self.pattern, Pattern) else re.compile(self.pattern)
             if not pattern.match(value):
                 raise ValueError("String does not match required pattern")
 
         return value
 
-    async def convert(self, value: Any) -> Optional[str]:
+    async def convert(self, value: Any) -> str | None:
         """Convert value to string.
 
         Handles:
@@ -213,12 +198,12 @@ class StringField(BaseField[str], FieldComparisonMixin):
             return result
         except (TypeError, ValueError) as e:
             raise FieldValidationError(
-                message=f"Cannot convert value to string: {str(e)}",
+                message=f"Cannot convert value to string: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
 
-    async def to_db(self, value: Optional[str], backend: str) -> DatabaseValue:
+    async def to_db(self, value: str | None, backend: str) -> DatabaseValue:
         """Convert string to database format.
 
         Args:
@@ -230,7 +215,7 @@ class StringField(BaseField[str], FieldComparisonMixin):
         """
         return value
 
-    async def from_db(self, value: DatabaseValue, backend: str) -> Optional[str]:
+    async def from_db(self, value: DatabaseValue, backend: str) -> str | None:
         """Convert database value to string.
 
         Args:
@@ -252,7 +237,7 @@ class StringField(BaseField[str], FieldComparisonMixin):
             return str(value)
         except (TypeError, ValueError) as e:
             raise FieldValidationError(
-                message=f"Cannot convert database value to string: {str(e)}",
+                message=f"Cannot convert database value to string: {e!s}",
                 field_name=self.name,
                 code="conversion_error",
             ) from e
@@ -321,9 +306,7 @@ class StringField(BaseField[str], FieldComparisonMixin):
         Returns:
             ComparisonOperator: Comparison operator with field name and value
         """
-        return ComparisonOperator(
-            self.name, "not_contains", self._prepare_value(substring)
-        )
+        return ComparisonOperator(self.name, "not_contains", self._prepare_value(substring))
 
     def starts_with(self, prefix: str) -> ComparisonOperator:
         """Check if string starts with prefix.

@@ -21,8 +21,9 @@ Examples:
 import asyncio
 import random
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, List, Optional, Type, TypeVar
+from typing import Any, TypeVar
 
 from earnorm.exceptions import RetryError
 
@@ -48,7 +49,7 @@ class RetryPolicy:
     jitter: float = 0.1
     """Random jitter factor to add to delay."""
 
-    retry_exceptions: Optional[List[Type[Exception]]] = None
+    retry_exceptions: list[type[Exception]] | None = None
     """List of exceptions to retry on. If None, retry on all exceptions."""
 
     def __post_init__(self) -> None:
@@ -114,7 +115,7 @@ class RetryContext:
         self._backend = backend
         self._attempt = 0
         self._start_time = 0.0
-        self._last_error: Optional[Exception] = None
+        self._last_error: Exception | None = None
 
     async def __aenter__(self) -> "RetryContext":
         """Enter retry context.
@@ -156,9 +157,7 @@ class RetryContext:
         await asyncio.sleep(delay)
         return True
 
-    async def execute(
-        self, operation: Callable[..., Awaitable[T]], *args: Any, **kwargs: Any
-    ) -> T:
+    async def execute(self, operation: Callable[..., Awaitable[T]], *args: Any, **kwargs: Any) -> T:
         """Execute operation with retries.
 
         Args:

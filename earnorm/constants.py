@@ -25,4 +25,4 @@ class BackendType:
 FIELD_MAPPING = {BackendType.MONGODB: {"id": "_id"}}
 """Field name mapping for different backends."""
 
-__all__ = ["BackendType", "FIELD_MAPPING"]
+__all__ = ["FIELD_MAPPING", "BackendType"]

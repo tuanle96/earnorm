@@ -16,7 +16,7 @@ Examples:
     >>> query.join(Post).on(User.id == Post.user_id)
 """
 
-from typing import Any, Dict, List, Optional, Type, TypeVar, Union, cast
+from typing import Any, TypeVar, cast
 
 from motor.motor_asyncio import AsyncIOMotorCollection
 
@@ -40,8 +40,8 @@ class MongoJoin(JoinProtocol[ModelT, JoinT]):
 
     def __init__(
         self,
-        collection: AsyncIOMotorCollection[Dict[str, Any]],  # type: ignore
-        model_cls: Type[ModelT],
+        collection: AsyncIOMotorCollection[dict[str, Any]],  # type: ignore
+        model_cls: type[ModelT],
     ) -> None:
         """Initialize MongoDB join operation.
 
@@ -51,14 +51,14 @@ class MongoJoin(JoinProtocol[ModelT, JoinT]):
         """
         self._collection = collection
         self._model_cls = model_cls
-        self._model: Optional[Union[str, Type[JoinT]]] = None
-        self._conditions: Dict[str, str] = {}
+        self._model: str | type[JoinT] | None = None
+        self._conditions: dict[str, str] = {}
         self._join_type = "inner"
 
     def join(
         self,
-        model: Union[str, Type[JoinT]],
-        on: Optional[Dict[str, str]] = None,
+        model: str | type[JoinT],
+        on: dict[str, str] | None = None,
         join_type: str = "inner",
     ) -> JoinProtocol[ModelT, JoinT]:
         """Add join condition.
@@ -88,11 +88,11 @@ class MongoJoin(JoinProtocol[ModelT, JoinT]):
         """
         for condition in conditions:
             if isinstance(condition, dict):
-                self._conditions.update(cast(Dict[str, str], condition))
+                self._conditions.update(cast(dict[str, str], condition))
             elif isinstance(condition, tuple):
                 self._conditions[condition[0]] = condition[1]
             elif hasattr(condition, "last_comparison"):
-                comp = getattr(condition, "last_comparison")
+                comp = condition.last_comparison
                 self._conditions[comp[0]] = comp[1]
         return self
 
@@ -152,7 +152,7 @@ class MongoJoin(JoinProtocol[ModelT, JoinT]):
         if not self._conditions:
             raise ValueError("Join conditions are required")
 
-    def get_pipeline_stages(self) -> List[JsonDict]:
+    def get_pipeline_stages(self) -> list[JsonDict]:
         """Get MongoDB aggregation pipeline stages for this join.
 
         Returns:
@@ -217,7 +217,7 @@ class MongoJoin(JoinProtocol[ModelT, JoinT]):
 
         return stages
 
-    def to_pipeline(self) -> List[JsonDict]:
+    def to_pipeline(self) -> list[JsonDict]:
         """Convert join operation to MongoDB pipeline.
 
         Returns:
@@ -262,34 +262,28 @@ class MongoJoin(JoinProtocol[ModelT, JoinT]):
                 let_vars[let_var_name] = f"${local_field}"
 
                 # Add to match conditions
-                match_conditions[foreign_field] = {
-                    "$eq": [f"$${let_var_name}", f"${foreign_field}"]
-                }
+                match_conditions[foreign_field] = {"$eq": [f"$${let_var_name}", f"${foreign_field}"]}
 
             # Update lookup stage
             lookup_stage["$lookup"]["let"] = let_vars
             lookup_stage["$lookup"]["pipeline"].append({"$match": match_conditions})
 
         # Handle different join types
-        pipeline: List[JsonDict] = [lookup_stage]
+        pipeline: list[JsonDict] = [lookup_stage]
 
         if self._join_type == "inner":
             # Filter out documents with no matches
-            pipeline.append(
-                {"$match": {collection_name: {"$ne": None, "$not": {"$size": 0}}}}
-            )
+            pipeline.append({"$match": {collection_name: {"$ne": None, "$not": {"$size": 0}}}})
         elif self._join_type == "left":
             # Left join is default in MongoDB
             pass
         elif self._join_type in ("right", "full"):
-            raise ValueError(
-                f"Join type '{self._join_type}' is not supported by MongoDB"
-            )
+            raise ValueError(f"Join type '{self._join_type}' is not supported by MongoDB")
 
         return pipeline
 
     @property
-    def model_type(self) -> Type[ModelT]:
+    def model_type(self) -> type[ModelT]:
         """Get model type.
 
         Returns:
@@ -298,7 +292,7 @@ class MongoJoin(JoinProtocol[ModelT, JoinT]):
         return self._model_cls
 
     @property
-    def collection(self) -> AsyncIOMotorCollection[Dict[str, Any]]:  # type: ignore
+    def collection(self) -> AsyncIOMotorCollection[dict[str, Any]]:  # type: ignore
         """Get MongoDB collection.
 
         Returns:

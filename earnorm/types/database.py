@@ -3,15 +3,11 @@
 from typing import (
     Any,
     AsyncContextManager,
-    Dict,
-    List,
-    Optional,
     Protocol,
     runtime_checkable,
 )
 
-from .models import ModelProtocol as DatabaseModel
-from .models import RecordID
+from .models import ModelProtocol as DatabaseModel, RecordID
 
 
 @runtime_checkable
@@ -65,7 +61,7 @@ class DatabaseProtocol(Protocol):
         """
         ...
 
-    async def execute(self, query: str, params: Optional[Dict[str, Any]] = None) -> Any:
+    async def execute(self, query: str, params: dict[str, Any] | None = None) -> Any:
         """Execute query.
 
         Args:
@@ -80,9 +76,7 @@ class DatabaseProtocol(Protocol):
         """
         ...
 
-    async def fetch_one(
-        self, query: str, params: Optional[Dict[str, Any]] = None
-    ) -> Optional[Dict[str, Any]]:
+    async def fetch_one(self, query: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Fetch single row.
 
         Args:
@@ -100,9 +94,9 @@ class DatabaseProtocol(Protocol):
     async def fetch_all(
         self,
         collection: str,
-        ids: List[str],
-        fields: List[str],
-    ) -> List[Dict[str, Any]]:
+        ids: list[str],
+        fields: list[str],
+    ) -> list[dict[str, Any]]:
         """Fetch multiple records by IDs.
 
         Args:
@@ -118,9 +112,7 @@ class DatabaseProtocol(Protocol):
         """
         ...
 
-    async def fetch_value(
-        self, query: str, params: Optional[Dict[str, Any]] = None
-    ) -> Any:
+    async def fetch_value(self, query: str, params: dict[str, Any] | None = None) -> Any:
         """Fetch single value.
 
         Args:
@@ -135,7 +127,7 @@ class DatabaseProtocol(Protocol):
         """
         ...
 
-    async def create(self, model: DatabaseModel, values: Dict[str, Any]) -> RecordID:
+    async def create(self, model: DatabaseModel, values: dict[str, Any]) -> RecordID:
         """Create a new record.
 
         Args:

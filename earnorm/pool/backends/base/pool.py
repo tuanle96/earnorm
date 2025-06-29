@@ -15,9 +15,7 @@ DB = TypeVar("DB")
 COLL = TypeVar("COLL")
 
 
-class BasePool(
-    AbstractAsyncContextManager["BasePool[DB, COLL]"], Generic[DB, COLL], abc.ABC
-):
+class BasePool(AbstractAsyncContextManager["BasePool[DB, COLL]"], Generic[DB, COLL], abc.ABC):
     """Base connection pool implementation."""
 
     def __init__(

@@ -40,7 +40,7 @@ Examples:
 """
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Generic, Optional, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from earnorm.fields.relations.base import ModelType, RelationField
 from earnorm.types.models import ModelProtocol
@@ -98,11 +98,11 @@ class OneToManyField(RelationField[T], Generic[T]):
         self,
         model: ModelType[T],
         *,
-        related_name: Optional[str] = None,
+        related_name: str | None = None,
         on_delete: str = "CASCADE",
         required: bool = False,
-        help: Optional[str] = None,
-        **options: Dict[str, Any],
+        help: str | None = None,
+        **options: dict[str, Any],
     ) -> None:
         """Initialize one-to-many field.
 
@@ -128,7 +128,7 @@ class OneToManyField(RelationField[T], Generic[T]):
             **options,
         )
 
-    async def __get__(self, instance: Optional[Any], owner: Optional[type] = None) -> T:
+    async def __get__(self, instance: Any | None, owner: type | None = None) -> T:
         """Get related records.
 
         Args:

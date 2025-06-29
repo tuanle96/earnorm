@@ -1,10 +1,10 @@
 """Base type definitions."""
 
-from typing import Any, Dict, List, Literal, TypeAlias, Union
+from typing import Any, Literal, TypeAlias, Union
 
 # JSON types
-JsonValue = Union[str, int, float, bool, None, List[Any], Dict[str, Any]]
-JsonDict: TypeAlias = Dict[str, Any]
+JsonValue = Union[str, int, float, bool, None, list[Any], dict[str, Any]]
+JsonDict: TypeAlias = dict[str, Any]
 
 # Domain operator type
 DomainOperator: TypeAlias = Literal[
@@ -29,4 +29,4 @@ DomainOperator: TypeAlias = Literal[
 # Basic value type
 ValueType = Union[str, int, float, bool, None]
 
-__all__ = ["JsonValue", "JsonDict", "DomainOperator", "ValueType"]
+__all__ = ["DomainOperator", "JsonDict", "JsonValue", "ValueType"]

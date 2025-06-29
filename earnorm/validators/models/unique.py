@@ -3,7 +3,8 @@
 This module provides validators for ensuring field values are unique in the database.
 """
 
-from typing import Any, Coroutine, Dict, Optional, Type
+from collections.abc import Coroutine
+from typing import Any
 
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorCollection
@@ -32,12 +33,12 @@ class UniqueValidator(BaseValidator):
 
     def __init__(
         self,
-        collection: AsyncIOMotorCollection[Dict[str, Any]],
+        collection: AsyncIOMotorCollection[dict[str, Any]],
         field: str,
-        model_class: Type[ModelProtocol],
-        message: Optional[str] = None,
+        model_class: type[ModelProtocol],
+        message: str | None = None,
         case_sensitive: bool = True,
-        exclude_id: Optional[ObjectId] = None,
+        exclude_id: ObjectId | None = None,
     ) -> None:
         """Initialize validator.
 
@@ -83,7 +84,7 @@ class UniqueValidator(BaseValidator):
             raise ValidationError("Value must be a string")
 
         # Build query
-        query: Dict[str, Any] = {}
+        query: dict[str, Any] = {}
         if self.case_sensitive:
             query[self.field] = value
         else:
@@ -96,19 +97,16 @@ class UniqueValidator(BaseValidator):
         # Check if document exists
         document = await self.collection.find_one(query)
         if document is not None:
-            raise ValidationError(
-                self.message
-                or f"Value '{value}' already exists for field '{self.field}'"
-            )
+            raise ValidationError(self.message or f"Value '{value}' already exists for field '{self.field}'")
 
 
 def validate_unique(
-    collection: AsyncIOMotorCollection[Dict[str, Any]],
+    collection: AsyncIOMotorCollection[dict[str, Any]],
     field: str,
-    model_class: Type[ModelProtocol],
-    message: Optional[str] = None,
+    model_class: type[ModelProtocol],
+    message: str | None = None,
     case_sensitive: bool = True,
-    exclude_id: Optional[ObjectId] = None,
+    exclude_id: ObjectId | None = None,
 ) -> UniqueValidator:
     """Create unique field validator.
 

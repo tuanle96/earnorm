@@ -13,7 +13,7 @@ Examples:
 """
 
 from abc import abstractmethod
-from typing import Any, List, Optional, TypeVar
+from typing import Any, TypeVar
 
 from earnorm.base.database.query.interfaces.operations.base import OperationProtocol
 from earnorm.types import DatabaseModel, JsonDict
@@ -27,8 +27,8 @@ class WindowProtocol(OperationProtocol[ModelT]):
     @abstractmethod
     def over(
         self,
-        partition_by: Optional[List[str]] = None,
-        order_by: Optional[List[str]] = None,
+        partition_by: list[str] | None = None,
+        order_by: list[str] | None = None,
     ) -> "WindowProtocol[ModelT]":
         """Set window frame.
 
@@ -114,9 +114,7 @@ class WindowProtocol(OperationProtocol[ModelT]):
         ...
 
     @abstractmethod
-    def lag(
-        self, field: str, offset: int = 1, default: Any = None
-    ) -> "WindowProtocol[ModelT]":
+    def lag(self, field: str, offset: int = 1, default: Any = None) -> "WindowProtocol[ModelT]":
         """LAG() window function.
 
         Args:
@@ -130,9 +128,7 @@ class WindowProtocol(OperationProtocol[ModelT]):
         ...
 
     @abstractmethod
-    def lead(
-        self, field: str, offset: int = 1, default: Any = None
-    ) -> "WindowProtocol[ModelT]":
+    def lead(self, field: str, offset: int = 1, default: Any = None) -> "WindowProtocol[ModelT]":
         """LEAD() window function.
 
         Args:
@@ -153,7 +149,7 @@ class WindowProtocol(OperationProtocol[ModelT]):
         """
         ...
 
-    def get_pipeline_stages(self) -> List[JsonDict]:
+    def get_pipeline_stages(self) -> list[JsonDict]:
         """Get MongoDB aggregation pipeline stages for this window function.
 
         Returns:
